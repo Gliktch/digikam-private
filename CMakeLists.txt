@@ -74,6 +74,7 @@ set(DIGIKAM_VERSION_STRING
 # 1 : Original database XML file, published in production.
 # 2 : 08-08-2014 : Fix Images.names field size (see bug #327646).
 # 3 : 05/11/2015 : Add Face DB schema.
+# 4 : Unreleased digiKam Private schema actions.
 set(DBCORECONFIG_XML_VERSION "4")
 
 # ==============================================================================
