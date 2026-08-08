@@ -9,6 +9,7 @@
  * ============================================================ */
 
 #include "privacypublictransition.h"
+#include "privacyposixstorage_p.h"
 
 // C++ includes
 
@@ -31,9 +32,7 @@
 // POSIX includes
 
 #   include <fcntl.h>
-#   include <linux/openat2.h>
 #   include <sys/stat.h>
-#   include <sys/syscall.h>
 #   include <sys/types.h>
 #   include <unistd.h>
 
@@ -228,58 +227,6 @@ bool sameStableFile(const struct stat& left, const struct stat& right)
             (left.st_ctim.tv_nsec == right.st_ctim.tv_nsec));
 }
 
-int confinedOpenAt(int directoryFd, const QByteArray& name, int flags)
-{
-    struct open_how how = {};
-    how.flags = static_cast<quint64>(flags);
-    how.resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS |
-                  RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV;
-
-    int descriptor = static_cast<int>(::syscall(SYS_openat2, directoryFd,
-                                                 name.constData(), &how,
-                                                 sizeof(how)));
-
-    if (descriptor >= 0)
-    {
-        return descriptor;
-    }
-
-    if ((errno != ENOSYS) && (errno != EINVAL) && (errno != E2BIG))
-    {
-        return -1;
-    }
-
-    return ::openat(directoryFd, name.constData(), flags | O_NOFOLLOW);
-}
-
-bool atomicRename(int directoryFd, const QByteArray& from,
-                  const QByteArray& to, bool exchange,
-                  bool* const unavailable)
-{
-    if (unavailable)
-    {
-        *unavailable = false;
-    }
-
-    const unsigned int flags = exchange ? RENAME_EXCHANGE : RENAME_NOREPLACE;
-
-    if (::syscall(SYS_renameat2, directoryFd, from.constData(), directoryFd,
-                  to.constData(), flags) == 0)
-    {
-        return true;
-    }
-
-    if ((errno == ENOSYS) || (errno == EINVAL))
-    {
-        if (unavailable)
-        {
-            *unavailable = true;
-        }
-    }
-
-    return false;
-}
-
 bool openPinnedRoot(const QString& path,
                     const PrivacyJournalRootExpectation& expectation,
                     ScopedFd* const root, quint64* const device,
@@ -373,7 +320,7 @@ bool openPinnedParent(int rootFd, quint64 rootDevice,
     for (const QString& component : components)
     {
         const QByteArray encoded = component.toUtf8();
-        ScopedFd next(confinedOpenAt(
+        ScopedFd next(PrivacyPosixStorage::confinedOpenAt(
             current.get(), encoded,
             O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
 
@@ -428,7 +375,7 @@ bool parentStillReachable(int rootFd, quint64 rootDevice,
 
     for (const ParentComponent& component : parent.components)
     {
-        ScopedFd next(confinedOpenAt(
+        ScopedFd next(PrivacyPosixStorage::confinedOpenAt(
             current.get(), component.name,
             O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
 
@@ -490,7 +437,8 @@ FileOpenStatus openAndVerifyFile(int directoryFd, const QByteArray& name,
 {
     const int flags = (writable ? O_RDWR : O_RDONLY) | O_CLOEXEC |
                       O_NOFOLLOW | O_NONBLOCK;
-    ScopedFd descriptor(confinedOpenAt(directoryFd, name, flags));
+    ScopedFd descriptor(PrivacyPosixStorage::confinedOpenAt(directoryFd, name,
+                                                            flags));
 
     if (descriptor.get() < 0)
     {
@@ -918,8 +866,11 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
     bool atomicUnavailable = false;
     const bool exchange = (request.mode == PrivacyPublicTransitionMode::ExchangePresent);
 
-    if (!atomicRename(parent.descriptor.get(), stageName, publicName,
-                      exchange, &atomicUnavailable))
+    if (!PrivacyPosixStorage::atomicRenameAt(
+            parent.descriptor.get(), stageName, publicName,
+            exchange ? PrivacyPosixStorage::AtomicRenameMode::Exchange
+                     : PrivacyPosixStorage::AtomicRenameMode::NoReplace,
+            &atomicUnavailable))
     {
         result.error = atomicUnavailable
                      ? PrivacyPublicTransitionError::AtomicPublicationUnavailable
@@ -977,8 +928,11 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         }
 
         bool unavailable = false;
-        const bool renamed = atomicRename(parent.descriptor.get(), publicName,
-                                          stageName, exchange, &unavailable);
+        const bool renamed = PrivacyPosixStorage::atomicRenameAt(
+            parent.descriptor.get(), publicName, stageName,
+            exchange ? PrivacyPosixStorage::AtomicRenameMode::Exchange
+                     : PrivacyPosixStorage::AtomicRenameMode::NoReplace,
+            &unavailable);
 
         if (!renamed)
         {

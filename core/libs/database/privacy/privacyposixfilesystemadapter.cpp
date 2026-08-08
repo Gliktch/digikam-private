@@ -9,6 +9,7 @@
  * ============================================================ */
 
 #include "privacyposixfilesystemadapter.h"
+#include "storage/privacyposixstorage_p.h"
 
 // C++ includes
 
@@ -233,31 +234,9 @@ PrivacyInventoryFileEvidence evidenceFromStat(const struct stat& facts)
 int openDirectoryComponent(int parentFd, const QByteArray& component,
                            dev_t expectedDevice)
 {
-    int descriptor = -1;
-
-#if defined(SYS_openat2)
-
-    struct open_how how = {};
-    how.flags   = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW;
-    how.resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS |
-                  RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV;
-    descriptor = static_cast<int>(::syscall(SYS_openat2, parentFd,
-                                            component.constData(),
-                                            &how, sizeof(how)));
-
-    if ((descriptor < 0) && (errno != ENOSYS) && (errno != EINVAL) &&
-        (errno != E2BIG))
-    {
-        return -1;
-    }
-
-#endif
-
-    if (descriptor < 0)
-    {
-        descriptor = ::openat(parentFd, component.constData(),
-                              O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    }
+    const int descriptor = PrivacyPosixStorage::confinedOpenAt(
+        parentFd, component,
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
 
     if (descriptor < 0)
     {

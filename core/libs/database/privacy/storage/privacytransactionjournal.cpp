@@ -9,6 +9,7 @@
  * ============================================================ */
 
 #include "privacytransactionjournal.h"
+#include "privacyposixstorage_p.h"
 
 // C++ includes
 
@@ -37,11 +38,6 @@
 #   include <sys/stat.h>
 #   include <sys/types.h>
 #   include <unistd.h>
-#endif
-
-#ifdef Q_OS_LINUX
-#   include <linux/openat2.h>
-#   include <sys/syscall.h>
 #endif
 
 namespace Digikam
@@ -882,36 +878,6 @@ enum class EntryReadStatus
     TooLarge
 };
 
-int confinedOpenAt(int directoryFd, const QByteArray& name, int flags,
-                   mode_t mode = 0)
-{
-#ifdef Q_OS_LINUX
-    struct open_how how = {};
-    how.flags = static_cast<quint64>(flags);
-    how.mode = static_cast<quint64>(mode);
-    how.resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS |
-                  RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV;
-
-    const int opened = static_cast<int>(::syscall(SYS_openat2, directoryFd,
-                                                   name.constData(), &how,
-                                                   sizeof(how)));
-
-    if (opened >= 0)
-    {
-        return opened;
-    }
-
-    if ((errno != ENOSYS) && (errno != EINVAL) && (errno != E2BIG))
-    {
-        return -1;
-    }
-#endif
-
-    // Fail-closed fallback: callers provide one already validated component,
-    // O_NOFOLLOW is mandatory, and every result is checked with fstat().
-    return ::openat(directoryFd, name.constData(), flags | O_NOFOLLOW, mode);
-}
-
 bool syncFd(int fd)
 {
     return (::fsync(fd) == 0);
@@ -973,8 +939,8 @@ EntryReadStatus readOwnedRegularAt(int directoryFd, const QByteArray& name,
                                    QByteArray* const bytes, QString* const detail,
                                    bool exact0600 = true)
 {
-    const int fd = confinedOpenAt(directoryFd, name,
-                                  O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    const int fd = PrivacyPosixStorage::confinedOpenAt(
+        directoryFd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
 
     if (fd < 0)
     {
@@ -1153,8 +1119,8 @@ int openOwnedDirectoryAt(int parentFd, const QByteArray& name, dev_t device,
         return -1;
     }
 
-    const int fd = confinedOpenAt(parentFd, name,
-                                  O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    const int fd = PrivacyPosixStorage::confinedOpenAt(
+        parentFd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
 
     if (fd < 0)
     {
@@ -1175,49 +1141,6 @@ int openOwnedDirectoryAt(int parentFd, const QByteArray& name, dev_t device,
     }
 
     return fd;
-}
-
-bool atomicRenameNoReplace(int directoryFd, const QByteArray& from,
-                           const QByteArray& to, bool exchange,
-                           bool* const unavailable)
-{
-    if (unavailable)
-    {
-        *unavailable = false;
-    }
-
-#ifdef Q_OS_LINUX
-    const unsigned int flags = exchange ? RENAME_EXCHANGE : RENAME_NOREPLACE;
-
-    if (::syscall(SYS_renameat2, directoryFd, from.constData(), directoryFd,
-                  to.constData(), flags) == 0)
-    {
-        return true;
-    }
-
-    if ((errno == ENOSYS) || (errno == EINVAL))
-    {
-        if (unavailable)
-        {
-            *unavailable = true;
-        }
-    }
-
-    return false;
-#else
-    Q_UNUSED(directoryFd);
-    Q_UNUSED(from);
-    Q_UNUSED(to);
-    Q_UNUSED(exchange);
-
-    if (unavailable)
-    {
-        *unavailable = true;
-    }
-
-    errno = ENOSYS;
-    return false;
-#endif
 }
 
 #endif // Q_OS_UNIX
@@ -1881,7 +1804,7 @@ bool PrivacyTransactionJournalStore::persist(
     }
 
     const QByteArray nextName = NextFile.toUtf8();
-    const int nextFd = confinedOpenAt(
+    const int nextFd = PrivacyPosixStorage::confinedOpenAt(
         transactionFd, nextName,
         O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
 
@@ -1969,7 +1892,7 @@ bool PrivacyTransactionJournalStore::persist(
 
     const QByteArray journalHash = PrivacyTransactionJournalCodec::sha256(bytes);
     const QByteArray intentBytes = journalHash.toHex() + '\n';
-    const int intentFd = confinedOpenAt(
+    const int intentFd = PrivacyPosixStorage::confinedOpenAt(
         transactionFd, IntentFile.toUtf8(),
         O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
 
@@ -2011,8 +1934,11 @@ bool PrivacyTransactionJournalStore::persist(
 
     bool atomicUnavailable = false;
 
-    if (!atomicRenameNoReplace(transactionFd, nextName, JournalFile.toUtf8(),
-                               update, &atomicUnavailable))
+    if (!PrivacyPosixStorage::atomicRenameAt(
+            transactionFd, nextName, JournalFile.toUtf8(),
+            update ? PrivacyPosixStorage::AtomicRenameMode::Exchange
+                   : PrivacyPosixStorage::AtomicRenameMode::NoReplace,
+            &atomicUnavailable))
     {
         ::close(transactionFd);
         setError(error,
@@ -2075,9 +2001,9 @@ bool PrivacyTransactionJournalStore::persist(
             (PrivacyTransactionJournalCodec::sha256(displacedBytes) !=
              expectedCurrentSha256))
         {
-            const bool rolledBack = atomicRenameNoReplace(
-                transactionFd, nextName, JournalFile.toUtf8(), true,
-                nullptr);
+            const bool rolledBack = PrivacyPosixStorage::atomicRenameAt(
+                transactionFd, nextName, JournalFile.toUtf8(),
+                PrivacyPosixStorage::AtomicRenameMode::Exchange, nullptr);
             const bool rollbackDurable = rolledBack && syncFd(transactionFd);
             ::close(transactionFd);
             setError(error,
