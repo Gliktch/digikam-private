@@ -244,7 +244,7 @@ bool validTransactionType(PrivacyTransactionType type)
     const int value = static_cast<int>(type);
 
     return ((value >= static_cast<int>(PrivacyTransactionType::ProtectItem)) &&
-            (value <= static_cast<int>(PrivacyTransactionType::ChangePresentation)));
+            (value <= static_cast<int>(PrivacyTransactionType::CreateCategory)));
 }
 
 bool validStage(PrivacyJournalStage stage)
@@ -572,7 +572,21 @@ bool PrivacyTransactionJournalCodec::validate(const PrivacyJournalRecord& record
         return invalid(QStringLiteral("invalid journal header"));
     }
 
-    if (record.assets.isEmpty() || (record.assets.size() > MaximumAssetCount))
+    const bool createCategory =
+        (record.transactionType == PrivacyTransactionType::CreateCategory);
+    const bool validCreateHeader =
+        (((record.stage == PrivacyJournalStage::Created) &&
+          (record.generation == 0) && (record.credentialGeneration == -1) &&
+          (record.fromCredentialGeneration == -1) &&
+          (record.toCredentialGeneration == -1)) ||
+         ((record.stage == PrivacyJournalStage::Complete) &&
+          (record.generation == 1) && (record.credentialGeneration == 1) &&
+          (record.fromCredentialGeneration == -1) &&
+          (record.toCredentialGeneration == 1)));
+
+    if ((createCategory && (!record.assets.isEmpty() || !validCreateHeader)) ||
+        (!createCategory && record.assets.isEmpty()) ||
+        (record.assets.size() > MaximumAssetCount))
     {
         return invalid(QStringLiteral("invalid asset count"));
     }
@@ -808,7 +822,9 @@ bool PrivacyTransactionJournalCodec::decode(
 
     const QJsonArray assets = object.value(QStringLiteral("assets")).toArray();
 
-    if ((assets.size() < 1) || (assets.size() > MaximumAssetCount))
+    if ((assets.size() > MaximumAssetCount) ||
+        (assets.isEmpty() &&
+         (decoded.transactionType != PrivacyTransactionType::CreateCategory)))
     {
         setError(error, PrivacyJournalError::CorruptJournal, detail,
                  QStringLiteral("journal asset count is invalid"));

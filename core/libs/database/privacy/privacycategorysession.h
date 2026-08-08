@@ -25,6 +25,7 @@
 #include "privacygocryptfsadapter.h"
 #include "privacypassword.h"
 #include "privacyruntime.h"
+#include "privacytransactionjournal.h"
 #include "privacytypes.h"
 
 namespace Digikam
@@ -100,6 +101,9 @@ public:
                                  const PrivacyStore& store,
                                  const QList<PrivacyStoreBinding>& bindings,
                                  const PrivacyTransaction& transaction) = 0;
+    virtual bool compareAndUpdateCreationJournal(
+        const PrivacyTransactionJournal& journal,
+        int expectedStage) = 0;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyCoreDbCategorySessionRepository final
@@ -118,6 +122,44 @@ public:
                          const PrivacyStore& store,
                          const QList<PrivacyStoreBinding>& bindings,
                          const PrivacyTransaction& transaction) override;
+    bool compareAndUpdateCreationJournal(
+        const PrivacyTransactionJournal& journal,
+        int expectedStage) override;
+};
+
+class DIGIKAM_DATABASE_EXPORT PrivacyCategoryCreationJournalPersistence
+{
+public:
+
+    virtual ~PrivacyCategoryCreationJournalPersistence() = default;
+
+    virtual bool createOrLoadExact(const PrivacyStorageRoot& root,
+                                   PrivacyJournalRecord* record,
+                                   bool allowCreate,
+                                   QByteArray* publishedSha256,
+                                   PrivacyJournalError* error) = 0;
+    virtual bool compareAndUpdateExact(const PrivacyStorageRoot& root,
+                                       const PrivacyJournalRecord& record,
+                                       const QByteArray& expectedCurrentSha256,
+                                       QByteArray* publishedSha256,
+                                       PrivacyJournalError* error) = 0;
+};
+
+class DIGIKAM_DATABASE_EXPORT PrivacyFilesystemCategoryCreationJournalPersistence final
+    : public PrivacyCategoryCreationJournalPersistence
+{
+public:
+
+    bool createOrLoadExact(const PrivacyStorageRoot& root,
+                           PrivacyJournalRecord* record,
+                           bool allowCreate,
+                           QByteArray* publishedSha256,
+                           PrivacyJournalError* error) override;
+    bool compareAndUpdateExact(const PrivacyStorageRoot& root,
+                               const PrivacyJournalRecord& record,
+                               const QByteArray& expectedCurrentSha256,
+                               QByteArray* publishedSha256,
+                               PrivacyJournalError* error) override;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyCategoryStoreLease
@@ -178,7 +220,8 @@ public:
         PrivacyCategoryStoreBackend& storeBackend,
         const PrivacyRootVerifier& rootVerifier,
         PrivacyRuntimeCoordinator& runtime,
-        PrivacySecretLifetimeObserver* secretObserver = nullptr);
+        PrivacySecretLifetimeObserver* secretObserver = nullptr,
+        PrivacyCategoryCreationJournalPersistence* creationJournal = nullptr);
     ~PrivacyCategorySessionCoordinator();
 
     PrivacyCategorySessionResult createCategory(

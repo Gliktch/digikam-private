@@ -96,9 +96,9 @@ inline int confinedOpenAt(int directoryFd, const QByteArray& name, int flags,
 #endif
 }
 
-inline bool atomicRenameAt(int directoryFd, const QByteArray& from,
-                           const QByteArray& to, AtomicRenameMode mode,
-                           bool* const unavailable)
+inline bool atomicRenameAt(int fromDirectoryFd, const QByteArray& from,
+                           int toDirectoryFd, const QByteArray& to,
+                           AtomicRenameMode mode, bool* const unavailable)
 {
     if (unavailable)
     {
@@ -111,7 +111,7 @@ inline bool atomicRenameAt(int directoryFd, const QByteArray& from,
                              ? RENAME_EXCHANGE
                              : RENAME_NOREPLACE;
 
-    if (::syscall(SYS_renameat2, directoryFd, from.constData(), directoryFd,
+    if (::syscall(SYS_renameat2, fromDirectoryFd, from.constData(), toDirectoryFd,
                   to.constData(), flags) == 0)
     {
         return true;
@@ -129,7 +129,8 @@ inline bool atomicRenameAt(int directoryFd, const QByteArray& from,
 
 #else
 
-    Q_UNUSED(directoryFd);
+    Q_UNUSED(fromDirectoryFd);
+    Q_UNUSED(toDirectoryFd);
     Q_UNUSED(from);
     Q_UNUSED(to);
     Q_UNUSED(mode);
@@ -143,6 +144,14 @@ inline bool atomicRenameAt(int directoryFd, const QByteArray& from,
     return false;
 
 #endif
+}
+
+inline bool atomicRenameAt(int directoryFd, const QByteArray& from,
+                           const QByteArray& to, AtomicRenameMode mode,
+                           bool* const unavailable)
+{
+    return atomicRenameAt(directoryFd, from, directoryFd, to, mode,
+                          unavailable);
 }
 
 } // namespace PrivacyPosixStorage

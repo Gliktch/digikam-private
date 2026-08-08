@@ -1347,6 +1347,294 @@ bool PrivacyRuntimeCoordinator::publishCategory(const PrivacyCategory& category)
     return true;
 }
 
+bool PrivacyRuntimeCoordinator::publishCategoryCreation(
+    const PrivacyCategory& category, const PrivacyCredential& credential,
+    const PrivacyStorageRoot& root, const PrivacyStore& store,
+    const QList<PrivacyStoreBinding>& bindings)
+{
+    if (!category.isValid() || !credential.isValid() || !root.isValid() ||
+        !store.isValid() || bindings.isEmpty() ||
+        (category.backend != PrivacyBackend::Casual) ||
+        (category.lifecycleState != PrivacyCategoryLifecycleState::Active) ||
+        (category.currentCredentialGeneration != credential.generation) ||
+        (credential.categoryUuid != category.uuid) ||
+        (root.kind != PrivacyStorageRootKind::ManagedStoreRoot) ||
+        (store.categoryUuid != category.uuid) || (store.rootUuid != root.uuid) ||
+        (store.lifecycleState != PrivacyStoreLifecycleState::Active) ||
+        (store.configGeneration != credential.generation))
+    {
+        return false;
+    }
+
+    QSet<PrivacyStoreRole> roles;
+
+    for (const PrivacyStoreBinding& binding : bindings)
+    {
+        if (!binding.isValid() || (binding.categoryUuid != category.uuid) ||
+            (binding.storeUuid != store.uuid) || roles.contains(binding.role))
+        {
+            return false;
+        }
+
+        roles.insert(binding.role);
+    }
+
+    if ((roles.size() != 2) ||
+        !roles.contains(PrivacyStoreRole::CredentialAuthority) ||
+        !roles.contains(PrivacyStoreRole::Derivatives))
+    {
+        return false;
+    }
+
+    QSharedPointer<const PrivacyRootVerifier> verifier;
+
+    {
+        QReadLocker locker(&d->lock);
+
+        if (!d->initialized)
+        {
+            return false;
+        }
+
+        verifier = d->rootVerifier;
+    }
+
+    if (!verifier ||
+        (verifier->verify(root) != PrivacyRootRuntimeState::VerifiedAvailable))
+    {
+        return false;
+    }
+
+    QWriteLocker locker(&d->lock);
+
+    if (!d->initialized)
+    {
+        return false;
+    }
+
+    bool categoryPresent = false;
+
+    for (const PrivacyCategory& existing : std::as_const(d->snapshot.categories))
+    {
+        if (existing.uuid == category.uuid)
+        {
+            if (categoryPresent || (existing.name != category.name) ||
+                (existing.backend != category.backend) ||
+                (existing.presentationMode != category.presentationMode) ||
+                (existing.unlockedThumbnailMode != category.unlockedThumbnailMode) ||
+                (existing.tagVisibilityMode != category.tagVisibilityMode) ||
+                (existing.lifecycleState != category.lifecycleState) ||
+                (existing.currentCredentialGeneration !=
+                 category.currentCredentialGeneration))
+            {
+                return false;
+            }
+
+            categoryPresent = true;
+            continue;
+        }
+
+        if (existing.name.compare(category.name, Qt::CaseInsensitive) == 0)
+        {
+            return false;
+        }
+    }
+
+    bool credentialPresent = false;
+
+    for (const PrivacyCredential& existing : std::as_const(d->snapshot.credentials))
+    {
+        if ((existing.categoryUuid != credential.categoryUuid) ||
+            (existing.generation != credential.generation))
+        {
+            continue;
+        }
+
+        if (credentialPresent ||
+            (existing.encodingVersion != credential.encodingVersion) ||
+            (existing.envelopeFormat != credential.envelopeFormat) ||
+            (existing.envelopeBlob != credential.envelopeBlob) ||
+            (existing.envelopeHashAlgorithm != credential.envelopeHashAlgorithm) ||
+            (existing.envelopeHash != credential.envelopeHash))
+        {
+            return false;
+        }
+
+        credentialPresent = true;
+    }
+
+    bool rootPresent = false;
+
+    for (const PrivacyStorageRoot& existing : std::as_const(d->snapshot.storageRoots))
+    {
+        if (existing.uuid != root.uuid)
+        {
+            continue;
+        }
+
+        if (rootPresent)
+        {
+            return false;
+        }
+
+        rootPresent = true;
+
+        if ((existing.kind != root.kind) ||
+            (existing.configuredPath != root.configuredPath) ||
+            (existing.identityVersion != root.identityVersion) ||
+            (existing.identityData != root.identityData) ||
+            (existing.markerUuid != root.markerUuid))
+        {
+            return false;
+        }
+    }
+
+    bool storePresent = false;
+
+    for (const PrivacyStore& existing : std::as_const(d->snapshot.stores))
+    {
+        if (existing.uuid == store.uuid)
+        {
+            if (storePresent || (existing.categoryUuid != store.categoryUuid) ||
+                (existing.rootUuid != store.rootUuid) ||
+                (existing.format != store.format) ||
+                (existing.formatVersion != store.formatVersion) ||
+                (existing.cipherRelativePath != store.cipherRelativePath) ||
+                (existing.configRelativePath != store.configRelativePath) ||
+                (existing.configGeneration != store.configGeneration) ||
+                (existing.lifecycleState != store.lifecycleState))
+            {
+                return false;
+            }
+
+            storePresent = true;
+        }
+    }
+
+    QSet<PrivacyStoreRole> existingRoles;
+
+    for (const PrivacyStoreBinding& existing :
+         std::as_const(d->snapshot.storeBindings))
+    {
+        if (existing.categoryUuid != category.uuid)
+        {
+            continue;
+        }
+
+        if ((existing.storeUuid != store.uuid) ||
+            existingRoles.contains(existing.role))
+        {
+            return false;
+        }
+
+        existingRoles.insert(existing.role);
+    }
+
+    if (!existingRoles.isEmpty() && (existingRoles != roles))
+    {
+        return false;
+    }
+
+    if ((categoryPresent != credentialPresent) ||
+        (categoryPresent != storePresent) ||
+        (categoryPresent != !existingRoles.isEmpty()))
+    {
+        return false;
+    }
+
+    if (!categoryPresent && !d->service.addCategory(category))
+    {
+        return false;
+    }
+
+    if (categoryPresent && (d->service.categoryEpoch(category.uuid) == 0))
+    {
+        return false;
+    }
+
+    if (!categoryPresent)
+    {
+        d->snapshot.categories << category;
+    }
+
+    if (!credentialPresent)
+    {
+        d->snapshot.credentials << credential;
+    }
+
+    if (!storePresent)
+    {
+        d->snapshot.stores << store;
+    }
+
+    if (existingRoles.isEmpty())
+    {
+        d->snapshot.storeBindings << bindings;
+    }
+    d->protectedRootUuids.insert(root.uuid);
+
+    if (!rootPresent)
+    {
+        d->snapshot.storageRoots << root;
+        d->setRootState(root.uuid, PrivacyRootRuntimeState::VerifiedAvailable);
+        PrivacyRootIntegritySummary summary;
+        summary.rootUuid = root.uuid;
+        summary.state = PrivacyRootRuntimeState::VerifiedAvailable;
+        d->rootSummaries.insert(root.uuid, summary);
+        d->report.roots << summary;
+        ++d->report.verifiedRootCount;
+    }
+    else if (d->rootStates.value(root.uuid) !=
+             PrivacyRootRuntimeState::VerifiedAvailable)
+    {
+        switch (d->rootStates.value(root.uuid))
+        {
+            case PrivacyRootRuntimeState::Offline:
+                d->report.offlineRootCount = qMax(0, d->report.offlineRootCount - 1);
+                break;
+
+            case PrivacyRootRuntimeState::IdentityMismatch:
+                d->report.mismatchedRootCount =
+                    qMax(0, d->report.mismatchedRootCount - 1);
+                break;
+
+            case PrivacyRootRuntimeState::Unknown:
+            case PrivacyRootRuntimeState::Recovering:
+                d->report.recoveringRootCount =
+                    qMax(0, d->report.recoveringRootCount - 1);
+                break;
+
+            case PrivacyRootRuntimeState::VerifiedAvailable:
+                break;
+        }
+
+        d->setRootState(root.uuid, PrivacyRootRuntimeState::VerifiedAvailable);
+        PrivacyRootIntegritySummary summary = d->rootSummaries.value(root.uuid);
+        summary.rootUuid = root.uuid;
+        summary.state = PrivacyRootRuntimeState::VerifiedAvailable;
+        summary.identityMismatch = false;
+        d->rootSummaries.insert(root.uuid, summary);
+        ++d->report.verifiedRootCount;
+
+        for (PrivacyRootIntegritySummary& reported : d->report.roots)
+        {
+            if (reported.rootUuid == root.uuid)
+            {
+                reported = summary;
+            }
+        }
+    }
+
+    d->report.state = ((d->report.offlineRootCount == 0) &&
+                       (d->report.mismatchedRootCount == 0) &&
+                       (d->report.recoveringRootCount == 0) &&
+                       (d->report.unresolvedTransactionCount == 0))
+                    ? PrivacyStartupState::Ready
+                    : PrivacyStartupState::Degraded;
+
+    return true;
+}
+
 quint64 PrivacyRuntimeCoordinator::categoryEpoch(const QString& categoryUuid) const
 {
     QReadLocker locker(&d->lock);

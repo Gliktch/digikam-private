@@ -10,6 +10,7 @@
 
 // C++ includes
 
+#include <functional>
 #include <memory>
 
 // Qt includes
@@ -17,12 +18,15 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
 
 // Local includes
 
 #include "privacygocryptfsadapter.h"
+#include "privacygocryptfscategorystore.h"
 
 using namespace Digikam;
 
@@ -120,6 +124,13 @@ public:
         const PrivacyProcessSpec& spec, const QByteArray& standardInput) override
     {
         specs << spec;
+
+        if (beforeFirstRun)
+        {
+            const std::function<void()> hook = std::move(beforeFirstRun);
+            hook();
+        }
+
         const QString secret = QString::fromUtf8(expectedPasswordLine).trimmed();
         secretLeaked = secretLeaked || spec.program.contains(secret);
 
@@ -258,6 +269,7 @@ public:
     bool                              sawPasswordInput     = false;
     bool                              secretLeaked         = false;
     int                               unmountCalls         = 0;
+    std::function<void()>             beforeFirstRun;
 };
 
 bool makeExecutable(const QString& path)
@@ -320,6 +332,97 @@ PrivacyPassword testPassword()
     return PrivacyPassword::fromUnicode(QString::fromUtf8("p\xC3\xA4ss"));
 }
 
+struct ManagedStoreFixture
+{
+    ManagedStoreFixture()
+        : runner(probe)
+    {
+        if (!temporary.isValid())
+        {
+            return;
+        }
+
+        managedRoot = temporary.path() + QLatin1String("/managed");
+        outside = temporary.path() + QLatin1String("/outside");
+        runtime = temporary.path() + QLatin1String("/runtime");
+        tools = temporary.path() + QLatin1String("/tools");
+        const QString metadata = managedRoot + QLatin1String("/.digikam-private");
+
+        valid = QDir().mkdir(managedRoot) && QDir().mkdir(outside) &&
+                QDir().mkdir(runtime) && QDir().mkdir(tools) &&
+                QDir().mkdir(metadata);
+
+        for (const QString& path : { managedRoot, outside, runtime, tools, metadata })
+        {
+            valid = valid && QFile::setPermissions(
+                path, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                      QFileDevice::ExeOwner);
+        }
+
+        root.uuid = QLatin1String("30000000-0000-0000-0000-000000000001");
+        root.kind = PrivacyStorageRootKind::ManagedStoreRoot;
+        root.configuredPath = managedRoot;
+        root.identityVersion = 1;
+        root.identityData = QByteArray("synthetic-managed-root-identity");
+        root.markerUuid = QLatin1String("40000000-0000-0000-0000-000000000001");
+        root.createdAt = QDateTime::currentDateTimeUtc();
+
+        QJsonObject marker;
+        marker.insert(QLatin1String("kind"),
+                      QLatin1String("digikam-private-root-marker-v1"));
+        marker.insert(QLatin1String("markerUuid"), root.markerUuid);
+        marker.insert(QLatin1String("rootUuid"), root.uuid);
+        QFile markerFile(metadata + QLatin1String("/root-marker-v1.json"));
+        const QByteArray markerBytes =
+            QJsonDocument(marker).toJson(QJsonDocument::Compact);
+        valid = valid && markerFile.open(QIODevice::WriteOnly | QIODevice::NewOnly) &&
+                (markerFile.write(markerBytes) == markerBytes.size()) &&
+                markerFile.setPermissions(QFileDevice::ReadOwner |
+                                          QFileDevice::WriteOwner);
+
+        store.uuid = QLatin1String("20000000-0000-0000-0000-000000000001");
+        store.categoryUuid =
+            QLatin1String("10000000-0000-0000-0000-000000000001");
+        store.rootUuid = root.uuid;
+        store.format = QLatin1String("gocryptfs");
+        store.formatVersion = 2;
+        store.cipherRelativePath = QLatin1String(".digikam-private/stores/") +
+                                   store.uuid;
+        store.configRelativePath = store.cipherRelativePath +
+                                   QLatin1String("/gocryptfs.conf");
+        store.configGeneration = -1;
+        store.lifecycleState = PrivacyStoreLifecycleState::Creating;
+        store.createdAt = QDateTime::currentDateTimeUtc();
+
+        runner.gocryptfsPath = tools + QLatin1String("/gocryptfs");
+        runner.xrayPath = tools + QLatin1String("/gocryptfs-xray");
+        runner.fusermountPath = tools + QLatin1String("/fusermount3");
+        valid = valid && makeExecutable(runner.gocryptfsPath) &&
+                makeExecutable(runner.xrayPath) &&
+                makeExecutable(runner.fusermountPath);
+        paths = { runner.gocryptfsPath, runner.xrayPath,
+                  runner.fusermountPath };
+    }
+
+    QString temporaryRelativePath() const
+    {
+        return QLatin1String(".digikam-private/staging/") + store.uuid +
+               QLatin1String(".creating");
+    }
+
+    QTemporaryDir temporary;
+    QString managedRoot;
+    QString outside;
+    QString runtime;
+    QString tools;
+    FakeMountProbe probe;
+    FakeProcessRunner runner;
+    PrivacyGocryptfsToolPaths paths;
+    PrivacyStorageRoot root;
+    PrivacyStore store;
+    bool valid = false;
+};
+
 } // namespace
 
 class PrivacyStorageTest : public QObject
@@ -333,6 +436,9 @@ private Q_SLOTS:
     void testCapabilitiesFailClosed();
     void testSyntheticLifecycle();
     void testMountFailuresFailClosed();
+    void testCategoryStoreDescriptorConfinedCreateAndReplay();
+    void testCategoryStoreRejectsHostileSymlinks();
+    void testCategoryStorePinsStagingAcrossRenameRace();
 };
 
 void PrivacyStorageTest::testPasswordBoundary()
@@ -497,6 +603,108 @@ void PrivacyStorageTest::testMountFailuresFailClosed()
     fixture.probe.current = PrivacyMountStateProbe::State::Unknown;
     QVERIFY(!harness->mountStore(password, QByteArray("expected"), &error));
     QVERIFY(error == PrivacyGocryptfsError::UnsafeWorkspace);
+}
+
+void PrivacyStorageTest::testCategoryStoreRejectsHostileSymlinks()
+{
+    ManagedStoreFixture fixture;
+    QVERIFY(fixture.valid);
+    const QString metadata = fixture.managedRoot +
+                             QLatin1String("/.digikam-private");
+    QVERIFY(QFile::link(fixture.outside, metadata + QLatin1String("/staging")));
+    PrivacyGocryptfsCategoryStoreBackend backend(
+        fixture.runner, fixture.probe, fixture.paths, fixture.runtime);
+    PrivacyPassword password = testPassword();
+    PrivacyGocryptfsEnvelope envelope;
+    PrivacyGocryptfsError error = PrivacyGocryptfsError::None;
+
+    QVERIFY(!backend.createOrResume(fixture.root, fixture.store,
+                                    fixture.temporaryRelativePath(), password,
+                                    QByteArray("sentinel"), &envelope, &error));
+    QCOMPARE(error, PrivacyGocryptfsError::UnsafeWorkspace);
+    QVERIFY(QDir(fixture.outside).entryList(QDir::AllEntries |
+                                           QDir::NoDotAndDotDot).isEmpty());
+    QVERIFY(fixture.runner.specs.isEmpty());
+}
+
+void PrivacyStorageTest::testCategoryStoreDescriptorConfinedCreateAndReplay()
+{
+    ManagedStoreFixture fixture;
+    QVERIFY(fixture.valid);
+    PrivacyGocryptfsCategoryStoreBackend backend(
+        fixture.runner, fixture.probe, fixture.paths, fixture.runtime);
+    PrivacyPassword password = testPassword();
+    PrivacyGocryptfsEnvelope envelope;
+    PrivacyGocryptfsError error = PrivacyGocryptfsError::None;
+    const QByteArray sentinel("category-store-sentinel");
+
+    QVERIFY2(backend.createOrResume(fixture.root, fixture.store,
+                                    fixture.temporaryRelativePath(), password,
+                                    sentinel, &envelope, &error),
+             qPrintable(QString::number(static_cast<int>(error))));
+    QVERIFY(envelope.isValid());
+    QCOMPARE(envelope.opaqueConfig(), fixture.runner.opaqueConfig);
+    const QString finalDirectory = fixture.managedRoot +
+        QLatin1String("/.digikam-private/stores/") + fixture.store.uuid;
+    const QString stagedDirectory = fixture.managedRoot + QLatin1Char('/') +
+                                    fixture.temporaryRelativePath();
+    QVERIFY(QFileInfo(finalDirectory).isDir());
+    QVERIFY(QFileInfo(finalDirectory + QLatin1String("/gocryptfs.conf")).isFile());
+    QVERIFY(!QFileInfo(stagedDirectory).exists());
+    const auto initCount = [&fixture]()
+    {
+        int count = 0;
+
+        for (const PrivacyProcessSpec& spec : std::as_const(fixture.runner.specs))
+        {
+            if (spec.arguments.contains(QLatin1String("-init")))
+            {
+                ++count;
+            }
+        }
+
+        return count;
+    };
+    QCOMPARE(initCount(), 1);
+
+    PrivacyGocryptfsEnvelope replayed;
+    QVERIFY(backend.createOrResume(fixture.root, fixture.store,
+                                   fixture.temporaryRelativePath(), password,
+                                   sentinel, &replayed, &error));
+    QCOMPARE(replayed.opaqueConfig(), envelope.opaqueConfig());
+    QCOMPARE(initCount(), 1);
+    QVERIFY(QFileInfo(finalDirectory).isDir());
+    QVERIFY(!QFileInfo(stagedDirectory).exists());
+}
+
+void PrivacyStorageTest::testCategoryStorePinsStagingAcrossRenameRace()
+{
+    ManagedStoreFixture fixture;
+    QVERIFY(fixture.valid);
+    const QString staging = fixture.managedRoot +
+                            QLatin1String("/.digikam-private/staging");
+    QVERIFY(QDir().mkdir(staging));
+    QVERIFY(QFile::setPermissions(staging, QFileDevice::ReadOwner |
+                                           QFileDevice::WriteOwner |
+                                           QFileDevice::ExeOwner));
+    fixture.runner.beforeFirstRun = [&fixture, staging]()
+    {
+        QVERIFY(QDir().rmdir(staging));
+        QVERIFY(QFile::link(fixture.outside, staging));
+    };
+    PrivacyGocryptfsCategoryStoreBackend backend(
+        fixture.runner, fixture.probe, fixture.paths, fixture.runtime);
+    PrivacyPassword password = testPassword();
+    PrivacyGocryptfsEnvelope envelope;
+    PrivacyGocryptfsError error = PrivacyGocryptfsError::None;
+
+    QVERIFY(!backend.createOrResume(fixture.root, fixture.store,
+                                    fixture.temporaryRelativePath(), password,
+                                    QByteArray("sentinel"), &envelope, &error));
+    QVERIFY(QDir(fixture.outside).entryList(QDir::AllEntries |
+                                           QDir::NoDotAndDotDot).isEmpty());
+    QVERIFY(!QFileInfo(fixture.outside + QLatin1Char('/') +
+                       fixture.store.uuid + QLatin1String(".creating")).exists());
 }
 
 QTEST_GUILESS_MAIN(PrivacyStorageTest)

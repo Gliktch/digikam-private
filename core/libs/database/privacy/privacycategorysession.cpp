@@ -132,7 +132,10 @@ bool sameCreatingRecords(const PrivacyRepositorySnapshot& snapshot,
 
             if ((existing.categoryUuid != store.categoryUuid) ||
                 (existing.rootUuid != store.rootUuid) ||
+                (existing.format != store.format) ||
+                (existing.formatVersion != store.formatVersion) ||
                 (existing.cipherRelativePath != store.cipherRelativePath) ||
+                (existing.configRelativePath != store.configRelativePath) ||
                 (existing.lifecycleState != PrivacyStoreLifecycleState::Creating) ||
                 (existing.configGeneration != -1))
             {
@@ -150,7 +153,11 @@ bool sameCreatingRecords(const PrivacyRepositorySnapshot& snapshot,
             if ((existing.categoryUuid != transaction.categoryUuid) ||
                 (existing.type != PrivacyTransactionType::CreateCategory) ||
                 (existing.state != PrivacyTransactionState::Created) ||
-                (existing.generation != 0))
+                (existing.generation != 0) ||
+                (existing.fromCredentialGeneration != -1) ||
+                (existing.toCredentialGeneration != -1) ||
+                (existing.payloadFormatVersion != transaction.payloadFormatVersion) ||
+                (existing.payloadData != transaction.payloadData))
             {
                 return false;
             }
@@ -159,6 +166,202 @@ bool sameCreatingRecords(const PrivacyRepositorySnapshot& snapshot,
 
     return ((categoryMatches == 1) && (rootMatches == 1) &&
             (storeMatches == 1) && (transactionMatches == 1));
+}
+
+bool loadCompletedCreation(const PrivacyRepositorySnapshot& snapshot,
+                           const PrivacyCategory& requestedCategory,
+                           const PrivacyStorageRoot& requestedRoot,
+                           const PrivacyStore& requestedStore,
+                           const PrivacyTransaction& requestedTransaction,
+                           const PrivacyTransactionJournal& requestedJournal,
+                           PrivacyCategory* category,
+                           PrivacyCredential* credential,
+                           PrivacyStore* store,
+                           QList<PrivacyStoreBinding>* bindings,
+                           PrivacyTransactionJournal* journal)
+{
+    if (!category || !credential || !store || !bindings || !journal)
+    {
+        return false;
+    }
+
+    int categoryCount = 0;
+    int credentialCount = 0;
+    int rootCount = 0;
+    int storeCount = 0;
+    int transactionCount = 0;
+    int journalCount = 0;
+
+    for (const PrivacyCategory& candidate : snapshot.categories)
+    {
+        if (candidate.uuid == requestedCategory.uuid)
+        {
+            ++categoryCount;
+            *category = candidate;
+        }
+    }
+
+    for (const PrivacyCredential& candidate : snapshot.credentials)
+    {
+        if ((candidate.categoryUuid == requestedCategory.uuid) &&
+            (candidate.generation == 1))
+        {
+            ++credentialCount;
+            *credential = candidate;
+        }
+    }
+
+    for (const PrivacyStorageRoot& candidate : snapshot.storageRoots)
+    {
+        if (candidate.uuid == requestedRoot.uuid)
+        {
+            ++rootCount;
+
+            if ((candidate.kind != requestedRoot.kind) ||
+                (candidate.configuredPath != requestedRoot.configuredPath) ||
+                (candidate.identityVersion != requestedRoot.identityVersion) ||
+                (candidate.identityData != requestedRoot.identityData) ||
+                (candidate.markerUuid != requestedRoot.markerUuid))
+            {
+                return false;
+            }
+        }
+    }
+
+    for (const PrivacyStore& candidate : snapshot.stores)
+    {
+        if (candidate.uuid == requestedStore.uuid)
+        {
+            ++storeCount;
+            *store = candidate;
+        }
+    }
+
+    for (const PrivacyTransaction& candidate : snapshot.transactions)
+    {
+        if (candidate.uuid == requestedTransaction.uuid)
+        {
+            ++transactionCount;
+
+            if ((candidate.categoryUuid != requestedTransaction.categoryUuid) ||
+                (candidate.type != PrivacyTransactionType::CreateCategory) ||
+                (candidate.state != PrivacyTransactionState::Complete) ||
+                (candidate.generation != 1) ||
+                (candidate.fromCredentialGeneration != -1) ||
+                (candidate.toCredentialGeneration != 1) ||
+                (candidate.payloadFormatVersion !=
+                 requestedTransaction.payloadFormatVersion) ||
+                (candidate.payloadData != requestedTransaction.payloadData))
+            {
+                return false;
+            }
+        }
+    }
+
+    for (const PrivacyTransactionJournal& candidate : snapshot.transactionJournals)
+    {
+        if (candidate.transactionUuid == requestedTransaction.uuid)
+        {
+            ++journalCount;
+            *journal = candidate;
+        }
+    }
+
+    bindings->clear();
+
+    for (const PrivacyStoreBinding& binding : snapshot.storeBindings)
+    {
+        if (binding.categoryUuid == requestedCategory.uuid)
+        {
+            bindings->append(binding);
+        }
+    }
+
+    QSet<PrivacyStoreRole> roles;
+
+    for (const PrivacyStoreBinding& binding : std::as_const(*bindings))
+    {
+        if ((binding.storeUuid != requestedStore.uuid) || roles.contains(binding.role))
+        {
+            return false;
+        }
+
+        roles.insert(binding.role);
+    }
+
+    return ((categoryCount == 1) && (credentialCount == 1) && (rootCount == 1) &&
+            (storeCount == 1) && (transactionCount == 1) && (journalCount == 1) &&
+            (category->name == requestedCategory.name) &&
+            (category->backend == requestedCategory.backend) &&
+            (category->presentationMode == requestedCategory.presentationMode) &&
+            (category->unlockedThumbnailMode ==
+             requestedCategory.unlockedThumbnailMode) &&
+            (category->tagVisibilityMode == requestedCategory.tagVisibilityMode) &&
+            (category->lifecycleState == PrivacyCategoryLifecycleState::Active) &&
+            (category->currentCredentialGeneration == 1) &&
+            (store->categoryUuid == requestedStore.categoryUuid) &&
+            (store->rootUuid == requestedStore.rootUuid) &&
+            (store->format == requestedStore.format) &&
+            (store->formatVersion == requestedStore.formatVersion) &&
+            (store->cipherRelativePath == requestedStore.cipherRelativePath) &&
+            (store->configRelativePath == requestedStore.configRelativePath) &&
+            (store->lifecycleState == PrivacyStoreLifecycleState::Active) &&
+            (store->configGeneration == 1) &&
+            (journal->rootUuid == requestedJournal.rootUuid) &&
+            (journal->journalRelativePath == requestedJournal.journalRelativePath) &&
+            (journal->journalFormatVersion == requestedJournal.journalFormatVersion) &&
+            ((journal->stage == static_cast<int>(PrivacyJournalStage::Created)) ||
+             (journal->stage == static_cast<int>(PrivacyJournalStage::Complete))) &&
+            (journal->expectedHashAlgorithm == QLatin1String("sha256")) &&
+            (QByteArray::fromHex(journal->expectedJournalHash.toLatin1()).size() == 32) &&
+            roles.contains(PrivacyStoreRole::CredentialAuthority) &&
+            roles.contains(PrivacyStoreRole::Derivatives) && (roles.size() == 2));
+}
+
+bool findExactCreationJournal(const PrivacyRepositorySnapshot& snapshot,
+                              const PrivacyTransactionJournal& expected,
+                              PrivacyTransactionJournal* existing)
+{
+    int matches = 0;
+
+    for (const PrivacyTransactionJournal& candidate : snapshot.transactionJournals)
+    {
+        if (candidate.transactionUuid != expected.transactionUuid)
+        {
+            continue;
+        }
+
+        ++matches;
+
+        if ((candidate.rootUuid != expected.rootUuid) ||
+            (candidate.journalRelativePath != expected.journalRelativePath) ||
+            (candidate.journalFormatVersion != expected.journalFormatVersion) ||
+            (candidate.stage != expected.stage) ||
+            ((!candidate.expectedHashAlgorithm.isEmpty() ||
+              !candidate.expectedJournalHash.isEmpty()) &&
+             ((candidate.expectedHashAlgorithm != QLatin1String("sha256")) ||
+              (QByteArray::fromHex(candidate.expectedJournalHash.toLatin1()).size() != 32))))
+        {
+            return false;
+        }
+
+        if (existing)
+        {
+            *existing = candidate;
+        }
+    }
+
+    return (matches == 1);
+}
+
+PrivacyJournalRootExpectation journalRootExpectation(const PrivacyStorageRoot& root)
+{
+    PrivacyJournalRootExpectation expectation;
+    expectation.rootUuid = root.uuid;
+    expectation.markerUuid = root.markerUuid;
+    expectation.identitySha256 =
+        QCryptographicHash::hash(root.identityData, QCryptographicHash::Sha256);
+    return expectation;
 }
 
 class CategoryBundle
@@ -328,6 +531,175 @@ bool PrivacyCoreDbCategorySessionRepository::publishCreation(
                                                         bindings, transaction);
 }
 
+bool PrivacyCoreDbCategorySessionRepository::compareAndUpdateCreationJournal(
+    const PrivacyTransactionJournal& journal, int expectedStage)
+{
+    return PrivacyRepository().compareAndUpdateTransactionJournal(journal,
+                                                                   expectedStage);
+}
+
+bool PrivacyFilesystemCategoryCreationJournalPersistence::createOrLoadExact(
+    const PrivacyStorageRoot& root, PrivacyJournalRecord* const record,
+    bool allowCreate, QByteArray* const publishedSha256,
+    PrivacyJournalError* const error)
+{
+    if (!record || !publishedSha256 || !root.isValid() ||
+        (record->rootUuid != root.uuid) ||
+        (record->transactionType != PrivacyTransactionType::CreateCategory))
+    {
+        if (error)
+        {
+            *error = PrivacyJournalError::InvalidRecord;
+        }
+
+        return false;
+    }
+
+    QString detail;
+    auto store = PrivacyTransactionJournalStore::open(
+        root.configuredPath, journalRootExpectation(root), error, &detail);
+
+    if (!store)
+    {
+        return false;
+    }
+
+    record->rootDevice = store->rootDevice();
+    record->rootInode = store->rootInode();
+    const QByteArray desired = PrivacyTransactionJournalCodec::encode(
+        *record, error, &detail);
+
+    if (desired.isEmpty())
+    {
+        return false;
+    }
+
+    PrivacyJournalLoadResult loaded = store->load(record->transactionUuid);
+
+    if (loaded.disposition == PrivacyJournalLoadDisposition::Missing)
+    {
+        if (allowCreate)
+        {
+            if (store->create(*record, publishedSha256, error, &detail))
+            {
+                return true;
+            }
+
+            loaded = store->load(record->transactionUuid);
+
+            if ((loaded.disposition == PrivacyJournalLoadDisposition::Loaded) &&
+                loaded.authoritative && (loaded.canonicalBytes == desired))
+            {
+                *publishedSha256 = loaded.sha256;
+
+                if (error)
+                {
+                    *error = PrivacyJournalError::None;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        if (error)
+        {
+            *error = PrivacyJournalError::PublicationConflict;
+        }
+
+        return false;
+    }
+
+    if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+        !loaded.authoritative || (loaded.canonicalBytes != desired))
+    {
+        if (error)
+        {
+            *error = (loaded.error == PrivacyJournalError::None)
+                   ? PrivacyJournalError::PublicationConflict : loaded.error;
+        }
+
+        return false;
+    }
+
+    *publishedSha256 = loaded.sha256;
+
+    if (error)
+    {
+        *error = PrivacyJournalError::None;
+    }
+
+    return true;
+}
+
+bool PrivacyFilesystemCategoryCreationJournalPersistence::compareAndUpdateExact(
+    const PrivacyStorageRoot& root, const PrivacyJournalRecord& record,
+    const QByteArray& expectedCurrentSha256, QByteArray* const publishedSha256,
+    PrivacyJournalError* const error)
+{
+    if (!publishedSha256 || (expectedCurrentSha256.size() != 32))
+    {
+        if (error)
+        {
+            *error = PrivacyJournalError::InvalidRecord;
+        }
+
+        return false;
+    }
+
+    QString detail;
+    auto store = PrivacyTransactionJournalStore::open(
+        root.configuredPath, journalRootExpectation(root), error, &detail);
+
+    if (!store || (record.rootDevice != store->rootDevice()) ||
+        (record.rootInode != store->rootInode()))
+    {
+        if (store && error)
+        {
+            *error = PrivacyJournalError::RootIdentityMismatch;
+        }
+
+        return false;
+    }
+
+    const QByteArray desired = PrivacyTransactionJournalCodec::encode(
+        record, error, &detail);
+    const PrivacyJournalLoadResult loaded = store->load(record.transactionUuid);
+
+    if (desired.isEmpty() ||
+        (loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+        !loaded.authoritative)
+    {
+        if (!desired.isEmpty() && error)
+        {
+            *error = (loaded.error == PrivacyJournalError::None)
+                   ? PrivacyJournalError::PublicationConflict : loaded.error;
+        }
+
+        return false;
+    }
+
+    if (loaded.canonicalBytes == desired)
+    {
+        *publishedSha256 = loaded.sha256;
+        return true;
+    }
+
+    if (loaded.sha256 != expectedCurrentSha256)
+    {
+        if (error)
+        {
+            *error = PrivacyJournalError::StaleComparison;
+        }
+
+        return false;
+    }
+
+    return store->compareAndUpdate(record, expectedCurrentSha256,
+                                   publishedSha256, error, &detail);
+}
+
 class PrivacyCategorySessionCoordinator::Private
 {
 public:
@@ -368,12 +740,15 @@ public:
             PrivacyCategoryStoreBackend& categoryStoreBackend,
             const PrivacyRootVerifier& categoryRootVerifier,
             PrivacyRuntimeCoordinator& privacyRuntime,
-            PrivacySecretLifetimeObserver* lifetimeObserver)
+            PrivacySecretLifetimeObserver* lifetimeObserver,
+            PrivacyCategoryCreationJournalPersistence* creationJournal)
         : repository(sessionRepository),
           storeBackend(categoryStoreBackend),
           rootVerifier(categoryRootVerifier),
           runtime(privacyRuntime),
-          observer(lifetimeObserver)
+          observer(lifetimeObserver),
+          journalPersistence(creationJournal ? creationJournal
+                                             : &filesystemJournalPersistence)
     {
     }
 
@@ -424,6 +799,8 @@ public:
     const PrivacyRootVerifier& rootVerifier;
     PrivacyRuntimeCoordinator& runtime;
     PrivacySecretLifetimeObserver* observer = nullptr;
+    PrivacyFilesystemCategoryCreationJournalPersistence filesystemJournalPersistence;
+    PrivacyCategoryCreationJournalPersistence* journalPersistence = nullptr;
     mutable QMutex lock;
     QWaitCondition operationChanged;
     QHash<QString, std::shared_ptr<Session> > sessions;
@@ -437,9 +814,10 @@ PrivacyCategorySessionCoordinator::PrivacyCategorySessionCoordinator(
     PrivacyCategoryStoreBackend& storeBackend,
     const PrivacyRootVerifier& rootVerifier,
     PrivacyRuntimeCoordinator& runtime,
-    PrivacySecretLifetimeObserver* secretObserver)
+    PrivacySecretLifetimeObserver* secretObserver,
+    PrivacyCategoryCreationJournalPersistence* creationJournal)
     : d(std::make_unique<Private>(repository, storeBackend, rootVerifier,
-                                  runtime, secretObserver))
+                                  runtime, secretObserver, creationJournal))
 {
 }
 
@@ -590,11 +968,24 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
     PrivacyTransactionJournal journal;
     journal.transactionUuid = transactionUuid;
     journal.rootUuid = root.uuid;
-    journal.journalRelativePath = QLatin1String(".digikam-private/journals/") +
-                                  transactionUuid + QLatin1String(".json");
-    journal.journalFormatVersion = 1;
-    journal.stage = 0;
+    journal.journalRelativePath =
+        PrivacyTransactionJournalCodec::relativeJournalPath(transactionUuid);
+    journal.journalFormatVersion = PrivacyTransactionJournalCodec::FormatVersion;
+    journal.stage = static_cast<int>(PrivacyJournalStage::Created);
     journal.updatedAt = now;
+
+    PrivacyJournalRecord journalRecord;
+    journalRecord.transactionUuid = transactionUuid;
+    journalRecord.categoryUuid = categoryUuid;
+    journalRecord.rootUuid = root.uuid;
+    journalRecord.rootIdentitySha256 =
+        QCryptographicHash::hash(root.identityData, QCryptographicHash::Sha256);
+    journalRecord.transactionType = PrivacyTransactionType::CreateCategory;
+    journalRecord.generation = 0;
+    journalRecord.credentialGeneration = -1;
+    journalRecord.fromCredentialGeneration = -1;
+    journalRecord.toCredentialGeneration = -1;
+    journalRecord.stage = PrivacyJournalStage::Created;
 
     if (!category.isValid() || !store.isValid() || !transaction.isValid() ||
         !journal.isValid())
@@ -604,16 +995,203 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
         return result;
     }
 
-    if (!d->repository.beginCreation(category, root, store, transaction, journal))
+    PrivacyTransactionJournal existingJournal = journal;
+    PrivacyCredential completedCredential;
+    QList<PrivacyStoreBinding> completedBindings;
+    bool completedReplay = false;
+    const bool beganCreation =
+        d->repository.beginCreation(category, root, store, transaction, journal);
+
+    if (!beganCreation)
     {
         PrivacyRepositorySnapshot snapshot;
 
-        if (!d->repository.loadSnapshot(&snapshot) ||
-            !sameCreatingRecords(snapshot, category, root, store, transaction))
+        if (!d->repository.loadSnapshot(&snapshot))
         {
             result.status = PrivacyCategorySessionStatus::Conflict;
             finishOperation();
             return result;
+        }
+
+        if (sameCreatingRecords(snapshot, category, root, store, transaction) &&
+            findExactCreationJournal(snapshot, journal, &existingJournal))
+        {
+            // Resume the exact pending record below.
+        }
+        else if (loadCompletedCreation(snapshot, category, root, store,
+                                       transaction, journal, &category,
+                                       &completedCredential, &store,
+                                       &completedBindings, &existingJournal))
+        {
+            completedReplay = true;
+            transaction.state = PrivacyTransactionState::Complete;
+            transaction.generation = 1;
+            transaction.toCredentialGeneration = 1;
+        }
+        else
+        {
+            result.status = PrivacyCategorySessionStatus::Conflict;
+            finishOperation();
+            return result;
+        }
+    }
+
+    if (existingJournal.stage == static_cast<int>(PrivacyJournalStage::Complete))
+    {
+        journalRecord.stage = PrivacyJournalStage::Complete;
+        journalRecord.generation = 1;
+        journalRecord.credentialGeneration = 1;
+        journalRecord.toCredentialGeneration = 1;
+    }
+
+    QByteArray createdJournalHash;
+    PrivacyJournalError journalError = PrivacyJournalError::None;
+    bool filesystemAlreadyComplete = false;
+    QByteArray expectedCreatedJournalHash;
+    const bool mayCreateMissingJournal =
+        (beganCreation || (!completedReplay &&
+                           existingJournal.expectedJournalHash.isEmpty()));
+
+    if (!d->journalPersistence->createOrLoadExact(root, &journalRecord,
+                                                   mayCreateMissingJournal,
+                                                   &createdJournalHash,
+                                                   &journalError) ||
+        (createdJournalHash.size() != 32))
+    {
+        if (completedReplay &&
+            (existingJournal.stage ==
+             static_cast<int>(PrivacyJournalStage::Created)))
+        {
+            const QByteArray createdBytes =
+                PrivacyTransactionJournalCodec::encode(journalRecord);
+
+            if (!createdBytes.isEmpty())
+            {
+                expectedCreatedJournalHash =
+                    PrivacyTransactionJournalCodec::sha256(createdBytes);
+                journalRecord.stage = PrivacyJournalStage::Complete;
+                journalRecord.generation = 1;
+                journalRecord.credentialGeneration = 1;
+                journalRecord.toCredentialGeneration = 1;
+                filesystemAlreadyComplete =
+                    d->journalPersistence->createOrLoadExact(
+                        root, &journalRecord, false, &createdJournalHash,
+                        &journalError) && (createdJournalHash.size() == 32);
+            }
+        }
+
+        if (!filesystemAlreadyComplete)
+        {
+            result.status = (journalError == PrivacyJournalError::RootIdentityMismatch)
+                          ? PrivacyCategorySessionStatus::StoreIdentityMismatch
+                          : PrivacyCategorySessionStatus::Conflict;
+            finishOperation();
+            return result;
+        }
+    }
+
+    const QString createdJournalHashHex = QString::fromLatin1(
+        createdJournalHash.toHex());
+
+    const QString expectedDatabaseHash = filesystemAlreadyComplete
+                                       ? QString::fromLatin1(
+                                             expectedCreatedJournalHash.toHex())
+                                       : createdJournalHashHex;
+
+    if (!existingJournal.expectedJournalHash.isEmpty() &&
+        ((existingJournal.expectedHashAlgorithm != QLatin1String("sha256")) ||
+         (existingJournal.expectedJournalHash != expectedDatabaseHash)))
+    {
+        result.status = PrivacyCategorySessionStatus::Conflict;
+        finishOperation();
+        return result;
+    }
+
+    if (completedReplay)
+    {
+        if (!d->storeBackend.validateEnvelope(
+                PrivacyGocryptfsEnvelope::fromOpaqueConfig(
+                    completedCredential.envelopeFormat,
+                    completedCredential.envelopeBlob, &result.storeError),
+                password, &result.storeError))
+        {
+            result.status = PrivacyCategorySessionStatus::AuthenticationFailed;
+            finishOperation();
+            return result;
+        }
+
+        if (existingJournal.stage == static_cast<int>(PrivacyJournalStage::Created))
+        {
+            QByteArray completeHash = createdJournalHash;
+
+            if (!filesystemAlreadyComplete)
+            {
+                journalRecord.stage = PrivacyJournalStage::Complete;
+                journalRecord.generation = 1;
+                journalRecord.credentialGeneration = 1;
+                journalRecord.toCredentialGeneration = 1;
+
+                if (!d->journalPersistence->compareAndUpdateExact(
+                        root, journalRecord, createdJournalHash, &completeHash,
+                        &journalError))
+                {
+                    result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
+                    finishOperation();
+                    return result;
+                }
+            }
+
+            existingJournal.stage = static_cast<int>(PrivacyJournalStage::Complete);
+            existingJournal.expectedHashAlgorithm = QLatin1String("sha256");
+            existingJournal.expectedJournalHash =
+                QString::fromLatin1(completeHash.toHex());
+            existingJournal.updatedAt = QDateTime::currentDateTimeUtc();
+
+            if (!d->repository.compareAndUpdateCreationJournal(
+                    existingJournal,
+                    static_cast<int>(PrivacyJournalStage::Created)))
+            {
+                result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
+                finishOperation();
+                return result;
+            }
+        }
+
+        if (!d->runtime.publishCategoryCreation(category, completedCredential,
+                                                 root, store,
+                                                 completedBindings))
+        {
+            result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
+            finishOperation();
+            return result;
+        }
+
+        result.status = PrivacyCategorySessionStatus::Created;
+        finishOperation();
+        return result;
+    }
+
+    if (existingJournal.expectedJournalHash.isEmpty())
+    {
+        journal.expectedHashAlgorithm = QLatin1String("sha256");
+        journal.expectedJournalHash = createdJournalHashHex;
+        journal.updatedAt = QDateTime::currentDateTimeUtc();
+
+        if (!d->repository.compareAndUpdateCreationJournal(
+                journal, static_cast<int>(PrivacyJournalStage::Created)))
+        {
+            PrivacyRepositorySnapshot snapshot;
+            PrivacyTransactionJournal published;
+
+            if (!d->repository.loadSnapshot(&snapshot) ||
+                !findExactCreationJournal(snapshot, journal, &published) ||
+                (published.expectedHashAlgorithm != journal.expectedHashAlgorithm) ||
+                (published.expectedJournalHash != journal.expectedJournalHash))
+            {
+                result.status = PrivacyCategorySessionStatus::Conflict;
+                finishOperation();
+                return result;
+            }
         }
     }
 
@@ -670,7 +1248,36 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
         return result;
     }
 
-    if (!d->runtime.publishCategory(category))
+    journalRecord.stage = PrivacyJournalStage::Complete;
+    journalRecord.generation = 1;
+    journalRecord.credentialGeneration = 1;
+    journalRecord.toCredentialGeneration = 1;
+    QByteArray completeJournalHash;
+
+    if (!d->journalPersistence->compareAndUpdateExact(
+            root, journalRecord, createdJournalHash, &completeJournalHash,
+            &journalError) || (completeJournalHash.size() != 32))
+    {
+        result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
+        finishOperation();
+        return result;
+    }
+
+    journal.stage = static_cast<int>(PrivacyJournalStage::Complete);
+    journal.expectedHashAlgorithm = QLatin1String("sha256");
+    journal.expectedJournalHash = QString::fromLatin1(completeJournalHash.toHex());
+    journal.updatedAt = QDateTime::currentDateTimeUtc();
+
+    if (!d->repository.compareAndUpdateCreationJournal(
+            journal, static_cast<int>(PrivacyJournalStage::Created)))
+    {
+        result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
+        finishOperation();
+        return result;
+    }
+
+    if (!d->runtime.publishCategoryCreation(category, credential, root, store,
+                                             bindings))
     {
         result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
         finishOperation();

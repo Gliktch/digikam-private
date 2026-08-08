@@ -186,7 +186,20 @@ public:
         }
 
         snapshot.categories << category;
-        snapshot.storageRoots << root;
+        bool rootPresent = false;
+
+        for (const PrivacyStorageRoot& existing : std::as_const(snapshot.storageRoots))
+        {
+            if (existing.uuid == root.uuid)
+            {
+                rootPresent = true;
+            }
+        }
+
+        if (!rootPresent)
+        {
+            snapshot.storageRoots << root;
+        }
         snapshot.stores << store;
         snapshot.transactions << transaction;
         snapshot.transactionJournals << journal;
@@ -235,12 +248,123 @@ public:
         return true;
     }
 
+    bool compareAndUpdateCreationJournal(
+        const PrivacyTransactionJournal& journal, int expectedStage) override
+    {
+        ++journalUpdateCalls;
+
+        if (failCompleteJournalUpdateOnce &&
+            (journal.stage == static_cast<int>(PrivacyJournalStage::Complete)))
+        {
+            failCompleteJournalUpdateOnce = false;
+            return false;
+        }
+
+        for (PrivacyTransactionJournal& existing : snapshot.transactionJournals)
+        {
+            if ((existing.transactionUuid == journal.transactionUuid) &&
+                (existing.rootUuid == journal.rootUuid) &&
+                (existing.stage == expectedStage))
+            {
+                existing = journal;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     mutable std::atomic<int> loadCalls { 0 };
     std::atomic<int> beginCalls { 0 };
     std::atomic<int> publishCalls { 0 };
+    std::atomic<int> journalUpdateCalls { 0 };
     bool failBegin = false;
     bool failPublish = false;
+    bool failCompleteJournalUpdateOnce = false;
     PrivacyRepositorySnapshot snapshot;
+};
+
+class FakeCreationJournalPersistence final
+    : public PrivacyCategoryCreationJournalPersistence
+{
+public:
+
+    bool createOrLoadExact(const PrivacyStorageRoot&, PrivacyJournalRecord* record,
+                           bool allowCreate,
+                           QByteArray* publishedSha256,
+                           PrivacyJournalError* error) override
+    {
+        ++createCalls;
+
+        if (!record || !publishedSha256 || failCreate)
+        {
+            if (error)
+            {
+                *error = PrivacyJournalError::PublicationConflict;
+            }
+
+            return false;
+        }
+
+        record->rootDevice = 101;
+        record->rootInode = 202;
+        const QByteArray bytes = PrivacyTransactionJournalCodec::encode(*record);
+
+        if (bytes.isEmpty() || (currentBytes.isEmpty() && !allowCreate) ||
+            (!currentBytes.isEmpty() && (currentBytes != bytes)))
+        {
+            if (error)
+            {
+                *error = PrivacyJournalError::PublicationConflict;
+            }
+
+            return false;
+        }
+
+        currentBytes = bytes;
+        currentHash = PrivacyTransactionJournalCodec::sha256(bytes);
+        *publishedSha256 = currentHash;
+        return true;
+    }
+
+    bool compareAndUpdateExact(const PrivacyStorageRoot&,
+                               const PrivacyJournalRecord& record,
+                               const QByteArray& expectedCurrentSha256,
+                               QByteArray* publishedSha256,
+                               PrivacyJournalError* error) override
+    {
+        ++updateCalls;
+
+        if (!publishedSha256 || failUpdate ||
+            (expectedCurrentSha256 != currentHash))
+        {
+            if (error)
+            {
+                *error = PrivacyJournalError::StaleComparison;
+            }
+
+            return false;
+        }
+
+        const QByteArray bytes = PrivacyTransactionJournalCodec::encode(record);
+
+        if (bytes.isEmpty())
+        {
+            return false;
+        }
+
+        currentBytes = bytes;
+        currentHash = PrivacyTransactionJournalCodec::sha256(bytes);
+        *publishedSha256 = currentHash;
+        return true;
+    }
+
+    std::atomic<int> createCalls { 0 };
+    std::atomic<int> updateCalls { 0 };
+    bool failCreate = false;
+    bool failUpdate = false;
+    QByteArray currentBytes;
+    QByteArray currentHash;
 };
 
 class FakeLease final : public PrivacyCategoryStoreLease
@@ -279,6 +403,8 @@ public:
                         PrivacyGocryptfsError* error) override
     {
         ++createCalls;
+        journalReadyAtCreate.store(!journalCreateCounter ||
+                                   (journalCreateCounter->load() > 0));
         createEntered.release();
 
         if (blockCreate)
@@ -377,6 +503,8 @@ public:
     std::atomic<int> unlockCalls { 0 };
     std::atomic<int> lockCalls { 0 };
     std::atomic<int> leaseDestructions { 0 };
+    std::atomic<bool> journalReadyAtCreate { false };
+    std::atomic<int>* journalCreateCounter = nullptr;
     bool failCreate = false;
     bool failLock = false;
     bool blockCreate = false;
@@ -437,6 +565,14 @@ class PrivacyCategorySessionTest : public QObject
 private Q_SLOTS:
 
     void testStrongRejectedBeforeMutation();
+    void testCreationJournalPrecedesMutationAndPublishesRuntimeState();
+    void testCreationReverifiesPreexistingOfflineRuntimeRoot();
+    void testRuntimeCreationPublicationRejectsExtraRolesAndDuplicateRoots();
+    void testMismatchedCreationJournalReplayFailsClosed();
+    void testCompletedDatabaseCreationReconcilesIdempotently();
+    void testMissingJournalAfterDatabaseBeginResumesExactly();
+    void testFilesystemCompleteBeforeDatabaseJournalCasResumesExactly();
+    void testFilesystemCompleteRejectsMismatchedDatabasePredecessorHash();
     void testFailedCreationReleasesBarrier();
     void testLockAllWaitsForInflightCreation();
     void testLockCancelsInflightUnlock();
@@ -466,16 +602,242 @@ void PrivacyCategorySessionTest::testStrongRejectedBeforeMutation()
     QCOMPARE(verifier->calls.load(), 0);
 }
 
+void PrivacyCategorySessionTest::testCreationJournalPrecedesMutationAndPublishesRuntimeState()
+{
+    FakeRepository repository;
+    FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
+    backend.journalCreateCounter = &creationJournal.createCalls;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, {}, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime, nullptr,
+                                                  &creationJournal);
+
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Created);
+    QVERIFY(backend.journalReadyAtCreate.load());
+    QCOMPARE(repository.journalUpdateCalls.load(), 2);
+    QCOMPARE(creationJournal.updateCalls.load(), 1);
+    QVERIFY(runtime.categoryEpoch(CategoryUuid) > 0);
+    QCOMPARE(runtime.rootState(RootUuid),
+             PrivacyRootRuntimeState::VerifiedAvailable);
+    QCOMPARE(repository.snapshot.transactionJournals.size(), 1);
+    QCOMPARE(repository.snapshot.transactionJournals.first().stage,
+             static_cast<int>(PrivacyJournalStage::Complete));
+}
+
+void PrivacyCategorySessionTest::testCreationReverifiesPreexistingOfflineRuntimeRoot()
+{
+    FakeRepository repository;
+    repository.snapshot.storageRoots << makeRoot();
+    FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->state = PrivacyRootRuntimeState::Offline;
+    PrivacyRuntimeCoordinator runtime;
+    PrivacyRepositorySnapshot runtimeSnapshot;
+    runtimeSnapshot.storageRoots << makeRoot();
+    QCOMPARE(runtime.initialize(runtimeSnapshot, verifier, {}, {}).state,
+             PrivacyStartupState::Degraded);
+    QCOMPARE(runtime.rootState(RootUuid), PrivacyRootRuntimeState::Offline);
+    verifier->state = PrivacyRootRuntimeState::VerifiedAvailable;
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime, nullptr,
+                                                  &creationJournal);
+
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Created);
+    QCOMPARE(runtime.rootState(RootUuid),
+             PrivacyRootRuntimeState::VerifiedAvailable);
+    QCOMPARE(runtime.report().state, PrivacyStartupState::Ready);
+}
+
+void PrivacyCategorySessionTest::testRuntimeCreationPublicationRejectsExtraRolesAndDuplicateRoots()
+{
+    const PrivacyRepositorySnapshot active = makeActiveSnapshot();
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator extraRoleRuntime;
+    QCOMPARE(extraRoleRuntime.initialize({}, verifier, {}, {}).state,
+             PrivacyStartupState::Ready);
+    QList<PrivacyStoreBinding> extraBindings = active.storeBindings;
+    PrivacyStoreBinding extra;
+    extra.categoryUuid = CategoryUuid;
+    extra.role = PrivacyStoreRole::Originals;
+    extra.storeUuid = StoreUuid;
+    extraBindings << extra;
+    QVERIFY(!extraRoleRuntime.publishCategoryCreation(
+        active.categories.first(), active.credentials.first(),
+        active.storageRoots.first(), active.stores.first(), extraBindings));
+    QCOMPARE(extraRoleRuntime.categoryEpoch(CategoryUuid), quint64(0));
+
+    PrivacyRuntimeCoordinator duplicateRootRuntime;
+    PrivacyRepositorySnapshot duplicateRoots;
+    duplicateRoots.storageRoots << active.storageRoots.first()
+                                << active.storageRoots.first();
+    QCOMPARE(duplicateRootRuntime.initialize(duplicateRoots, verifier, {}, {}).state,
+             PrivacyStartupState::Degraded);
+    QVERIFY(!duplicateRootRuntime.publishCategoryCreation(
+        active.categories.first(), active.credentials.first(),
+        active.storageRoots.first(), active.stores.first(),
+        active.storeBindings));
+    QCOMPARE(duplicateRootRuntime.categoryEpoch(CategoryUuid), quint64(0));
+}
+
+void PrivacyCategorySessionTest::testMismatchedCreationJournalReplayFailsClosed()
+{
+    FakeRepository repository;
+    FakeStoreBackend backend;
+    backend.failCreate = true;
+    FakeCreationJournalPersistence creationJournal;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, {}, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime, nullptr,
+                                                  &creationJournal);
+
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::StoreFailure);
+    QCOMPARE(backend.createCalls.load(), 1);
+    creationJournal.currentBytes.append('x');
+    backend.failCreate = false;
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Conflict);
+    QCOMPARE(backend.createCalls.load(), 1);
+}
+
+void PrivacyCategorySessionTest::testCompletedDatabaseCreationReconcilesIdempotently()
+{
+    FakeRepository repository;
+    FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
+    creationJournal.failUpdate = true;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, {}, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime, nullptr,
+                                                  &creationJournal);
+
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired);
+    QCOMPARE(backend.createCalls.load(), 1);
+    creationJournal.failUpdate = false;
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Created);
+    QCOMPARE(backend.createCalls.load(), 1);
+    QCOMPARE(repository.snapshot.transactionJournals.first().stage,
+             static_cast<int>(PrivacyJournalStage::Complete));
+    QVERIFY(runtime.categoryEpoch(CategoryUuid) > 0);
+}
+
+void PrivacyCategorySessionTest::testMissingJournalAfterDatabaseBeginResumesExactly()
+{
+    FakeRepository repository;
+    FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
+    creationJournal.failCreate = true;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, {}, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime, nullptr,
+                                                  &creationJournal);
+
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Conflict);
+    QCOMPARE(backend.createCalls.load(), 0);
+    QVERIFY(repository.snapshot.transactionJournals.first().expectedJournalHash.isEmpty());
+    creationJournal.failCreate = false;
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Created);
+    QCOMPARE(backend.createCalls.load(), 1);
+}
+
+void PrivacyCategorySessionTest::testFilesystemCompleteBeforeDatabaseJournalCasResumesExactly()
+{
+    FakeRepository repository;
+    repository.failCompleteJournalUpdateOnce = true;
+    FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, {}, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime, nullptr,
+                                                  &creationJournal);
+
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired);
+    QCOMPARE(repository.snapshot.transactionJournals.first().stage,
+             static_cast<int>(PrivacyJournalStage::Created));
+    PrivacyJournalRecord completeRecord;
+    PrivacyJournalError decodeError = PrivacyJournalError::None;
+    QString decodeDetail;
+    QVERIFY2(PrivacyTransactionJournalCodec::decode(creationJournal.currentBytes,
+                                                     &completeRecord,
+                                                     &decodeError,
+                                                     &decodeDetail),
+             qPrintable(decodeDetail));
+    QCOMPARE(completeRecord.stage, PrivacyJournalStage::Complete);
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Created);
+    QCOMPARE(backend.createCalls.load(), 1);
+    QCOMPARE(repository.snapshot.transactionJournals.first().stage,
+             static_cast<int>(PrivacyJournalStage::Complete));
+}
+
+void PrivacyCategorySessionTest::testFilesystemCompleteRejectsMismatchedDatabasePredecessorHash()
+{
+    FakeRepository repository;
+    repository.failCompleteJournalUpdateOnce = true;
+    FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, {}, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime, nullptr,
+                                                  &creationJournal);
+
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired);
+    repository.snapshot.transactionJournals.first().expectedJournalHash =
+        QString(64, QLatin1Char('0'));
+    QCOMPARE(coordinator.createCategory(makeCreateRequest(),
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Conflict);
+    QCOMPARE(backend.createCalls.load(), 1);
+    QCOMPARE(runtime.categoryEpoch(CategoryUuid), quint64(0));
+    QCOMPARE(repository.snapshot.transactionJournals.first().stage,
+             static_cast<int>(PrivacyJournalStage::Created));
+}
+
 void PrivacyCategorySessionTest::testFailedCreationReleasesBarrier()
 {
     FakeRepository repository;
     FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
     backend.failCreate = true;
     QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
     PrivacyRuntimeCoordinator runtime;
     initializeRuntime(&runtime, {}, verifier);
     PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
-                                                  runtime);
+                                                  runtime, nullptr,
+                                                  &creationJournal);
 
     QCOMPARE(coordinator.createCategory(makeCreateRequest(), QLatin1String("secret")).status,
              PrivacyCategorySessionStatus::StoreFailure);
@@ -491,12 +853,14 @@ void PrivacyCategorySessionTest::testLockAllWaitsForInflightCreation()
 {
     FakeRepository repository;
     FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
     backend.blockCreate = true;
     QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
     PrivacyRuntimeCoordinator runtime;
     initializeRuntime(&runtime, {}, verifier);
     PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
-                                                  runtime);
+                                                  runtime, nullptr,
+                                                  &creationJournal);
     PrivacyCategorySessionResult createResult;
     std::atomic<bool> lockAllFinished { false };
     QSemaphore lockAllStarted;

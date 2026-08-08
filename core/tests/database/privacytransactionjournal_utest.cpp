@@ -148,6 +148,7 @@ class PrivacyTransactionJournalTest : public QObject
 private Q_SLOTS:
 
     void testCanonicalCodecAndSecretExclusion();
+    void testCreateCategoryHeaderOnlyCodec();
     void testCodecRejectsMalformedAndCollidingRecords();
     void testCreateAndEveryMonotonicStage();
     void testCompareAndUpdateGuards();
@@ -202,6 +203,38 @@ void PrivacyTransactionJournalTest::testCanonicalCodecAndSecretExclusion()
     QVERIFY(!PrivacyTransactionJournalCodec::decode(nonCanonical, &decoded,
                                                      &error, &detail));
     QCOMPARE(error, PrivacyJournalError::CorruptJournal);
+}
+
+void PrivacyTransactionJournalTest::testCreateCategoryHeaderOnlyCodec()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    PrivacyJournalRootExpectation expectation;
+    auto store = openStore(root.path(), &expectation);
+    PrivacyJournalRecord record = makeRecord(*store, expectation);
+    record.transactionType = PrivacyTransactionType::CreateCategory;
+    record.generation = 0;
+    record.credentialGeneration = -1;
+    record.fromCredentialGeneration = -1;
+    record.toCredentialGeneration = -1;
+    record.assets.clear();
+
+    QVERIFY(PrivacyTransactionJournalCodec::validate(record));
+    QVERIFY(!PrivacyTransactionJournalCodec::encode(record).isEmpty());
+
+    record.generation = 1;
+    QVERIFY(!PrivacyTransactionJournalCodec::validate(record));
+    record.generation = 0;
+    record.assets.append(makeRecord(*store, expectation).assets.first());
+    QVERIFY(!PrivacyTransactionJournalCodec::validate(record));
+    record.assets.clear();
+    record.stage = PrivacyJournalStage::Complete;
+    record.generation = 1;
+    record.credentialGeneration = 1;
+    record.toCredentialGeneration = 1;
+    QVERIFY(PrivacyTransactionJournalCodec::validate(record));
+    record.toCredentialGeneration = -1;
+    QVERIFY(!PrivacyTransactionJournalCodec::validate(record));
 }
 
 void PrivacyTransactionJournalTest::testCodecRejectsMalformedAndCollidingRecords()

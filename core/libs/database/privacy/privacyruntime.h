@@ -190,6 +190,11 @@ public:
 
     bool setCategoryUnlocked(const QString& categoryUuid, bool unlocked);
     bool publishCategory(const PrivacyCategory& category);
+    bool publishCategoryCreation(const PrivacyCategory& category,
+                                 const PrivacyCredential& credential,
+                                 const PrivacyStorageRoot& root,
+                                 const PrivacyStore& store,
+                                 const QList<PrivacyStoreBinding>& bindings);
     quint64 categoryEpoch(const QString& categoryUuid) const;
     bool setCategoryTagVisibilityMode(const QString& categoryUuid,
                                       PrivacyTagVisibilityMode mode,
