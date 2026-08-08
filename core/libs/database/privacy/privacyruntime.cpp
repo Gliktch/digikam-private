@@ -855,6 +855,7 @@ public:
     QReadWriteLock                             lock;
     QSharedPointer<PrivacyRuntimeCoordinator>  coordinator;
     QSharedPointer<PrivacyCategorySessionOwner> categorySessions;
+    PrivacyStartupRecovery::TransactionRecoveryFactory transactionRecoveryFactory;
     PrivacyStartupReport                      report;
 };
 
@@ -959,6 +960,143 @@ PrivacyStartupReport PrivacyRuntimeCoordinator::initialize(
     const QSharedPointer<const PrivacyTransactionRecovery>& recovery,
     const QSharedPointer<const PrivacyRootIntegrityInspector>& integrityInspector)
 {
+    if (recovery)
+    {
+        // Publish the durable snapshot fail-closed before recovery callbacks.
+        // The first pass deliberately omits integrity inspection: affected
+        // roots remain Recovering, and the final pass inspects reconciled facts
+        // exactly once.
+        initialize(snapshot, rootVerifier, {}, {});
+
+        {
+            QWriteLocker locker(&d->lock);
+            d->recovery = recovery;
+            d->integrityInspector = integrityInspector;
+        }
+
+        QHash<QString, int> rootUuidCounts;
+        QHash<int, int> albumRootIdCounts;
+
+        for (const PrivacyStorageRoot& root : snapshot.storageRoots)
+        {
+            ++rootUuidCounts[root.uuid];
+
+            if (root.kind == PrivacyStorageRootKind::AlbumRoot)
+            {
+                ++albumRootIdCounts[root.albumRootId];
+            }
+        }
+
+        QSet<QString> recoveredTransactionUuids;
+
+        for (const PrivacyTransaction& transaction : snapshot.transactions)
+        {
+            if (!transaction.isActive())
+            {
+                continue;
+            }
+
+            QList<PrivacyTransactionJournal> journals;
+
+            for (const PrivacyTransactionJournal& journal :
+                 snapshot.transactionJournals)
+            {
+                if (journal.transactionUuid == transaction.uuid)
+                {
+                    journals << journal;
+                }
+            }
+
+            bool affectedAnyRoot = false;
+            bool recoveredEveryRoot = true;
+
+            for (const PrivacyStorageRoot& root : snapshot.storageRoots)
+            {
+                if (!transactionAffectsRoot(transaction, journals, snapshot,
+                                            root.uuid))
+                {
+                    continue;
+                }
+
+                affectedAnyRoot = true;
+                PrivacyRecoveryDisposition disposition =
+                    PrivacyRecoveryDisposition::Deferred;
+                const bool uniqueRoot =
+                    (rootUuidCounts.value(root.uuid) == 1) &&
+                    ((root.kind != PrivacyStorageRootKind::AlbumRoot) ||
+                     (albumRootIdCounts.value(root.albumRootId) == 1));
+
+                if (uniqueRoot && rootVerifier &&
+                    (rootVerifier->verify(root) ==
+                     PrivacyRootRuntimeState::VerifiedAvailable))
+                {
+                    QList<PrivacyTransactionJournal> rootJournals;
+
+                    for (const PrivacyTransactionJournal& journal : journals)
+                    {
+                        if (journal.rootUuid == root.uuid)
+                        {
+                            rootJournals << journal;
+                        }
+                    }
+
+                    disposition = recovery->recoverRoot(root, transaction,
+                                                        rootJournals);
+                }
+
+                if (disposition != PrivacyRecoveryDisposition::Recovered)
+                {
+                    recoveredEveryRoot = false;
+                }
+            }
+
+            if (affectedAnyRoot && recoveredEveryRoot)
+            {
+                recoveredTransactionUuids.insert(transaction.uuid);
+            }
+        }
+
+        PrivacyRepositorySnapshot reconciled;
+        QSet<QString> removedActiveTransactionUuids;
+
+        {
+            QReadLocker locker(&d->lock);
+            reconciled = d->snapshot;
+        }
+
+        for (int i = reconciled.transactions.size() - 1 ; i >= 0 ; --i)
+        {
+            const PrivacyTransaction& transaction =
+                reconciled.transactions.at(i);
+
+            if (transaction.isActive() &&
+                recoveredTransactionUuids.contains(transaction.uuid))
+            {
+                removedActiveTransactionUuids.insert(transaction.uuid);
+                reconciled.transactions.removeAt(i);
+            }
+        }
+
+        for (int i = reconciled.transactionJournals.size() - 1 ; i >= 0 ; --i)
+        {
+            if (removedActiveTransactionUuids.contains(
+                    reconciled.transactionJournals.at(i).transactionUuid))
+            {
+                reconciled.transactionJournals.removeAt(i);
+            }
+        }
+
+        PrivacyStartupReport result = initialize(reconciled, rootVerifier, {},
+                                                  integrityInspector);
+
+        {
+            QWriteLocker locker(&d->lock);
+            d->recovery = recovery;
+        }
+
+        return result;
+    }
+
     QHash<QString, PrivacyRootRuntimeState> verifiedRootStates;
     QHash<QString, int> rootUuidCounts;
     QHash<int, int> albumRootIdCounts;
@@ -3268,17 +3406,6 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
         recovery = d->recovery;
         inspector = d->integrityInspector;
         rootHasProtectedData = d->protectedRootUuids.contains(rootUuid);
-
-        for (auto itemIt = d->items.constBegin() ; itemIt != d->items.constEnd() ; ++itemIt)
-        {
-            if (itemIt->mappingConflict &&
-                ((itemIt->publicRootUuid == rootUuid) ||
-                 (itemIt->originalRootUuid == rootUuid)))
-            {
-                rootHasMappingConflict = true;
-                break;
-            }
-        }
     }
 
     const PrivacyRootRuntimeState verifiedState = verifier
@@ -3303,14 +3430,10 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
         return PrivacyRootRecoveryResult::Deferred;
     }
 
-    if (rootHasMappingConflict)
-    {
-        return PrivacyRootRecoveryResult::Deferred;
-    }
-
     int unresolvedCount = 0;
     int compatibilityCount = 0;
     QList<PrivacyTransaction> recoveredCompatibilityTransactions;
+    QSet<QString> recoveredTransactionUuids;
 
     for (const PrivacyTransaction& transaction : snapshot.transactions)
     {
@@ -3354,7 +3477,65 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
                  (transaction.type == PrivacyTransactionType::CompatibilityRelock))
         {
             recoveredCompatibilityTransactions << transaction;
+            recoveredTransactionUuids.insert(transaction.uuid);
         }
+        else
+        {
+            recoveredTransactionUuids.insert(transaction.uuid);
+        }
+    }
+
+    {
+        QWriteLocker locker(&d->lock);
+        const PrivacyRootRuntimeState currentState = d->rootStates.value(
+            rootUuid, PrivacyRootRuntimeState::Unknown);
+        QSet<QString> removedActiveTransactionUuids;
+
+        if ((currentState != PrivacyRootRuntimeState::Recovering) &&
+            (currentState != PrivacyRootRuntimeState::VerifiedAvailable))
+        {
+            return PrivacyRootRecoveryResult::StaleEpoch;
+        }
+
+        for (int i = d->snapshot.transactions.size() - 1 ; i >= 0 ; --i)
+        {
+            const PrivacyTransaction& transaction =
+                d->snapshot.transactions.at(i);
+
+            if (transaction.isActive() &&
+                recoveredTransactionUuids.contains(transaction.uuid))
+            {
+                removedActiveTransactionUuids.insert(transaction.uuid);
+                d->snapshot.transactions.removeAt(i);
+            }
+        }
+
+        for (int i = d->snapshot.transactionJournals.size() - 1 ; i >= 0 ; --i)
+        {
+            if (removedActiveTransactionUuids.contains(
+                    d->snapshot.transactionJournals.at(i).transactionUuid))
+            {
+                d->snapshot.transactionJournals.removeAt(i);
+            }
+        }
+
+        snapshot = d->snapshot;
+        rootHasProtectedData = d->protectedRootUuids.contains(rootUuid);
+        rootHasMappingConflict = false;
+
+        for (auto itemIt = d->items.constBegin() ;
+             itemIt != d->items.constEnd() ; ++itemIt)
+        {
+            if (itemIt->mappingConflict &&
+                ((itemIt->publicRootUuid == rootUuid) ||
+                 (itemIt->originalRootUuid == rootUuid)))
+            {
+                rootHasMappingConflict = true;
+                break;
+            }
+        }
+
+        recoveryEpoch = d->rootEpochs.value(rootUuid);
     }
 
     if (unresolvedCount > 0)
@@ -3362,16 +3543,26 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
         QWriteLocker locker(&d->lock);
 
         if ((d->rootEpochs.value(rootUuid) != recoveryEpoch) ||
-            (d->rootStates.value(rootUuid) != PrivacyRootRuntimeState::Recovering))
+            ((d->rootStates.value(rootUuid) !=
+              PrivacyRootRuntimeState::Recovering) &&
+             (d->rootStates.value(rootUuid) !=
+              PrivacyRootRuntimeState::VerifiedAvailable)))
         {
             return PrivacyRootRecoveryResult::StaleEpoch;
         }
 
+        d->setRootState(rootUuid, PrivacyRootRuntimeState::Recovering);
         PrivacyRootIntegritySummary summary = d->rootSummaries.value(rootUuid);
+        summary.state = PrivacyRootRuntimeState::Recovering;
         summary.unresolvedTransactionCount = unresolvedCount;
         summary.compatibilityExposureCount = compatibilityCount;
         d->rootSummaries.insert(rootUuid, summary);
 
+        return PrivacyRootRecoveryResult::Deferred;
+    }
+
+    if (rootHasMappingConflict)
+    {
         return PrivacyRootRecoveryResult::Deferred;
     }
 
@@ -3424,7 +3615,10 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
         QWriteLocker locker(&d->lock);
 
         if ((d->rootEpochs.value(rootUuid) != recoveryEpoch) ||
-            (d->rootStates.value(rootUuid) != PrivacyRootRuntimeState::Recovering))
+            ((d->rootStates.value(rootUuid) !=
+              PrivacyRootRuntimeState::Recovering) &&
+             (d->rootStates.value(rootUuid) !=
+              PrivacyRootRuntimeState::VerifiedAvailable)))
         {
             return PrivacyRootRecoveryResult::StaleEpoch;
         }
@@ -3581,8 +3775,15 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
     PrivacyRepository repository;
     QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
     QSharedPointer<PrivacyCategorySessionOwner> categorySessions;
+    QSharedPointer<const PrivacyTransactionRecovery> transactionRecovery;
+    TransactionRecoveryFactory transactionRecoveryFactory;
     PrivacyStartupReport result;
     const bool unusedRootsPruned = repository.pruneUnreferencedAlbumRoots();
+
+    {
+        QReadLocker locker(&startupData->lock);
+        transactionRecoveryFactory = startupData->transactionRecoveryFactory;
+    }
 
     if (repository.loadSnapshot(&snapshot))
     {
@@ -3590,9 +3791,22 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
             createDefaultPrivacyRootVerifier();
         const QSharedPointer<const PrivacyRootIntegrityInspector> integrity =
             createDefaultPrivacyRootIntegrityInspector();
-        result = runtime->initialize(snapshot, verifier,
-                                     QSharedPointer<const PrivacyTransactionRecovery>(),
+
+        if (transactionRecoveryFactory)
+        {
+            transactionRecovery = transactionRecoveryFactory(*runtime);
+        }
+
+        result = runtime->initialize(snapshot, verifier, transactionRecovery,
                                      integrity);
+
+        if (transactionRecoveryFactory && !transactionRecovery)
+        {
+            result.state = PrivacyStartupState::Degraded;
+            result.diagnostics << QLatin1String(
+                "Privacy transaction-recovery owner could not be initialized");
+        }
+
         categorySessions = PrivacyCategorySessionOwner::create(runtime, verifier);
 
         if (!categorySessions)
@@ -3641,6 +3855,13 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
     }
 
     return result;
+}
+
+void PrivacyStartupRecovery::setTransactionRecoveryFactory(
+    const TransactionRecoveryFactory& factory)
+{
+    QWriteLocker locker(&startupData->lock);
+    startupData->transactionRecoveryFactory = factory;
 }
 
 void PrivacyStartupRecovery::reset()

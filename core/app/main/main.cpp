@@ -100,6 +100,8 @@ using namespace Magick;
 #include "databaseserverstarter.h"
 #include "filesdownloader.h"
 #include "dfileoperations.h"
+#include "privacyruntime.h"
+#include "privacythreadimagestillitemtransactionowner.h"
 
 #ifdef Q_OS_WIN
 #   include <windows.h>
@@ -412,6 +414,15 @@ MAIN_EXPORT int MAIN_FN(int argc, char** argv)
         params.writeToConfig();
         ApplicationSettings::instance()->setDbEngineParameters(params);
     }
+
+    // Install the application-owned ThreadImageIO transaction composition
+    // before database startup enters privacy recovery.
+
+    PrivacyStartupRecovery::setTransactionRecoveryFactory(
+        [](PrivacyRuntimeCoordinator& runtime)
+        {
+            return PrivacyThreadImageIOStillItemTransactionOwner::create(runtime);
+        });
 
     // initialize database
 

@@ -71,6 +71,11 @@ public:
     {
         ++callCount;
 
+        if (onRecover)
+        {
+            onRecover();
+        }
+
         return disposition;
     }
 
@@ -78,6 +83,7 @@ public:
 
     PrivacyRecoveryDisposition disposition = PrivacyRecoveryDisposition::Recovered;
     mutable int callCount = 0;
+    std::function<void()> onRecover;
 };
 
 class FakeIntegrityInspector final : public PrivacyRootIntegrityInspector
@@ -87,6 +93,8 @@ public:
     PrivacyRootInspectionResult inspect(const PrivacyStorageRoot& root,
                                         const PrivacyRepositorySnapshot&) const override
     {
+        ++callCount;
+
         if (onInspect)
         {
             onInspect();
@@ -105,6 +113,7 @@ public:
     PrivacyIntegrityDisposition disposition = PrivacyIntegrityDisposition::Verified;
     PrivacyRootIntegritySummary summary;
     std::function<void()> onInspect;
+    mutable int callCount = 0;
 };
 
 PrivacyCategory makeCategory()
@@ -577,7 +586,19 @@ void PrivacyRuntimeTest::testCompatibilityTransactionRecovery()
     QVERIFY(leaseState.unresolvedTransaction);
 
     const QSharedPointer<FakeRecovery> recovery(new FakeRecovery);
+    bool recoveryObservedPublishedRuntime = false;
+    recovery->onRecover = [&]()
+    {
+        PrivacyActionItemState recoveringState;
+        recoveryObservedPublishedRuntime =
+            runtime.stateForItem(42, &recoveringState) &&
+            recoveringState.unresolvedTransaction &&
+            (runtime.rootState(rootUuid) ==
+             PrivacyRootRuntimeState::Recovering);
+    };
     report = runtime.initialize(snapshot, verifier, recovery, integrity);
+    QVERIFY(recoveryObservedPublishedRuntime);
+    QCOMPARE(integrity->callCount, 1);
     QCOMPARE(report.state, PrivacyStartupState::Ready);
     QCOMPARE(report.unresolvedTransactionCount, 0);
     QCOMPARE(runtime.evaluate(makeScanRequest(9, 55)),
@@ -598,8 +619,17 @@ void PrivacyRuntimeTest::testReconnectRecoveryPipeline()
     const QSharedPointer<FakeIntegrityInspector> integrity(new FakeIntegrityInspector);
 
     PrivacyRuntimeCoordinator runtime;
-    PrivacyStartupReport report = runtime.initialize(snapshot, verifier, recovery, integrity);
-    QCOMPARE(report.state, PrivacyStartupState::Ready);
+    recovery->disposition = PrivacyRecoveryDisposition::Deferred;
+    PrivacyStartupReport report = runtime.initialize(snapshot, verifier, recovery,
+                                                      integrity);
+    QCOMPARE(report.state, PrivacyStartupState::Degraded);
+
+    recovery->disposition = PrivacyRecoveryDisposition::Recovered;
+    recovery->onRecover = [&runtime]()
+    {
+        QVERIFY(runtime.publishRootState(
+            rootUuid, PrivacyRootRuntimeState::VerifiedAvailable));
+    };
 
     QVERIFY(runtime.publishRootState(rootUuid, PrivacyRootRuntimeState::Offline));
     QCOMPARE(runtime.rootState(rootUuid), PrivacyRootRuntimeState::Offline);
@@ -608,6 +638,9 @@ void PrivacyRuntimeTest::testReconnectRecoveryPipeline()
     QVERIFY(recovery->callCount >= 2);
 
     recovery->disposition = PrivacyRecoveryDisposition::Deferred;
+    recovery->onRecover = {};
+    report = runtime.initialize(snapshot, verifier, recovery, integrity);
+    QCOMPARE(report.state, PrivacyStartupState::Degraded);
     QCOMPARE(runtime.recoverRoot(rootUuid), PrivacyRootRecoveryResult::Deferred);
     QCOMPARE(runtime.rootState(rootUuid), PrivacyRootRuntimeState::Recovering);
     QCOMPARE(runtime.rootSummary(rootUuid).unresolvedTransactionCount, 1);

@@ -18,6 +18,10 @@
 #include <QSharedPointer>
 #include <QStringList>
 
+// C++ includes
+
+#include <functional>
+
 // Local includes
 
 #include "digikam_export.h"
@@ -278,8 +282,14 @@ class DIGIKAM_DATABASE_EXPORT PrivacyStartupRecovery
 {
 public:
 
+    using TransactionRecoveryFactory =
+        std::function<QSharedPointer<const PrivacyTransactionRecovery>(
+            PrivacyRuntimeCoordinator&)>;
+
     static PrivacyStartupReport run();
     static void reset();
+    static void setTransactionRecoveryFactory(
+        const TransactionRecoveryFactory& factory);
     static PrivacyStartupReport report();
     static QSharedPointer<PrivacyRuntimeCoordinator> coordinator();
     static QSharedPointer<PrivacyCategorySessionOwner> categorySessions();
