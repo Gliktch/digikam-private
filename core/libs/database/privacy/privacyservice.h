@@ -70,6 +70,8 @@ public:
 
     bool setCategoryUnlocked(const QString& categoryUuid, bool unlocked);
     bool addCategory(const PrivacyCategory& category);
+    bool addItem(const PrivacyItem& item);
+    bool removeItem(const PrivacyItem& item);
     bool setCategoryTagVisibilityMode(const QString& categoryUuid,
                                       PrivacyTagVisibilityMode mode,
                                       bool categoryAuthenticationVerified);
@@ -103,6 +105,8 @@ private:
     QHash<QString, PrivacyTagVisibilityMode> m_categoryTagVisibilityModes;
     QHash<QString, quint64>     m_categoryEpochs;
     QHash<qlonglong, QString>   m_itemCategories;
+    QHash<qlonglong, QString>   m_itemUuids;
+    QHash<QString, qlonglong>   m_imageIdsByItemUuid;
     QHash<qlonglong, qlonglong> m_itemGenerations;
     quint64                     m_epochCounter = 0;
     bool                        m_initialized = false;

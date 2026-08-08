@@ -153,8 +153,13 @@ bool writeManagedRootMarker(const PrivacyStorageRoot& root,
 {
     const QString markerPath = QDir(root.configuredPath).filePath(
                                        PrivacyRootIdentityCodec::managedRootMarkerRelativePathV1());
+    const QString markerDirectory = QFileInfo(markerPath).absolutePath();
 
-    if (!QDir().mkpath(QFileInfo(markerPath).absolutePath()))
+    if (!QDir().mkpath(markerDirectory) ||
+        !QFile::setPermissions(markerDirectory,
+                               QFileDevice::ReadOwner |
+                               QFileDevice::WriteOwner |
+                               QFileDevice::ExeOwner))
     {
         return false;
     }
@@ -166,8 +171,17 @@ bool writeManagedRootMarker(const PrivacyStorageRoot& root,
         return false;
     }
 
-    return (marker.write(PrivacyRootIdentityCodec::encodeManagedRootMarkerV1(
-                             root.uuid, writtenMarkerUuid)) > 0);
+    if (marker.write(PrivacyRootIdentityCodec::encodeManagedRootMarkerV1(
+                         root.uuid, writtenMarkerUuid)) <= 0)
+    {
+        return false;
+    }
+
+    marker.close();
+
+    return QFile::setPermissions(markerPath,
+                                 QFileDevice::ReadOwner |
+                                 QFileDevice::WriteOwner);
 }
 
 bool writeSizedFile(const QString& path, int size)
@@ -195,6 +209,17 @@ PrivacyItem makeItem()
     item.categoryUuid     = categoryUuid;
     item.expectedProxySize = 77;
     item.generation       = 3;
+
+    return item;
+}
+
+PrivacyItem makePublishableItem()
+{
+    PrivacyItem item = makeItem();
+    item.originalHash     = QLatin1String("original-hash");
+    item.originalSize     = 100;
+    item.expectedProxyHash = QLatin1String("proxy-hash");
+    item.expectedProxySize = 55;
 
     return item;
 }
@@ -326,6 +351,7 @@ private Q_SLOTS:
     void testAnalysisProvider();
     void testMixedRootAndConflictingMappings();
     void testDynamicAlbumRootRegistration();
+    void testDynamicProtectedItemPublication();
     void testRootEpochTransition();
     void testTransactionStates();
 };
@@ -989,6 +1015,106 @@ void PrivacyRuntimeTest::testDynamicAlbumRootRegistration()
              PrivacyRootRecoveryResult::PublishedIdentityMismatch);
     QCOMPARE(runtime.rootState(mismatchUuid),
              PrivacyRootRuntimeState::IdentityMismatch);
+}
+
+void PrivacyRuntimeTest::testDynamicProtectedItemPublication()
+{
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+
+    PrivacyRepositorySnapshot snapshot;
+    snapshot.categories << makeCategory();
+    snapshot.storageRoots << makeRoot(rootUuid, 9);
+
+    PrivacyRuntimeCoordinator runtime;
+    QCOMPARE(runtime.initialize(snapshot, verifier, {}, {}).state,
+             PrivacyStartupState::Ready);
+    QVERIFY(!runtime.isCategoryUnlocked(categoryUuid));
+    QVERIFY(runtime.setCategoryUnlocked(categoryUuid, true));
+    QVERIFY(runtime.isCategoryUnlocked(categoryUuid));
+
+    const PrivacyItem item = makePublishableItem();
+    const PrivacyContainer container = makeContainer(
+        QLatin1String("50000000-0000-0000-0000-000000000001"),
+        QLatin1String("album/item.jpg.digikam-private.zip"), 100);
+    const PrivacyAsset primary = makeAsset(PrivacyAsset::PrimaryMediaRole, 55);
+    QVERIFY(!runtime.hasProtectedItem(item, container, { primary }));
+
+    PrivacyAsset noPrimary = primary;
+    noPrimary.role = 2;
+    const quint64 beforeRejectedPublish = runtime.categoryEpoch(categoryUuid);
+    QVERIFY(!runtime.publishProtectedItem(item, container, { noPrimary }));
+
+    PrivacyContainer strongContainer = container;
+    strongContainer.kind = PrivacyContainerKind::StrongObject;
+    strongContainer.rootUuid.clear();
+    strongContainer.storeUuid =
+        QLatin1String("70000000-0000-0000-0000-000000000001");
+    strongContainer.objectRelativePath = QLatin1String("originals/item.jpg");
+    QVERIFY(strongContainer.isValid());
+    QVERIFY(!runtime.publishProtectedItem(item, strongContainer, { primary }));
+    QCOMPARE(runtime.categoryEpoch(categoryUuid), beforeRejectedPublish);
+
+    PrivacyRepositorySnapshot partialSnapshot = snapshot;
+    partialSnapshot.containers << container;
+    const QSharedPointer<FakeIntegrityInspector> integrity(
+        new FakeIntegrityInspector);
+    PrivacyRuntimeCoordinator partialRuntime;
+    QCOMPARE(partialRuntime.initialize(partialSnapshot, verifier, {}, integrity).state,
+             PrivacyStartupState::Ready);
+    QVERIFY(partialRuntime.setCategoryUnlocked(categoryUuid, true));
+    QVERIFY(!partialRuntime.publishProtectedItem(item, container, { primary }));
+    QVERIFY(!partialRuntime.hasProtectedItem(item, container, { primary }));
+
+    const quint64 beforePublish = runtime.categoryEpoch(categoryUuid);
+    QVERIFY(runtime.publishProtectedItem(item, container, { primary }));
+    QVERIFY(runtime.categoryEpoch(categoryUuid) > beforePublish);
+    QCOMPARE(runtime.rootSummary(rootUuid).protectedItemCount, 1);
+    QVERIFY(runtime.rootContainsProtectedItems(9));
+    QCOMPARE(runtime.publicSourceDisposition(item.imageId),
+             PrivacyPublicSourceDisposition::LockedProxy);
+
+    PrivacyActionItemState actionState;
+    QVERIFY(runtime.stateForItem(item.imageId, &actionState));
+    QVERIFY(actionState.protectedItem);
+    QCOMPARE(actionState.access, PrivacyItemAccess::Unlocked);
+    QVERIFY(actionState.proxyReady);
+    QVERIFY(actionState.originalReady);
+
+    PrivacyLeaseCurrentState leaseState;
+    QVERIFY(runtime.currentState(item.uuid, &leaseState));
+    QVERIFY(leaseState.categoryUnlocked);
+    QVERIFY(runtime.hasProtectedItem(item, container, { primary }));
+    QVERIFY(!runtime.publishProtectedItem(item, container, { primary }));
+
+    PrivacyAsset mismatchedAsset = primary;
+    mismatchedAsset.originalName = QLatin1String("different.jpg");
+    const quint64 beforeRejectedRemoval = runtime.categoryEpoch(categoryUuid);
+    QVERIFY(!runtime.hasProtectedItem(item, container, { mismatchedAsset }));
+    QVERIFY(!runtime.removeProtectedItem(item, container, { mismatchedAsset }));
+    QCOMPARE(runtime.categoryEpoch(categoryUuid), beforeRejectedRemoval);
+    QVERIFY(runtime.stateForItem(item.imageId, &actionState));
+    QVERIFY(actionState.protectedItem);
+
+    PrivacyItem mismatchedItem = item;
+    ++mismatchedItem.generation;
+    QVERIFY(!runtime.hasProtectedItem(mismatchedItem, container, { primary }));
+    QVERIFY(!runtime.removeProtectedItem(mismatchedItem, container, { primary }));
+
+    QVERIFY(runtime.removeProtectedItem(item, container, { primary }));
+    QVERIFY(runtime.categoryEpoch(categoryUuid) > beforeRejectedRemoval);
+    QVERIFY(runtime.isCategoryUnlocked(categoryUuid));
+    QCOMPARE(runtime.rootSummary(rootUuid).protectedItemCount, 0);
+    QVERIFY(!runtime.rootContainsProtectedItems(9));
+    QCOMPARE(runtime.publicSourceDisposition(item.imageId),
+             PrivacyPublicSourceDisposition::Unprotected);
+    QVERIFY(runtime.stateForItem(item.imageId, &actionState));
+    QVERIFY(!actionState.protectedItem);
+    QVERIFY(!runtime.currentState(item.uuid, &leaseState));
+    QCOMPARE(runtime.analysisDisposition(item.imageId),
+             PrivacyAnalysisDisposition::Allowed);
+    QVERIFY(!runtime.hasProtectedItem(item, container, { primary }));
+    QVERIFY(!runtime.removeProtectedItem(item, container, { primary }));
 }
 
 void PrivacyRuntimeTest::testRootEpochTransition()

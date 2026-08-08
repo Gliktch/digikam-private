@@ -627,6 +627,226 @@ void clearArtifactCounts(PrivacyRootIntegritySummary* summary)
     summary->changedProtectedObjectSizeCount = 0;
 }
 
+bool sameItem(const PrivacyItem& left, const PrivacyItem& right)
+{
+    return ((left.imageId == right.imageId) &&
+            (left.uuid == right.uuid) &&
+            (left.categoryUuid == right.categoryUuid) &&
+            (left.originalHash == right.originalHash) &&
+            (left.originalSize == right.originalSize) &&
+            (left.originalWidth == right.originalWidth) &&
+            (left.originalHeight == right.originalHeight) &&
+            (left.originalCreationDate == right.originalCreationDate) &&
+            (left.expectedProxyHash == right.expectedProxyHash) &&
+            (left.expectedProxySize == right.expectedProxySize) &&
+            (left.presentationVersion == right.presentationVersion) &&
+            (left.generation == right.generation) &&
+            (left.transactionState == right.transactionState));
+}
+
+bool sameContainer(const PrivacyContainer& left, const PrivacyContainer& right)
+{
+    return ((left.uuid == right.uuid) &&
+            (left.itemUuid == right.itemUuid) &&
+            (left.kind == right.kind) &&
+            (left.rootUuid == right.rootUuid) &&
+            (left.storeUuid == right.storeUuid) &&
+            (left.objectRelativePath == right.objectRelativePath) &&
+            (left.protectedSize == right.protectedSize) &&
+            (left.protectedHashAlgorithm == right.protectedHashAlgorithm) &&
+            (left.protectedHash == right.protectedHash) &&
+            (left.formatVersion == right.formatVersion) &&
+            (left.credentialGeneration == right.credentialGeneration) &&
+            (left.state == right.state) &&
+            (left.createdAt == right.createdAt) &&
+            (left.updatedAt == right.updatedAt));
+}
+
+bool sameAsset(const PrivacyAsset& left, const PrivacyAsset& right)
+{
+    return ((left.itemUuid == right.itemUuid) &&
+            (left.role == right.role) &&
+            (left.ordinal == right.ordinal) &&
+            (left.originalName == right.originalName) &&
+            (left.publicRootUuid == right.publicRootUuid) &&
+            (left.publicRelativePath == right.publicRelativePath) &&
+            (left.containerUuid == right.containerUuid) &&
+            (left.protectedRelativePath == right.protectedRelativePath) &&
+            (left.hashAlgorithm == right.hashAlgorithm) &&
+            (left.originalHash == right.originalHash) &&
+            (left.originalSize == right.originalSize) &&
+            (left.originalCreationDate == right.originalCreationDate) &&
+            (left.originalModificationDate == right.originalModificationDate) &&
+            (left.portableAttributes == right.portableAttributes) &&
+            (left.proxyHashAlgorithm == right.proxyHashAlgorithm) &&
+            (left.proxyHash == right.proxyHash) &&
+            (left.proxySize == right.proxySize) &&
+            (left.proxyPresentationVersion == right.proxyPresentationVersion) &&
+            (left.proxyGeneration == right.proxyGeneration));
+}
+
+QString assetIdentity(const PrivacyAsset& asset)
+{
+    return QString::number(asset.role) + QLatin1Char(':') +
+           QString::number(asset.ordinal);
+}
+
+bool hasProtectedFactsForRoot(const PrivacyRepositorySnapshot& snapshot,
+                              const QString& rootUuid)
+{
+    for (const PrivacyAsset& asset : snapshot.assets)
+    {
+        if (asset.publicRootUuid == rootUuid)
+        {
+            return true;
+        }
+    }
+
+    for (const PrivacyContainer& container : snapshot.containers)
+    {
+        if (container.rootUuid == rootUuid)
+        {
+            return true;
+        }
+    }
+
+    for (const PrivacyStore& store : snapshot.stores)
+    {
+        if (store.rootUuid == rootUuid)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+struct ValidatedProtectedItemFacts
+{
+    QString publicRootUuid;
+    QString originalRootUuid;
+    qlonglong expectedProxySize = -1;
+    bool originalInspectable = false;
+    QSet<QString> rootUuids;
+};
+
+bool validateProtectedItemFacts(
+    const PrivacyItem& item,
+    const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets,
+    const PrivacyRepositorySnapshot& snapshot,
+    const QHash<QString, PrivacyRootRuntimeState>& rootStates,
+    const QSet<QString>& conflictingRootUuids,
+    ValidatedProtectedItemFacts* facts,
+    bool allowRecoveringRoots = false)
+{
+    if (!facts || !item.isValid() || !container.isValid() || assets.isEmpty() ||
+        item.originalHash.isEmpty() || (item.originalSize < 0) ||
+        item.expectedProxyHash.isEmpty() || (item.expectedProxySize < 0) ||
+        (container.itemUuid != item.uuid) ||
+        (container.state != PrivacyContainerState::Verified))
+    {
+        return false;
+    }
+
+    int matchingCategoryCount = 0;
+    PrivacyCategory category;
+
+    for (const PrivacyCategory& candidate : snapshot.categories)
+    {
+        if (candidate.uuid == item.categoryUuid)
+        {
+            category = candidate;
+            ++matchingCategoryCount;
+        }
+    }
+
+    if ((matchingCategoryCount != 1) || !category.isValid() ||
+        (category.lifecycleState != PrivacyCategoryLifecycleState::Active) ||
+        (container.credentialGeneration != category.currentCredentialGeneration))
+    {
+        return false;
+    }
+
+    if ((category.backend != PrivacyBackend::Casual) ||
+        (container.kind != PrivacyContainerKind::CasualArchive) ||
+        container.rootUuid.isEmpty())
+    {
+        return false;
+    }
+
+    const QString originalRootUuid = container.rootUuid;
+
+    QSet<QString> assetIdentities;
+    QSet<QString> publicRootUuids;
+    int primaryCount = 0;
+    PrivacyAsset primary;
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        const QString identity = assetIdentity(asset);
+
+        if (!asset.isValid() || (asset.itemUuid != item.uuid) ||
+            (asset.containerUuid != container.uuid) ||
+            assetIdentities.contains(identity))
+        {
+            return false;
+        }
+
+        assetIdentities.insert(identity);
+        publicRootUuids.insert(asset.publicRootUuid);
+
+        if ((asset.role == PrivacyAsset::PrimaryMediaRole) && (asset.ordinal == 0))
+        {
+            primary = asset;
+            ++primaryCount;
+        }
+
+        if ((asset.proxySize >= 0) &&
+            ((asset.proxyGeneration != item.generation) ||
+             (asset.proxyPresentationVersion != item.presentationVersion)))
+        {
+            return false;
+        }
+    }
+
+    if ((primaryCount != 1) ||
+        (primary.originalHash != item.originalHash) ||
+        (primary.originalSize != item.originalSize) ||
+        (primary.proxyHash != item.expectedProxyHash) ||
+        (primary.proxySize != item.expectedProxySize) ||
+        (primary.proxyGeneration != item.generation) ||
+        (primary.proxyPresentationVersion != item.presentationVersion))
+    {
+        return false;
+    }
+
+    QSet<QString> requiredRootUuids = publicRootUuids;
+    requiredRootUuids.insert(originalRootUuid);
+
+    for (const QString& rootUuid : std::as_const(requiredRootUuids))
+    {
+        const PrivacyRootRuntimeState rootState = rootStates.value(
+            rootUuid, PrivacyRootRuntimeState::Unknown);
+
+        if (rootUuid.isEmpty() || conflictingRootUuids.contains(rootUuid) ||
+            ((rootState != PrivacyRootRuntimeState::VerifiedAvailable) &&
+             (!allowRecoveringRoots ||
+              (rootState != PrivacyRootRuntimeState::Recovering))))
+        {
+            return false;
+        }
+    }
+
+    facts->publicRootUuid = primary.publicRootUuid;
+    facts->originalRootUuid = originalRootUuid;
+    facts->expectedProxySize = primary.proxySize;
+    facts->originalInspectable = true;
+    facts->rootUuids = requiredRootUuids;
+
+    return true;
+}
+
 class PrivacyStartupData
 {
 public:
@@ -689,6 +909,35 @@ public:
         }
 
         rootEpochs.insert(rootUuid, epoch);
+    }
+
+    void refreshProtectedRootFacts(const QSet<QString>& rootUuids)
+    {
+        for (const QString& rootUuid : rootUuids)
+        {
+            if (hasProtectedFactsForRoot(snapshot, rootUuid))
+            {
+                protectedRootUuids.insert(rootUuid);
+            }
+            else
+            {
+                protectedRootUuids.remove(rootUuid);
+            }
+
+            PrivacyRootIntegritySummary summary = rootSummaries.value(rootUuid);
+            summary.rootUuid = rootUuid;
+            summary.protectedItemCount = itemUuidsForRoot(snapshot, rootUuid).size();
+            rootSummaries.insert(rootUuid, summary);
+
+            for (PrivacyRootIntegritySummary& reported : report.roots)
+            {
+                if (reported.rootUuid == rootUuid)
+                {
+                    reported = summary;
+                    break;
+                }
+            }
+        }
     }
 };
 
@@ -1333,6 +1582,13 @@ bool PrivacyRuntimeCoordinator::setCategoryUnlocked(const QString& categoryUuid,
     return d->service.setCategoryUnlocked(categoryUuid, unlocked);
 }
 
+bool PrivacyRuntimeCoordinator::isCategoryUnlocked(const QString& categoryUuid) const
+{
+    QReadLocker locker(&d->lock);
+
+    return (d->initialized && d->service.isCategoryUnlocked(categoryUuid));
+}
+
 bool PrivacyRuntimeCoordinator::publishCategory(const PrivacyCategory& category)
 {
     QWriteLocker locker(&d->lock);
@@ -1631,6 +1887,727 @@ bool PrivacyRuntimeCoordinator::publishCategoryCreation(
                        (d->report.unresolvedTransactionCount == 0))
                     ? PrivacyStartupState::Ready
                     : PrivacyStartupState::Degraded;
+
+    return true;
+}
+
+bool PrivacyRuntimeCoordinator::publishProtectedItem(
+    const PrivacyItem& item,
+    const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets)
+{
+    QWriteLocker locker(&d->lock);
+    ValidatedProtectedItemFacts facts;
+
+    if (!d->initialized ||
+        !validateProtectedItemFacts(item, container, assets, d->snapshot,
+                                    d->rootStates, d->conflictingRootUuids,
+                                    &facts) ||
+        d->items.contains(item.imageId) ||
+        d->imageIdsByItemUuid.contains(item.uuid) ||
+        d->conflictingItemUuids.contains(item.uuid))
+    {
+        return false;
+    }
+
+    for (const PrivacyItem& existing : std::as_const(d->snapshot.items))
+    {
+        if ((existing.imageId == item.imageId) || (existing.uuid == item.uuid))
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyContainer& existing : std::as_const(d->snapshot.containers))
+    {
+        if ((existing.uuid == container.uuid) || (existing.itemUuid == item.uuid))
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyAsset& existing : std::as_const(d->snapshot.assets))
+    {
+        if (existing.itemUuid == item.uuid)
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyDerivative& existing : std::as_const(d->snapshot.derivatives))
+    {
+        if (existing.itemUuid == item.uuid)
+        {
+            return false;
+        }
+    }
+
+    if (!d->service.addItem(item))
+    {
+        return false;
+    }
+
+    Private::ItemRuntime runtime;
+    runtime.item                  = item;
+    runtime.publicRootUuid        = facts.publicRootUuid;
+    runtime.originalRootUuid      = facts.originalRootUuid;
+    runtime.expectedProxySize     = facts.expectedProxySize;
+    runtime.originalInspectable  = facts.originalInspectable;
+
+    d->snapshot.items << item;
+    d->snapshot.containers << container;
+    d->snapshot.assets << assets;
+    d->items.insert(item.imageId, runtime);
+    d->imageIdsByItemUuid.insert(item.uuid, item.imageId);
+
+    for (const QString& rootUuid : std::as_const(facts.rootUuids))
+    {
+        d->proxyIssueItemsByRoot[rootUuid].remove(item.uuid);
+        d->originalIssueItemsByRoot[rootUuid].remove(item.uuid);
+    }
+
+    d->refreshProtectedRootFacts(facts.rootUuids);
+
+    return true;
+}
+
+bool PrivacyRuntimeCoordinator::publishProtectedItemForProtectRecovery(
+    const PrivacyItem& item,
+    const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets,
+    const PrivacyTransaction& completedTransaction)
+{
+    QWriteLocker locker(&d->lock);
+    ValidatedProtectedItemFacts facts;
+
+    if (!d->initialized ||
+        (completedTransaction.type != PrivacyTransactionType::ProtectItem) ||
+        (completedTransaction.state != PrivacyTransactionState::Complete) ||
+        (completedTransaction.generation != 2) ||
+        (completedTransaction.itemUuid != item.uuid) ||
+        (completedTransaction.categoryUuid != item.categoryUuid) ||
+        !validateProtectedItemFacts(item, container, assets, d->snapshot,
+                                    d->rootStates, d->conflictingRootUuids,
+                                    &facts, true) ||
+        !d->conflictingRootUuids.isEmpty() ||
+        (d->conflictingItemUuids.size() != 1) ||
+        !d->conflictingItemUuids.contains(item.uuid) ||
+        d->compatibilityExposedItems.contains(item.imageId))
+    {
+        return false;
+    }
+
+    const PrivacyTransaction* activeProtect = nullptr;
+    int activeProtectCount = 0;
+
+    for (const PrivacyTransaction& transaction :
+         std::as_const(d->snapshot.transactions))
+    {
+        if (transaction.uuid == completedTransaction.uuid)
+        {
+            activeProtect = &transaction;
+            ++activeProtectCount;
+        }
+    }
+
+    if ((activeProtectCount != 1) || !activeProtect ||
+        !activeProtect->isActive() ||
+        (activeProtect->type != PrivacyTransactionType::ProtectItem) ||
+        (activeProtect->itemUuid != item.uuid) ||
+        (activeProtect->categoryUuid != item.categoryUuid) ||
+        (((activeProtect->state != PrivacyTransactionState::Created) ||
+          (activeProtect->generation != 0)) &&
+         ((activeProtect->state != PrivacyTransactionState::Prepared) ||
+          (activeProtect->generation != 1))) ||
+        (activeProtect->payloadFormatVersion !=
+         completedTransaction.payloadFormatVersion) ||
+        ((activeProtect->state == PrivacyTransactionState::Prepared) &&
+         (activeProtect->payloadData != completedTransaction.payloadData)) ||
+        (activeProtect->createdAt != completedTransaction.createdAt) ||
+        (activeProtect->fromCredentialGeneration !=
+         completedTransaction.fromCredentialGeneration) ||
+        (activeProtect->toCredentialGeneration !=
+         completedTransaction.toCredentialGeneration))
+    {
+        return false;
+    }
+
+    int partialItemIndex = -1;
+    PrivacyItem partialItem;
+
+    for (int i = 0 ; i < d->snapshot.items.size() ; ++i)
+    {
+        const PrivacyItem& candidate = d->snapshot.items.at(i);
+
+        if ((candidate.imageId == item.imageId) || (candidate.uuid == item.uuid))
+        {
+            if (partialItemIndex >= 0)
+            {
+                return false;
+            }
+
+            partialItemIndex = i;
+            partialItem = candidate;
+        }
+    }
+
+    const auto runtimeIt = d->items.find(item.imageId);
+
+    if ((partialItemIndex < 0) || !partialItem.isValid() ||
+        (partialItem.imageId != item.imageId) ||
+        (partialItem.uuid != item.uuid) ||
+        (partialItem.categoryUuid != item.categoryUuid) ||
+        (partialItem.originalHash != item.originalHash) ||
+        (partialItem.originalSize != item.originalSize) ||
+        (partialItem.originalWidth != item.originalWidth) ||
+        (partialItem.originalHeight != item.originalHeight) ||
+        (partialItem.originalCreationDate != item.originalCreationDate) ||
+        !partialItem.expectedProxyHash.isEmpty() ||
+        (partialItem.expectedProxySize != -1) ||
+        (partialItem.presentationVersion != item.presentationVersion) ||
+        (partialItem.generation != item.generation) ||
+        (partialItem.transactionState !=
+         static_cast<int>(PrivacyTransactionState::Created)) ||
+        (runtimeIt == d->items.end()) || !runtimeIt->mappingConflict ||
+        !sameItem(runtimeIt->item, partialItem) ||
+        (d->imageIdsByItemUuid.value(item.uuid, -1) != item.imageId))
+    {
+        return false;
+    }
+
+    for (const PrivacyContainer& existing : std::as_const(d->snapshot.containers))
+    {
+        if ((existing.uuid == container.uuid) ||
+            (existing.itemUuid == item.uuid))
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyAsset& existing : std::as_const(d->snapshot.assets))
+    {
+        if (existing.itemUuid == item.uuid)
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyDerivative& derivative :
+         std::as_const(d->snapshot.derivatives))
+    {
+        if (derivative.itemUuid == item.uuid)
+        {
+            return false;
+        }
+    }
+
+    for (const QString& rootUuid : std::as_const(facts.rootUuids))
+    {
+        const PrivacyRootIntegritySummary summary =
+            d->rootSummaries.value(rootUuid);
+        int activeTransactionCount = 0;
+        bool exactProtectAffectsRoot = false;
+
+        if ((d->rootStates.value(rootUuid,
+                                 PrivacyRootRuntimeState::Unknown) !=
+             PrivacyRootRuntimeState::Recovering) ||
+            summary.identityMismatch ||
+            (summary.unresolvedTransactionCount != 1))
+        {
+            return false;
+        }
+
+        for (const PrivacyTransaction& transaction :
+             std::as_const(d->snapshot.transactions))
+        {
+            if (!transaction.isActive())
+            {
+                continue;
+            }
+
+            QList<PrivacyTransactionJournal> journals;
+
+            for (const PrivacyTransactionJournal& journal :
+                 std::as_const(d->snapshot.transactionJournals))
+            {
+                if (journal.transactionUuid == transaction.uuid)
+                {
+                    journals << journal;
+                }
+            }
+
+            if (!transactionAffectsRoot(transaction, journals,
+                                        d->snapshot, rootUuid))
+            {
+                continue;
+            }
+
+            ++activeTransactionCount;
+            exactProtectAffectsRoot = exactProtectAffectsRoot ||
+                (transaction.uuid == completedTransaction.uuid);
+        }
+
+        if ((activeTransactionCount != 1) || !exactProtectAffectsRoot)
+        {
+            return false;
+        }
+    }
+
+    PrivacyRepositorySnapshot prospective = d->snapshot;
+    prospective.items[partialItemIndex] = item;
+    prospective.containers << container;
+    prospective.assets << assets;
+
+    for (PrivacyTransaction& transaction : prospective.transactions)
+    {
+        if (transaction.uuid == completedTransaction.uuid)
+        {
+            transaction = completedTransaction;
+        }
+    }
+
+    QHash<QString, PrivacyRootInspectionResult> inspections;
+
+    for (const QString& rootUuid : std::as_const(facts.rootUuids))
+    {
+        const PrivacyStorageRoot* exactRoot = nullptr;
+        int rootCount = 0;
+
+        for (const PrivacyStorageRoot& root : prospective.storageRoots)
+        {
+            if (root.uuid == rootUuid)
+            {
+                exactRoot = &root;
+                ++rootCount;
+            }
+        }
+
+        if ((rootCount != 1) || !exactRoot || !d->rootVerifier ||
+            (d->rootVerifier->verify(*exactRoot) !=
+             PrivacyRootRuntimeState::VerifiedAvailable) ||
+            !d->integrityInspector)
+        {
+            return false;
+        }
+
+        const PrivacyRootInspectionResult inspection =
+            d->integrityInspector->inspect(*exactRoot, prospective);
+
+        if ((inspection.disposition != PrivacyIntegrityDisposition::Verified) ||
+            !inspection.proxyIssueItemUuids.isEmpty() ||
+            !inspection.originalIssueItemUuids.isEmpty())
+        {
+            return false;
+        }
+
+        inspections.insert(rootUuid, inspection);
+    }
+
+    d->snapshot = prospective;
+    runtimeIt->item = item;
+    runtimeIt->publicRootUuid = facts.publicRootUuid;
+    runtimeIt->originalRootUuid = facts.originalRootUuid;
+    runtimeIt->expectedProxySize = facts.expectedProxySize;
+    runtimeIt->originalInspectable = facts.originalInspectable;
+    runtimeIt->mappingConflict = false;
+    d->conflictingItemUuids.remove(item.uuid);
+    d->hasUnassignedProtectedItems = false;
+
+    for (const QString& rootUuid : std::as_const(facts.rootUuids))
+    {
+        d->setRootState(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+        PrivacyRootIntegritySummary summary = inspections.value(rootUuid).summary;
+        summary.rootUuid = rootUuid;
+        summary.state = PrivacyRootRuntimeState::VerifiedAvailable;
+        summary.protectedItemCount = itemUuidsForRoot(d->snapshot, rootUuid).size();
+        summary.unresolvedTransactionCount = 0;
+        summary.identityMismatch = false;
+        d->rootSummaries.insert(rootUuid, summary);
+        d->proxyIssueItemsByRoot.insert(
+            rootUuid, inspections.value(rootUuid).proxyIssueItemUuids);
+        d->originalIssueItemsByRoot.insert(
+            rootUuid, inspections.value(rootUuid).originalIssueItemUuids);
+    }
+
+    d->refreshProtectedRootFacts(facts.rootUuids);
+    d->report.unresolvedTransactionCount = 0;
+    d->report.verifiedRootCount = 0;
+    d->report.offlineRootCount = 0;
+    d->report.mismatchedRootCount = 0;
+    d->report.recoveringRootCount = 0;
+    d->report.roots.clear();
+
+    for (auto it = d->rootStates.constBegin() ; it != d->rootStates.constEnd() ; ++it)
+    {
+        switch (it.value())
+        {
+            case PrivacyRootRuntimeState::VerifiedAvailable:
+                ++d->report.verifiedRootCount;
+                break;
+            case PrivacyRootRuntimeState::Offline:
+                ++d->report.offlineRootCount;
+                break;
+            case PrivacyRootRuntimeState::IdentityMismatch:
+                ++d->report.mismatchedRootCount;
+                break;
+            case PrivacyRootRuntimeState::Unknown:
+            case PrivacyRootRuntimeState::Recovering:
+                ++d->report.recoveringRootCount;
+                break;
+        }
+
+        d->report.roots << d->rootSummaries.value(it.key());
+    }
+
+    for (const PrivacyTransaction& transaction :
+         std::as_const(d->snapshot.transactions))
+    {
+        if (transaction.isActive())
+        {
+            ++d->report.unresolvedTransactionCount;
+        }
+    }
+
+    d->report.state = ((d->report.offlineRootCount == 0) &&
+                       (d->report.mismatchedRootCount == 0) &&
+                       (d->report.recoveringRootCount == 0) &&
+                       (d->report.unresolvedTransactionCount == 0))
+                    ? PrivacyStartupState::Ready
+                    : PrivacyStartupState::Degraded;
+    return true;
+}
+
+bool PrivacyRuntimeCoordinator::hasProtectedItem(
+    const PrivacyItem& item,
+    const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets) const
+{
+    QReadLocker locker(&d->lock);
+    ValidatedProtectedItemFacts facts;
+
+    if (!d->initialized ||
+        !validateProtectedItemFacts(item, container, assets, d->snapshot,
+                                    d->rootStates, d->conflictingRootUuids,
+                                    &facts) ||
+        d->conflictingItemUuids.contains(item.uuid))
+    {
+        return false;
+    }
+
+    const auto runtimeIt = d->items.constFind(item.imageId);
+
+    if ((runtimeIt == d->items.constEnd()) || runtimeIt->mappingConflict ||
+        !sameItem(runtimeIt->item, item) ||
+        (runtimeIt->publicRootUuid != facts.publicRootUuid) ||
+        (runtimeIt->originalRootUuid != facts.originalRootUuid) ||
+        (runtimeIt->expectedProxySize != facts.expectedProxySize) ||
+        (runtimeIt->originalInspectable != facts.originalInspectable) ||
+        (d->imageIdsByItemUuid.value(item.uuid, -1) != item.imageId))
+    {
+        return false;
+    }
+
+    int matchingItemCount = 0;
+
+    for (const PrivacyItem& existing : std::as_const(d->snapshot.items))
+    {
+        if ((existing.imageId == item.imageId) || (existing.uuid == item.uuid))
+        {
+            if (!sameItem(existing, item))
+            {
+                return false;
+            }
+
+            ++matchingItemCount;
+        }
+    }
+
+    int matchingContainerCount = 0;
+
+    for (const PrivacyContainer& existing : std::as_const(d->snapshot.containers))
+    {
+        if ((existing.uuid == container.uuid) || (existing.itemUuid == item.uuid))
+        {
+            if (!sameContainer(existing, container))
+            {
+                return false;
+            }
+
+            ++matchingContainerCount;
+        }
+    }
+
+    QHash<QString, PrivacyAsset> suppliedAssets;
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        suppliedAssets.insert(assetIdentity(asset), asset);
+    }
+
+    int matchingAssetCount = 0;
+
+    for (const PrivacyAsset& existing : std::as_const(d->snapshot.assets))
+    {
+        if (existing.itemUuid != item.uuid)
+        {
+            continue;
+        }
+
+        const auto suppliedIt = suppliedAssets.constFind(assetIdentity(existing));
+
+        if ((suppliedIt == suppliedAssets.constEnd()) ||
+            !sameAsset(existing, suppliedIt.value()))
+        {
+            return false;
+        }
+
+        ++matchingAssetCount;
+    }
+
+    PrivacyServiceItemState sessionState;
+
+    return ((matchingItemCount == 1) &&
+            (matchingContainerCount == 1) &&
+            (matchingAssetCount == suppliedAssets.size()) &&
+            d->service.sessionStateForItem(item.imageId, &sessionState) &&
+            sessionState.protectedItem &&
+            (sessionState.categoryUuid == item.categoryUuid) &&
+            (sessionState.itemGeneration == item.generation));
+}
+
+bool PrivacyRuntimeCoordinator::removeProtectedItem(
+    const PrivacyItem& item,
+    const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets)
+{
+    return removeProtectedItemInternal(item, container, assets, {});
+}
+
+bool PrivacyRuntimeCoordinator::removeProtectedItemForUnprotectRecovery(
+    const PrivacyItem& item,
+    const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets,
+    const QString& transactionUuid)
+{
+    return removeProtectedItemInternal(item, container, assets,
+                                       transactionUuid);
+}
+
+bool PrivacyRuntimeCoordinator::removeProtectedItemInternal(
+    const PrivacyItem& item,
+    const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets,
+    const QString& recoveryTransactionUuid)
+{
+    QWriteLocker locker(&d->lock);
+    ValidatedProtectedItemFacts facts;
+    const bool recoveringUnprotect = !recoveryTransactionUuid.isEmpty();
+
+    if (!d->initialized ||
+        !validateProtectedItemFacts(item, container, assets, d->snapshot,
+                                    d->rootStates, d->conflictingRootUuids,
+                                    &facts, recoveringUnprotect) ||
+        d->conflictingItemUuids.contains(item.uuid) ||
+        d->compatibilityExposedItems.contains(item.imageId))
+    {
+        return false;
+    }
+
+    if (recoveringUnprotect)
+    {
+        const PrivacyTransaction* recoveryTransaction = nullptr;
+        int matchingTransactionCount = 0;
+
+        for (const PrivacyTransaction& transaction :
+             std::as_const(d->snapshot.transactions))
+        {
+            if (transaction.uuid == recoveryTransactionUuid)
+            {
+                recoveryTransaction = &transaction;
+                ++matchingTransactionCount;
+            }
+        }
+
+        if ((matchingTransactionCount != 1) || !recoveryTransaction ||
+            !recoveryTransaction->isActive() ||
+            (recoveryTransaction->type != PrivacyTransactionType::UnprotectItem) ||
+            (recoveryTransaction->itemUuid != item.uuid) ||
+            (recoveryTransaction->categoryUuid != item.categoryUuid))
+        {
+            return false;
+        }
+
+        for (const QString& rootUuid : std::as_const(facts.rootUuids))
+        {
+            const PrivacyRootIntegritySummary summary =
+                d->rootSummaries.value(rootUuid);
+            int activeTransactionCount = 0;
+            bool recoveryTransactionAffectsRoot = false;
+
+            if ((d->rootStates.value(rootUuid,
+                                     PrivacyRootRuntimeState::Unknown) !=
+                 PrivacyRootRuntimeState::Recovering) ||
+                summary.identityMismatch ||
+                (summary.unresolvedTransactionCount != 1))
+            {
+                return false;
+            }
+
+            for (const PrivacyTransaction& transaction :
+                 std::as_const(d->snapshot.transactions))
+            {
+                if (!transaction.isActive())
+                {
+                    continue;
+                }
+
+                QList<PrivacyTransactionJournal> journals;
+
+                for (const PrivacyTransactionJournal& journal :
+                     std::as_const(d->snapshot.transactionJournals))
+                {
+                    if (journal.transactionUuid == transaction.uuid)
+                    {
+                        journals << journal;
+                    }
+                }
+
+                if (!transactionAffectsRoot(transaction, journals,
+                                            d->snapshot, rootUuid))
+                {
+                    continue;
+                }
+
+                ++activeTransactionCount;
+                recoveryTransactionAffectsRoot =
+                    recoveryTransactionAffectsRoot ||
+                    (transaction.uuid == recoveryTransactionUuid);
+            }
+
+            if ((activeTransactionCount != 1) ||
+                !recoveryTransactionAffectsRoot)
+            {
+                return false;
+            }
+        }
+    }
+
+    const auto runtimeIt = d->items.constFind(item.imageId);
+
+    if ((runtimeIt == d->items.constEnd()) || runtimeIt->mappingConflict ||
+        !sameItem(runtimeIt->item, item) ||
+        (runtimeIt->publicRootUuid != facts.publicRootUuid) ||
+        (runtimeIt->originalRootUuid != facts.originalRootUuid) ||
+        (runtimeIt->expectedProxySize != facts.expectedProxySize) ||
+        (runtimeIt->originalInspectable != facts.originalInspectable) ||
+        (d->imageIdsByItemUuid.value(item.uuid, -1) != item.imageId))
+    {
+        return false;
+    }
+
+    int itemIndex = -1;
+
+    for (int i = 0 ; i < d->snapshot.items.size() ; ++i)
+    {
+        const PrivacyItem& existing = d->snapshot.items.at(i);
+
+        if ((existing.imageId == item.imageId) || (existing.uuid == item.uuid))
+        {
+            if ((itemIndex >= 0) || !sameItem(existing, item))
+            {
+                return false;
+            }
+
+            itemIndex = i;
+        }
+    }
+
+    int containerIndex = -1;
+
+    for (int i = 0 ; i < d->snapshot.containers.size() ; ++i)
+    {
+        const PrivacyContainer& existing = d->snapshot.containers.at(i);
+
+        if ((existing.uuid == container.uuid) || (existing.itemUuid == item.uuid))
+        {
+            if ((containerIndex >= 0) || !sameContainer(existing, container))
+            {
+                return false;
+            }
+
+            containerIndex = i;
+        }
+    }
+
+    QHash<QString, PrivacyAsset> suppliedAssets;
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        suppliedAssets.insert(assetIdentity(asset), asset);
+    }
+
+    QList<int> assetIndexes;
+
+    for (int i = 0 ; i < d->snapshot.assets.size() ; ++i)
+    {
+        const PrivacyAsset& existing = d->snapshot.assets.at(i);
+
+        if (existing.itemUuid != item.uuid)
+        {
+            continue;
+        }
+
+        const auto suppliedIt = suppliedAssets.constFind(assetIdentity(existing));
+
+        if ((suppliedIt == suppliedAssets.constEnd()) ||
+            !sameAsset(existing, suppliedIt.value()))
+        {
+            return false;
+        }
+
+        assetIndexes << i;
+    }
+
+    if ((itemIndex < 0) || (containerIndex < 0) ||
+        (assetIndexes.size() != suppliedAssets.size()))
+    {
+        return false;
+    }
+
+    for (const PrivacyDerivative& derivative : std::as_const(d->snapshot.derivatives))
+    {
+        if (derivative.itemUuid == item.uuid)
+        {
+            // Derivative deletion requires its own exact durable input. Do not
+            // leave a dangling item fact or silently discard an unspecified one.
+            return false;
+        }
+    }
+
+    if (!d->service.removeItem(item))
+    {
+        return false;
+    }
+
+    for (auto it = assetIndexes.crbegin() ; it != assetIndexes.crend() ; ++it)
+    {
+        d->snapshot.assets.removeAt(*it);
+    }
+
+    d->snapshot.containers.removeAt(containerIndex);
+    d->snapshot.items.removeAt(itemIndex);
+    d->items.remove(item.imageId);
+    d->imageIdsByItemUuid.remove(item.uuid);
+    d->conflictingItemUuids.remove(item.uuid);
+    d->compatibilityExposedItems.remove(item.imageId);
+
+    for (const QString& rootUuid : std::as_const(facts.rootUuids))
+    {
+        d->proxyIssueItemsByRoot[rootUuid].remove(item.uuid);
+        d->originalIssueItemsByRoot[rootUuid].remove(item.uuid);
+    }
+
+    d->refreshProtectedRootFacts(facts.rootUuids);
 
     return true;
 }

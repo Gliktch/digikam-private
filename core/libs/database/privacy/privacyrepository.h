@@ -88,6 +88,23 @@ public:
                                  const PrivacyStore& store,
                                  const QList<PrivacyStoreBinding>& bindings,
                                  const PrivacyTransaction& transaction) const;
+    bool beginItemProtection(const PrivacyItem& item,
+                             const PrivacyTransaction& transaction,
+                             const PrivacyTransactionJournal& journal) const;
+    bool publishItemProtection(const PrivacyItem& item,
+                               const PrivacyContainer& container,
+                               const QList<PrivacyAsset>& assets,
+                               const PrivacyTransaction& transaction) const;
+    bool beginItemUnprotection(const PrivacyTransaction& transaction,
+                               const PrivacyTransactionJournal& journal) const;
+    bool publishItemUnprotection(qlonglong imageId,
+                                 const QString& itemUuid,
+                                 const QString& categoryUuid,
+                                 qlonglong expectedItemGeneration,
+                                 const QString& priorProtectTransactionUuid,
+                                 const PrivacyTransaction& transaction) const;
+    bool finalizeItemUnprotection(const QString& transactionUuid,
+                                  const QString& categoryUuid) const;
 
     bool loadSnapshot(QList<PrivacyCategory>* categories,
                       QList<PrivacyItem>* items) const;

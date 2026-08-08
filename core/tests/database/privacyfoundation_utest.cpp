@@ -35,6 +35,7 @@ private Q_SLOTS:
     void testSqliteSchemaActionsExecute();
     void testStorageRecordValidation();
     void testSessionLockState();
+    void testDynamicSessionItems();
     void testUnknownCategoryFailsClosed();
 };
 
@@ -807,6 +808,48 @@ void PrivacyFoundationTest::testSessionLockState()
     QCOMPARE(service.itemAccess(2), PrivacyItemAccess::Locked);
 }
 
+void PrivacyFoundationTest::testDynamicSessionItems()
+{
+    const QString categoryUuid =
+        QLatin1String("10000000-0000-0000-0000-000000000001");
+    const PrivacyCategory category = makeCategory(
+        categoryUuid, QLatin1String("Synthetic category"));
+    PrivacyService service({ category }, {});
+    PrivacyItem item = makeItem(
+        11, QLatin1String("20000000-0000-0000-0000-000000000011"),
+        categoryUuid);
+    item.generation = 4;
+
+    QVERIFY(service.setCategoryUnlocked(categoryUuid, true));
+    const quint64 beforeAdd = service.categoryEpoch(categoryUuid);
+    QVERIFY(service.addItem(item));
+    QVERIFY(service.categoryEpoch(categoryUuid) > beforeAdd);
+    QCOMPARE(service.itemAccess(item.imageId), PrivacyItemAccess::Unlocked);
+    QCOMPARE(service.itemGeneration(item.imageId), item.generation);
+
+    const quint64 afterAdd = service.categoryEpoch(categoryUuid);
+    QVERIFY(!service.addItem(item));
+    QCOMPARE(service.categoryEpoch(categoryUuid), afterAdd);
+
+    PrivacyItem duplicateUuid = item;
+    duplicateUuid.imageId = 12;
+    QVERIFY(!service.addItem(duplicateUuid));
+
+    PrivacyItem mismatched = item;
+    ++mismatched.generation;
+    QVERIFY(!service.removeItem(mismatched));
+    mismatched = item;
+    mismatched.uuid = QLatin1String("20000000-0000-0000-0000-000000000012");
+    QVERIFY(!service.removeItem(mismatched));
+    QCOMPARE(service.categoryEpoch(categoryUuid), afterAdd);
+
+    QVERIFY(service.removeItem(item));
+    QVERIFY(service.categoryEpoch(categoryUuid) > afterAdd);
+    QCOMPARE(service.itemAccess(item.imageId), PrivacyItemAccess::Unprotected);
+    QCOMPARE(service.itemGeneration(item.imageId), -1LL);
+    QVERIFY(!service.removeItem(item));
+}
+
 void PrivacyFoundationTest::testUnknownCategoryFailsClosed()
 {
     PrivacyService uninitializedService;
@@ -860,6 +903,16 @@ void PrivacyFoundationTest::testUnknownCategoryFailsClosed()
     PrivacyServiceItemState duplicateState;
     QVERIFY(!duplicateService.sessionStateForItem(5, &duplicateState));
     QVERIFY(!duplicateService.mayAccessManualTags(5));
+
+    PrivacyItem duplicateUuidA = makeItem(
+        6, QLatin1String("20000000-0000-0000-0000-000000000007"), categoryUuid);
+    PrivacyItem duplicateUuidB = duplicateUuidA;
+    duplicateUuidB.imageId = 7;
+    PrivacyService duplicateUuidService(
+        { category }, { duplicateUuidA, duplicateUuidB });
+    QVERIFY(!duplicateUuidService.sessionStateForItem(6, &duplicateState));
+    duplicateUuidB.imageId = 8;
+    QVERIFY(!duplicateUuidService.addItem(duplicateUuidB));
 }
 
 QTEST_GUILESS_MAIN(PrivacyFoundationTest)

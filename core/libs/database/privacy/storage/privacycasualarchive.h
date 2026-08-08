@@ -21,6 +21,8 @@
 #include <QList>
 #include <QString>
 
+class QIODevice;
+
 // Local includes
 
 #include "digikam_export.h"
@@ -52,6 +54,7 @@ enum class PrivacyCasualArchiveError
     SizeMismatch,
     HashMismatch,
     DurabilityFailed,
+    DestinationWriteFailed,
     PublicationConflict,
     ExistingArchiveMismatch,
     PublicationFailed,
@@ -68,15 +71,39 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveMember
     QDateTime  originalCreationDate;
     QDateTime  originalModificationDate;
     QByteArray portableAttributes;
+    quint64    expectedDevice = 0;
+    quint64    expectedInode = 0;
+    quint64    expectedLinkCount = 0;
+    qlonglong  expectedSize = -1;
+    QByteArray expectedSha256;
 };
 
 struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveRequest
 {
     QString                            finalArchivePath;
+    /** Optional exact transaction-owned sibling stage. When empty, the
+     * archive engine retains its legacy random sibling staging name. */
+    QString                            stagingArchivePath;
     QString                            categoryUuid;
     QString                            containerUuid;
     QString                            itemUuid;
     QList<PrivacyCasualArchiveMember>  members;
+};
+
+struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveRestoreRequest
+{
+    QString    archivePath;
+    QString    categoryUuid;
+    QString    containerUuid;
+    QString    itemUuid;
+    QString    protectedRelativePath;
+    QString    originalName;
+    int        role = 0;
+    int        ordinal = -1;
+    qlonglong  expectedArchiveSize = -1;
+    QByteArray expectedArchiveSha256;
+    qlonglong  expectedMemberSize = -1;
+    QByteArray expectedMemberSha256;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveStage
@@ -151,6 +178,15 @@ public:
     bool verifyStagedArchive(
         const PrivacyCasualArchiveStage& stage,
         const PrivacyPassword& password,
+        const CancellationCheck& isCancelled = {},
+        PrivacyCasualArchiveError* error = nullptr) const;
+
+    /** Fully verifies the archive and its encrypted manifest before streaming
+     * one exact member into an already-open caller-owned destination. */
+    bool restoreMember(
+        const PrivacyCasualArchiveRestoreRequest& request,
+        const PrivacyPassword& password,
+        QIODevice* destination,
         const CancellationCheck& isCancelled = {},
         PrivacyCasualArchiveError* error = nullptr) const;
 

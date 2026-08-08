@@ -146,10 +146,27 @@ struct VerifiedFile
     QByteArray sha256;
 };
 
+enum class TransitionDiskState
+{
+    ExactPre,
+    ExactPost,
+    Ambiguous,
+    Unknown
+};
+
 PrivacyPublicTransitionResult failure(PrivacyPublicTransitionError error,
                                       const QString& detail)
 {
     PrivacyPublicTransitionResult result;
+    result.error  = error;
+    result.detail = detail;
+    return result;
+}
+
+PrivacyPublicReplacementStageResult stageFailure(
+    PrivacyPublicTransitionError error, const QString& detail)
+{
+    PrivacyPublicReplacementStageResult result;
     result.error  = error;
     result.detail = detail;
     return result;
@@ -540,6 +557,98 @@ bool nameIsAbsent(int directoryFd, const QByteArray& name)
     return (errno == ENOENT);
 }
 
+bool writeAll(int descriptor, const QByteArray& bytes)
+{
+    qsizetype offset = 0;
+
+    while (offset < bytes.size())
+    {
+        const ssize_t written = ::write(
+            descriptor, bytes.constData() + offset,
+            static_cast<size_t>(bytes.size() - offset));
+
+        if (written < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        if (written == 0)
+        {
+            return false;
+        }
+
+        offset += static_cast<qsizetype>(written);
+    }
+
+    return true;
+}
+
+bool hashStableOpenedFile(int descriptor, quint64 expectedDevice,
+                          VerifiedFile* const verified)
+{
+    struct stat before = {};
+
+    if ((::fstat(descriptor, &before) != 0) || !S_ISREG(before.st_mode) ||
+        (static_cast<quint64>(before.st_dev) != expectedDevice) ||
+        (before.st_uid != ::geteuid()) || (before.st_nlink != 1) ||
+        ((before.st_mode & 0777) != 0600) || (before.st_size < 0))
+    {
+        return false;
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    QByteArray buffer(IoChunkBytes, Qt::Uninitialized);
+    qlonglong offset = 0;
+    const qlonglong size = static_cast<qlonglong>(before.st_size);
+
+    while (offset < size)
+    {
+        const qsizetype wanted = static_cast<qsizetype>(
+            std::min<qlonglong>(buffer.size(), size - offset));
+        const ssize_t count = ::pread(descriptor, buffer.data(),
+                                      static_cast<size_t>(wanted), offset);
+
+        if (count < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        if (count == 0)
+        {
+            return false;
+        }
+
+        hash.addData(QByteArrayView(buffer.constData(),
+                                    static_cast<qsizetype>(count)));
+        offset += static_cast<qlonglong>(count);
+    }
+
+    struct stat after = {};
+
+    if ((::fstat(descriptor, &after) != 0) ||
+        !sameStableFile(before, after))
+    {
+        return false;
+    }
+
+    verified->device    = static_cast<quint64>(before.st_dev);
+    verified->inode     = static_cast<quint64>(before.st_ino);
+    verified->linkCount = static_cast<quint64>(before.st_nlink);
+    verified->size      = size;
+    verified->sha256    = hash.result();
+    return true;
+}
+
 #endif // Q_OS_LINUX
 
 } // namespace
@@ -562,6 +671,238 @@ QString PrivacyPublicTransitionEngine::expectedStageFileName(
         .arg(transactionUuid).arg(role).arg(ordinal);
 }
 
+PrivacyPublicReplacementStageResult
+PrivacyPublicTransitionEngine::stageReplacement(
+    const PrivacyPublicReplacementStageRequest& request,
+    const QByteArray& bytes) const
+{
+    return stageReplacement(
+        request,
+        [&bytes](int descriptor, QString* const detail)
+        {
+#if defined(Q_OS_LINUX)
+            if (writeAll(descriptor, bytes))
+            {
+                return true;
+            }
+
+            if (detail)
+            {
+                *detail = QStringLiteral("cannot write replacement bytes");
+            }
+
+            return false;
+#else
+            Q_UNUSED(descriptor);
+            Q_UNUSED(detail);
+            return false;
+#endif
+        });
+}
+
+PrivacyPublicReplacementStageResult
+PrivacyPublicTransitionEngine::stageReplacement(
+    const PrivacyPublicReplacementStageRequest& request,
+    const StageProducer& producer) const
+{
+#if !defined(Q_OS_LINUX)
+    Q_UNUSED(request);
+    Q_UNUSED(producer);
+    return stageFailure(PrivacyPublicTransitionError::AtomicPublicationUnavailable,
+                        QStringLiteral("public replacement staging requires Linux"));
+#else
+    QString validationDetail;
+
+    if (!producer ||
+        !PrivacyTransactionJournalCodec::validate(request.journalRecord,
+                                                   &validationDetail) ||
+        (request.authoritativeJournalSha256.size() !=
+         QCryptographicHash::hashLength(QCryptographicHash::Sha256)) ||
+        (request.journalRecord.stage != PrivacyJournalStage::Prepared) ||
+        request.itemUuid.isEmpty() || (request.role <= 0) ||
+        (request.ordinal < 0))
+    {
+        return stageFailure(
+            PrivacyPublicTransitionError::InvalidRequest,
+            validationDetail.isEmpty()
+                ? QStringLiteral("replacement staging request is invalid")
+                : validationDetail);
+    }
+
+    const PrivacyJournalAsset* asset = nullptr;
+
+    for (const PrivacyJournalAsset& candidate : request.journalRecord.assets)
+    {
+        if ((candidate.itemUuid == request.itemUuid) &&
+            (candidate.role == request.role) &&
+            (candidate.ordinal == request.ordinal))
+        {
+            asset = &candidate;
+            break;
+        }
+    }
+
+    if (!asset || asset->stagedRelativePath.isEmpty() ||
+        (parentPath(asset->publicRelativePath) !=
+         parentPath(asset->stagedRelativePath)) ||
+        (baseName(asset->stagedRelativePath) !=
+         expectedStageFileName(request.journalRecord.transactionUuid,
+                               request.role, request.ordinal)))
+    {
+        return stageFailure(
+            PrivacyPublicTransitionError::InvalidRequest,
+            QStringLiteral("replacement stage path is not the expected same-parent name"));
+    }
+
+    PrivacyJournalError journalError = PrivacyJournalError::None;
+    QString journalDetail;
+    std::unique_ptr<PrivacyTransactionJournalStore> journalStore =
+        PrivacyTransactionJournalStore::open(
+            request.absoluteRootPath, request.rootExpectation,
+            &journalError, &journalDetail);
+
+    if (!journalStore)
+    {
+        return stageFailure(PrivacyPublicTransitionError::RootIdentityMismatch,
+                            journalDetail);
+    }
+
+    const PrivacyJournalLoadResult loaded = journalStore->load(
+        request.journalRecord.transactionUuid);
+    const QByteArray suppliedCanonical = PrivacyTransactionJournalCodec::encode(
+        request.journalRecord);
+
+    if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+        !loaded.authoritative || !loaded.hasRecord ||
+        (loaded.sha256 != request.authoritativeJournalSha256) ||
+        (loaded.canonicalBytes != suppliedCanonical) ||
+        (loaded.record.stage != PrivacyJournalStage::Prepared))
+    {
+        return stageFailure(
+            PrivacyPublicTransitionError::JournalRejected,
+            QStringLiteral("Prepared journal CAS is missing, stale, or uncertain"));
+    }
+
+    ScopedFd rootFd;
+    quint64 rootDevice = 0;
+    quint64 rootInode  = 0;
+
+    if (!openPinnedRoot(request.absoluteRootPath, request.rootExpectation,
+                        &rootFd, &rootDevice, &rootInode, &validationDetail))
+    {
+        return stageFailure(PrivacyPublicTransitionError::RootIdentityMismatch,
+                            validationDetail);
+    }
+
+    PinnedParent parent;
+
+    if (!openPinnedParent(rootFd.get(), rootDevice,
+                          parentPath(asset->publicRelativePath),
+                          &parent, &validationDetail))
+    {
+        return stageFailure(PrivacyPublicTransitionError::UnsafePath,
+                            validationDetail);
+    }
+
+    const QByteArray stageName = baseName(asset->stagedRelativePath).toUtf8();
+    ScopedFd staged(PrivacyPosixStorage::confinedOpenAt(
+        parent.descriptor.get(), stageName,
+        O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
+        0600));
+
+    if (staged.get() < 0)
+    {
+        const int openError = errno;
+        const FileOpenStatus status = classifyFailedOpen(
+            parent.descriptor.get(), stageName, rootDevice, true);
+        const PrivacyPublicTransitionError error =
+            (status == FileOpenStatus::Unsafe)
+                ? PrivacyPublicTransitionError::UnsafePath
+                : (openError == EEXIST)
+                    ? PrivacyPublicTransitionError::UnexpectedExistingFile
+                    : PrivacyPublicTransitionError::IoFailure;
+        return stageFailure(error,
+                            QStringLiteral("cannot exclusively create replacement stage"));
+    }
+
+    struct stat createdFacts = {};
+
+    if ((::fchmod(staged.get(), 0600) != 0) ||
+        (::fstat(staged.get(), &createdFacts) != 0) ||
+        !S_ISREG(createdFacts.st_mode) ||
+        (static_cast<quint64>(createdFacts.st_dev) != rootDevice) ||
+        (createdFacts.st_uid != ::geteuid()) || (createdFacts.st_nlink != 1) ||
+        ((createdFacts.st_mode & 0777) != 0600))
+    {
+        ::unlinkat(parent.descriptor.get(), stageName.constData(), 0);
+        ::fsync(parent.descriptor.get());
+        return stageFailure(PrivacyPublicTransitionError::UnsafePath,
+                            QStringLiteral("created replacement stage is unsafe"));
+    }
+
+    const auto cleanup = [&]()
+    {
+        struct stat bound = {};
+
+        if ((::fstatat(parent.descriptor.get(), stageName.constData(), &bound,
+                       AT_SYMLINK_NOFOLLOW) == 0) &&
+            (bound.st_dev == createdFacts.st_dev) &&
+            (bound.st_ino == createdFacts.st_ino))
+        {
+            ::unlinkat(parent.descriptor.get(), stageName.constData(), 0);
+            ::fsync(parent.descriptor.get());
+        }
+    };
+
+    QString producerDetail;
+
+    if (!producer(staged.get(), &producerDetail))
+    {
+        cleanup();
+        return stageFailure(
+            PrivacyPublicTransitionError::IoFailure,
+            producerDetail.isEmpty()
+                ? QStringLiteral("replacement producer failed")
+                : producerDetail);
+    }
+
+    if (::fsync(staged.get()) != 0)
+    {
+        cleanup();
+        return stageFailure(PrivacyPublicTransitionError::DurabilityUncertain,
+                            QStringLiteral("cannot fsync replacement stage"));
+    }
+
+    VerifiedFile verified;
+
+    if (!hashStableOpenedFile(staged.get(), rootDevice, &verified) ||
+        !rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
+        !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
+        !parentStillReachable(rootFd.get(), rootDevice, parent) ||
+        !nameStillBindsFile(parent.descriptor.get(), stageName, verified))
+    {
+        cleanup();
+        return stageFailure(PrivacyPublicTransitionError::FileFactMismatch,
+                            QStringLiteral("replacement stage changed during verification"));
+    }
+
+    if (::fsync(parent.descriptor.get()) != 0)
+    {
+        cleanup();
+        return stageFailure(PrivacyPublicTransitionError::DurabilityUncertain,
+                            QStringLiteral("cannot fsync replacement parent"));
+    }
+
+    PrivacyPublicReplacementStageResult result;
+    result.stagedRelativePath = asset->stagedRelativePath;
+    result.fact.presence      = PrivacyJournalExpectedPresence::Present;
+    result.fact.size          = verified.size;
+    result.fact.linkCount     = verified.linkCount;
+    result.fact.sha256        = verified.sha256;
+    return result;
+#endif
+}
+
 PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
     const PrivacyPublicTransitionRequest& request) const
 {
@@ -581,12 +922,17 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
                                                    &validationDetail) ||
         (request.authoritativeJournalSha256.size() !=
          QCryptographicHash::hashLength(QCryptographicHash::Sha256)) ||
-        (request.journalRecord.stage !=
-         PrivacyJournalStage::ProtectedCopyVerified) ||
+        ((request.journalRecord.stage !=
+          PrivacyJournalStage::ProtectedCopyVerified) &&
+         (request.journalRecord.stage != PrivacyJournalStage::Applying) &&
+         (request.journalRecord.stage !=
+          PrivacyJournalStage::PublicStateVerified)) ||
         (request.itemUuid.isEmpty()) || (request.role <= 0) ||
         (request.ordinal < 0) ||
         ((request.mode != PrivacyPublicTransitionMode::InstallAbsent) &&
          (request.mode != PrivacyPublicTransitionMode::ExchangePresent)) ||
+        (request.installedUnixMode < -1) ||
+        (request.installedUnixMode > 07777) ||
         !validFactMapping(request.journalRecord.transactionType,
                           request.currentFact, request.installedFact))
     {
@@ -663,7 +1009,7 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         !loaded.authoritative || !loaded.hasRecord ||
         (loaded.sha256 != request.authoritativeJournalSha256) ||
         (loaded.canonicalBytes != suppliedCanonical) ||
-        (loaded.record.stage != PrivacyJournalStage::ProtectedCopyVerified))
+        (loaded.record.stage != request.journalRecord.stage))
     {
         return failure(PrivacyPublicTransitionError::JournalRejected,
                        QStringLiteral("journal CAS is missing, stale, uncertain, or at the wrong stage"));
@@ -704,195 +1050,310 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
 
     const QByteArray publicName = baseName(asset->publicRelativePath).toUtf8();
     const QByteArray stageName  = baseName(asset->stagedRelativePath).toUtf8();
-    VerifiedFile staged;
-    FileOpenStatus stagedStatus = openAndVerifyFile(
-        parent.descriptor.get(), stageName, rootDevice, *installedFact,
-        true, true, &staged);
-
-    if (stagedStatus != FileOpenStatus::Verified)
-    {
-        const PrivacyPublicTransitionError error =
-            (stagedStatus == FileOpenStatus::Missing)
-                ? PrivacyPublicTransitionError::MissingExpectedFile
-                : (stagedStatus == FileOpenStatus::FactMismatch)
-                    ? PrivacyPublicTransitionError::FileFactMismatch
-                    : ((stagedStatus == FileOpenStatus::Unsafe) ||
-                       (stagedStatus == FileOpenStatus::Hardlinked))
-                        ? PrivacyPublicTransitionError::UnsafePath
-                        : PrivacyPublicTransitionError::IoFailure;
-        return failure(error, QStringLiteral("staged replacement is missing, unsafe, or mismatched"));
-    }
-
-    VerifiedFile current;
-
-    if (request.mode == PrivacyPublicTransitionMode::ExchangePresent)
-    {
-        const FileOpenStatus currentStatus = openAndVerifyFile(
-            parent.descriptor.get(), publicName, rootDevice, *currentFact,
-            false, false, &current);
-
-        if (currentStatus != FileOpenStatus::Verified)
-        {
-            const PrivacyPublicTransitionError error =
-                (currentStatus == FileOpenStatus::Missing)
-                    ? PrivacyPublicTransitionError::MissingExpectedFile
-                    : (currentStatus == FileOpenStatus::FactMismatch)
-                        ? PrivacyPublicTransitionError::FileFactMismatch
-                        : (currentStatus == FileOpenStatus::Hardlinked)
-                            ? PrivacyPublicTransitionError::HardlinkReconciliationRequired
-                        : (currentStatus == FileOpenStatus::Unsafe)
-                            ? PrivacyPublicTransitionError::UnsafePath
-                            : PrivacyPublicTransitionError::IoFailure;
-            return failure(error, QStringLiteral("current public file is missing, unsafe, or mismatched"));
-        }
-    }
-    else if (!nameIsAbsent(parent.descriptor.get(), publicName))
-    {
-        return failure(PrivacyPublicTransitionError::UnexpectedExistingFile,
-                       QStringLiteral("reserved public name is not absent"));
-    }
-
-    if (faulted(PrivacyPublicTransitionFaultPoint::AfterInitialVerification))
-    {
-        return failure(PrivacyPublicTransitionError::FaultInjected,
-                       QStringLiteral("fault injected after initial file verification"));
-    }
-
-    if (::fsync(staged.descriptor.get()) != 0)
-    {
-        return failure(PrivacyPublicTransitionError::IoFailure,
-                       QStringLiteral("cannot fsync staged replacement"));
-    }
-
-    if (faulted(PrivacyPublicTransitionFaultPoint::AfterStagedFsync))
-    {
-        return failure(PrivacyPublicTransitionError::FaultInjected,
-                       QStringLiteral("fault injected after staged fsync"));
-    }
-
-    PrivacyJournalRecord applyingRecord = request.journalRecord;
-    applyingRecord.stage = PrivacyJournalStage::Applying;
-    QByteArray applyingHash;
-
-    if (!journalStore->compareAndUpdate(
-            applyingRecord, request.authoritativeJournalSha256,
-            &applyingHash, &journalError, &journalDetail))
-    {
-        return failure(PrivacyPublicTransitionError::JournalAdvanceFailed,
-                       journalDetail);
-    }
-
-    PrivacyPublicTransitionResult result;
-    result.applyingJournalSha256 = applyingHash;
-
-    if (faulted(PrivacyPublicTransitionFaultPoint::AfterApplyingJournal))
-    {
-        result.error  = PrivacyPublicTransitionError::FaultInjected;
-        result.detail = QStringLiteral("fault injected after Applying journal stage");
-        return result;
-    }
-
-    const PrivacyJournalLoadResult applyingLoaded = journalStore->load(
-        request.journalRecord.transactionUuid);
-
-    if ((applyingLoaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
-        !applyingLoaded.authoritative ||
-        (applyingLoaded.sha256 != applyingHash) ||
-        (applyingLoaded.record.stage != PrivacyJournalStage::Applying) ||
-        !rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
-        !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
-        !parentStillReachable(rootFd.get(), rootDevice, parent))
-    {
-        result.error  = PrivacyPublicTransitionError::RootIdentityMismatch;
-        result.detail = QStringLiteral("root, parent, or Applying journal changed before mutation");
-        return result;
-    }
-
-    staged = VerifiedFile();
-    stagedStatus = openAndVerifyFile(parent.descriptor.get(), stageName,
-                                     rootDevice, *installedFact,
-                                     true, true, &staged);
-    current = VerifiedFile();
-    FileOpenStatus currentStatus = FileOpenStatus::Missing;
-
-    if (request.mode == PrivacyPublicTransitionMode::ExchangePresent)
-    {
-        currentStatus = openAndVerifyFile(parent.descriptor.get(), publicName,
-                                          rootDevice, *currentFact,
-                                          false, false, &current);
-    }
-
-    if ((request.mode == PrivacyPublicTransitionMode::ExchangePresent) &&
-        (currentStatus == FileOpenStatus::Hardlinked))
-    {
-        result.error  = PrivacyPublicTransitionError::HardlinkReconciliationRequired;
-        result.detail = QStringLiteral("public source gained an unresolved hardlink alias");
-        return result;
-    }
-
-    if ((stagedStatus != FileOpenStatus::Verified) ||
-        ((request.mode == PrivacyPublicTransitionMode::ExchangePresent) &&
-         (currentStatus != FileOpenStatus::Verified)) ||
-        ((request.mode == PrivacyPublicTransitionMode::InstallAbsent) &&
-         !nameIsAbsent(parent.descriptor.get(), publicName)) ||
-        (::fsync(staged.descriptor.get()) != 0))
-    {
-        result.error  = PrivacyPublicTransitionError::FileFactMismatch;
-        result.detail = QStringLiteral("immediate pre-mutation file verification failed");
-        return result;
-    }
-
-    if (faulted(PrivacyPublicTransitionFaultPoint::BeforeNamespaceMutation))
-    {
-        result.error  = PrivacyPublicTransitionError::FaultInjected;
-        result.detail = QStringLiteral("fault injected before namespace mutation");
-        return result;
-    }
-
-    if (!rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
-        !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
-        !parentStillReachable(rootFd.get(), rootDevice, parent) ||
-        !nameStillBindsFile(parent.descriptor.get(), stageName, staged) ||
-        ((request.mode == PrivacyPublicTransitionMode::ExchangePresent) &&
-         !nameStillBindsFile(parent.descriptor.get(), publicName, current)) ||
-        ((request.mode == PrivacyPublicTransitionMode::InstallAbsent) &&
-         !nameIsAbsent(parent.descriptor.get(), publicName)))
-    {
-        result.error  = PrivacyPublicTransitionError::RootIdentityMismatch;
-        result.detail = QStringLiteral("parent or file binding changed immediately before mutation");
-        return result;
-    }
-
-    bool atomicUnavailable = false;
     const bool exchange = (request.mode == PrivacyPublicTransitionMode::ExchangePresent);
 
-    if (!PrivacyPosixStorage::atomicRenameAt(
-            parent.descriptor.get(), stageName, publicName,
-            exchange ? PrivacyPosixStorage::AtomicRenameMode::Exchange
-                     : PrivacyPosixStorage::AtomicRenameMode::NoReplace,
-            &atomicUnavailable))
+    struct DiskInspection
     {
-        result.error = atomicUnavailable
-                     ? PrivacyPublicTransitionError::AtomicPublicationUnavailable
-                     : PrivacyPublicTransitionError::PublicationConflict;
-        result.detail = atomicUnavailable
-                      ? QStringLiteral("required renameat2 operation is unavailable")
-                      : QStringLiteral("atomic public-name mutation failed");
+        TransitionDiskState state = TransitionDiskState::Unknown;
+        VerifiedFile        preStage;
+        VerifiedFile        prePublic;
+        VerifiedFile        postStage;
+        VerifiedFile        postPublic;
+        FileOpenStatus      preStageStatus  = FileOpenStatus::Missing;
+        FileOpenStatus      prePublicStatus = FileOpenStatus::Missing;
+        FileOpenStatus      postStageStatus = FileOpenStatus::Missing;
+        FileOpenStatus      postPublicStatus = FileOpenStatus::Missing;
+    };
+
+    const auto inspectDisk = [&]()
+    {
+        DiskInspection inspection;
+        inspection.preStageStatus = openAndVerifyFile(
+            parent.descriptor.get(), stageName, rootDevice, *installedFact,
+            true, true, &inspection.preStage);
+
+        bool exactPre = false;
+        bool exactPost = false;
+
+        if (exchange)
+        {
+            inspection.prePublicStatus = openAndVerifyFile(
+                parent.descriptor.get(), publicName, rootDevice, *currentFact,
+                false, false, &inspection.prePublic);
+            inspection.postPublicStatus = openAndVerifyFile(
+                parent.descriptor.get(), publicName, rootDevice, *installedFact,
+                false, false, &inspection.postPublic);
+            inspection.postStageStatus = openAndVerifyFile(
+                parent.descriptor.get(), stageName, rootDevice, *currentFact,
+                false, false, &inspection.postStage);
+            exactPre = ((inspection.preStageStatus == FileOpenStatus::Verified) &&
+                        (inspection.prePublicStatus == FileOpenStatus::Verified));
+            exactPost = ((inspection.postPublicStatus == FileOpenStatus::Verified) &&
+                         (inspection.postStageStatus == FileOpenStatus::Verified));
+        }
+        else
+        {
+            exactPre = ((inspection.preStageStatus == FileOpenStatus::Verified) &&
+                        nameIsAbsent(parent.descriptor.get(), publicName));
+            inspection.postPublicStatus = openAndVerifyFile(
+                parent.descriptor.get(), publicName, rootDevice, *installedFact,
+                false, false, &inspection.postPublic);
+            exactPost = ((inspection.postPublicStatus == FileOpenStatus::Verified) &&
+                         nameIsAbsent(parent.descriptor.get(), stageName));
+        }
+
+        inspection.state = (exactPre && exactPost)
+                         ? TransitionDiskState::Ambiguous
+                         : exactPre
+                             ? TransitionDiskState::ExactPre
+                             : exactPost
+                                 ? TransitionDiskState::ExactPost
+                                 : TransitionDiskState::Unknown;
+        return inspection;
+    };
+
+    const auto inspectionFailure = [](const DiskInspection& inspection)
+    {
+        const bool stageVerified =
+            ((inspection.preStageStatus == FileOpenStatus::Verified) ||
+             (inspection.postStageStatus == FileOpenStatus::Verified));
+        const bool publicVerified =
+            ((inspection.prePublicStatus == FileOpenStatus::Verified) ||
+             (inspection.postPublicStatus == FileOpenStatus::Verified));
+
+        if (!stageVerified &&
+            ((inspection.preStageStatus == FileOpenStatus::Unsafe) ||
+             (inspection.preStageStatus == FileOpenStatus::Hardlinked) ||
+             (inspection.postStageStatus == FileOpenStatus::Unsafe) ||
+             (inspection.postStageStatus == FileOpenStatus::Hardlinked)))
+        {
+            return PrivacyPublicTransitionError::UnsafePath;
+        }
+
+        if (!publicVerified &&
+            ((inspection.prePublicStatus == FileOpenStatus::Hardlinked) ||
+             (inspection.postPublicStatus == FileOpenStatus::Hardlinked)))
+        {
+            return PrivacyPublicTransitionError::HardlinkReconciliationRequired;
+        }
+
+        if (!publicVerified &&
+            ((inspection.prePublicStatus == FileOpenStatus::Unsafe) ||
+             (inspection.postPublicStatus == FileOpenStatus::Unsafe)))
+        {
+            return PrivacyPublicTransitionError::UnsafePath;
+        }
+
+        if ((inspection.preStageStatus == FileOpenStatus::IoFailure) ||
+            (inspection.prePublicStatus == FileOpenStatus::IoFailure) ||
+            (inspection.postStageStatus == FileOpenStatus::IoFailure) ||
+            (inspection.postPublicStatus == FileOpenStatus::IoFailure))
+        {
+            return PrivacyPublicTransitionError::IoFailure;
+        }
+
+        return PrivacyPublicTransitionError::FileFactMismatch;
+    };
+
+    DiskInspection inspection = inspectDisk();
+    const PrivacyJournalStage initialStage = request.journalRecord.stage;
+    PrivacyJournalRecord applyingRecord = request.journalRecord;
+    QByteArray applyingHash = request.authoritativeJournalSha256;
+    PrivacyPublicTransitionResult result;
+
+    if (initialStage == PrivacyJournalStage::PublicStateVerified)
+    {
+        if ((inspection.state != TransitionDiskState::ExactPost) &&
+            (inspection.state != TransitionDiskState::Ambiguous))
+        {
+            return failure(inspectionFailure(inspection),
+                           QStringLiteral("PublicStateVerified journal does not match exact installed state"));
+        }
+
+        struct stat installedMetadata = {};
+
+        if ((request.installedUnixMode >= 0) &&
+            ((::fstat(inspection.postPublic.descriptor.get(),
+                      &installedMetadata) != 0) ||
+             ((installedMetadata.st_mode & 07777) !=
+              static_cast<mode_t>(request.installedUnixMode))))
+        {
+            return failure(PrivacyPublicTransitionError::FileFactMismatch,
+                           QStringLiteral("PublicStateVerified public mode is not exact"));
+        }
+
+        if (!rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
+            !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
+            !parentStillReachable(rootFd.get(), rootDevice, parent) ||
+            !nameStillBindsFile(parent.descriptor.get(), publicName,
+                                inspection.postPublic) ||
+            (exchange &&
+             !nameStillBindsFile(parent.descriptor.get(), stageName,
+                                 inspection.postStage)) ||
+            (!exchange && !nameIsAbsent(parent.descriptor.get(), stageName)))
+        {
+            return failure(PrivacyPublicTransitionError::RootIdentityMismatch,
+                           QStringLiteral("PublicStateVerified path binding changed during readback"));
+        }
+
+        result.finalJournalSha256 = request.authoritativeJournalSha256;
+        result.installedVerified  = true;
+        result.displacedVerified  = exchange;
+        result.displacedRelativePath = exchange
+                                     ? asset->stagedRelativePath
+                                     : QString();
         return result;
     }
 
-    result.namespaceMutated = true;
+    if (initialStage == PrivacyJournalStage::ProtectedCopyVerified)
+    {
+        if ((inspection.state != TransitionDiskState::ExactPre) &&
+            (inspection.state != TransitionDiskState::Ambiguous))
+        {
+            return failure(inspectionFailure(inspection),
+                           QStringLiteral("ProtectedCopyVerified journal does not match exact pre-mutation state"));
+        }
+
+        if (faulted(PrivacyPublicTransitionFaultPoint::AfterInitialVerification))
+        {
+            return failure(PrivacyPublicTransitionError::FaultInjected,
+                           QStringLiteral("fault injected after initial file verification"));
+        }
+
+        if (::fsync(inspection.preStage.descriptor.get()) != 0)
+        {
+            return failure(PrivacyPublicTransitionError::IoFailure,
+                           QStringLiteral("cannot fsync staged replacement"));
+        }
+
+        if (faulted(PrivacyPublicTransitionFaultPoint::AfterStagedFsync))
+        {
+            return failure(PrivacyPublicTransitionError::FaultInjected,
+                           QStringLiteral("fault injected after staged fsync"));
+        }
+
+        applyingRecord.stage = PrivacyJournalStage::Applying;
+
+        if (!journalStore->compareAndUpdate(
+                applyingRecord, request.authoritativeJournalSha256,
+                &applyingHash, &journalError, &journalDetail))
+        {
+            return failure(PrivacyPublicTransitionError::JournalAdvanceFailed,
+                           journalDetail);
+        }
+
+        result.applyingJournalSha256 = applyingHash;
+
+        if (faulted(PrivacyPublicTransitionFaultPoint::AfterApplyingJournal))
+        {
+            result.error  = PrivacyPublicTransitionError::FaultInjected;
+            result.detail = QStringLiteral("fault injected after Applying journal stage");
+            return result;
+        }
+
+        const PrivacyJournalLoadResult applyingLoaded = journalStore->load(
+            request.journalRecord.transactionUuid);
+
+        if ((applyingLoaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+            !applyingLoaded.authoritative ||
+            (applyingLoaded.sha256 != applyingHash) ||
+            (applyingLoaded.record.stage != PrivacyJournalStage::Applying) ||
+            !rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
+            !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
+            !parentStillReachable(rootFd.get(), rootDevice, parent))
+        {
+            result.error  = PrivacyPublicTransitionError::RootIdentityMismatch;
+            result.detail = QStringLiteral("root, parent, or Applying journal changed before mutation");
+            return result;
+        }
+
+        inspection = inspectDisk();
+
+        if ((inspection.state != TransitionDiskState::ExactPre) &&
+            (inspection.state != TransitionDiskState::Ambiguous))
+        {
+            result.error  = inspectionFailure(inspection);
+            result.detail = QStringLiteral("file state changed after Applying journal advancement");
+            return result;
+        }
+    }
+    else
+    {
+        result.applyingJournalSha256 = applyingHash;
+
+        if (inspection.state == TransitionDiskState::Unknown)
+        {
+            result.error  = inspectionFailure(inspection);
+            result.detail = QStringLiteral("Applying replay found mixed or unknown public bytes");
+            return result;
+        }
+    }
+
+    bool mutateNamespace = (inspection.state == TransitionDiskState::ExactPre) ||
+                           ((initialStage == PrivacyJournalStage::ProtectedCopyVerified) &&
+                            (inspection.state == TransitionDiskState::Ambiguous));
+
+    if (mutateNamespace)
+    {
+        if (::fsync(inspection.preStage.descriptor.get()) != 0)
+        {
+            result.error  = PrivacyPublicTransitionError::IoFailure;
+            result.detail = QStringLiteral("immediate pre-mutation stage fsync failed");
+            return result;
+        }
+
+        if (faulted(PrivacyPublicTransitionFaultPoint::BeforeNamespaceMutation))
+        {
+            result.error  = PrivacyPublicTransitionError::FaultInjected;
+            result.detail = QStringLiteral("fault injected before namespace mutation");
+            return result;
+        }
+
+        if (!rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
+            !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
+            !parentStillReachable(rootFd.get(), rootDevice, parent) ||
+            !nameStillBindsFile(parent.descriptor.get(), stageName,
+                                inspection.preStage) ||
+            (exchange &&
+             !nameStillBindsFile(parent.descriptor.get(), publicName,
+                                 inspection.prePublic)) ||
+            (!exchange && !nameIsAbsent(parent.descriptor.get(), publicName)))
+        {
+            result.error  = PrivacyPublicTransitionError::RootIdentityMismatch;
+            result.detail = QStringLiteral("parent or file binding changed immediately before mutation");
+            return result;
+        }
+
+        bool atomicUnavailable = false;
+
+        if (!PrivacyPosixStorage::atomicRenameAt(
+                parent.descriptor.get(), stageName, publicName,
+                exchange ? PrivacyPosixStorage::AtomicRenameMode::Exchange
+                         : PrivacyPosixStorage::AtomicRenameMode::NoReplace,
+                &atomicUnavailable))
+        {
+            result.error = atomicUnavailable
+                         ? PrivacyPublicTransitionError::AtomicPublicationUnavailable
+                         : PrivacyPublicTransitionError::PublicationConflict;
+            result.detail = atomicUnavailable
+                          ? QStringLiteral("required renameat2 operation is unavailable")
+                          : QStringLiteral("atomic public-name mutation failed");
+            return result;
+        }
+
+        result.namespaceMutated = true;
+
+        if (faulted(PrivacyPublicTransitionFaultPoint::AfterNamespaceMutation))
+        {
+            result.error  = PrivacyPublicTransitionError::DurabilityUncertain;
+            result.detail = QStringLiteral("fault injected after namespace mutation before parent fsync");
+            return result;
+        }
+    }
 
     if (exchange)
     {
         result.displacedRelativePath = asset->stagedRelativePath;
-    }
-
-    if (faulted(PrivacyPublicTransitionFaultPoint::AfterNamespaceMutation))
-    {
-        result.error  = PrivacyPublicTransitionError::DurabilityUncertain;
-        result.detail = QStringLiteral("fault injected after namespace mutation before parent fsync");
-        return result;
     }
 
     if (::fsync(parent.descriptor.get()) != 0)
@@ -920,11 +1381,42 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
 
     const auto rollback = [&](const QString& reason)
     {
+        if (!result.namespaceMutated)
+        {
+            result.error  = PrivacyPublicTransitionError::ReconciliationRequired;
+            result.detail = reason + QStringLiteral("; replay will not mutate unknown bytes");
+            return result;
+        }
+
         if (faulted(PrivacyPublicTransitionFaultPoint::BeforeRollback))
         {
             result.error  = PrivacyPublicTransitionError::RollbackUncertain;
             result.detail = reason + QStringLiteral("; rollback fault injected before rename");
             return result;
+        }
+
+        if (request.installedUnixMode >= 0)
+        {
+            VerifiedFile installedBeforeRollback;
+            struct stat installedMetadata = {};
+
+            if ((openAndVerifyFile(parent.descriptor.get(), publicName,
+                                   rootDevice, *installedFact, true, false,
+                                   &installedBeforeRollback) !=
+                 FileOpenStatus::Verified) ||
+                (::fchmod(installedBeforeRollback.descriptor.get(), 0600) != 0) ||
+                (::fsync(installedBeforeRollback.descriptor.get()) != 0) ||
+                (::fstat(installedBeforeRollback.descriptor.get(),
+                         &installedMetadata) != 0) ||
+                ((installedMetadata.st_mode & 0777) != 0600) ||
+                !nameStillBindsFile(parent.descriptor.get(), publicName,
+                                    installedBeforeRollback))
+            {
+                result.error  = PrivacyPublicTransitionError::RollbackUncertain;
+                result.detail = reason + QStringLiteral(
+                    "; installed stage permissions cannot be reset before rollback");
+                return result;
+            }
         }
 
         bool unavailable = false;
@@ -999,6 +1491,22 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         result.error  = PrivacyPublicTransitionError::DurabilityUncertain;
         result.detail = QStringLiteral("fault injected after installed-byte verification");
         return result;
+    }
+
+    if (request.installedUnixMode >= 0)
+    {
+        struct stat installedMetadata = {};
+
+        if ((::fchmod(installed.descriptor.get(),
+                      static_cast<mode_t>(request.installedUnixMode)) != 0) ||
+            (::fsync(installed.descriptor.get()) != 0) ||
+            (::fstat(installed.descriptor.get(), &installedMetadata) != 0) ||
+            ((installedMetadata.st_mode & 07777) !=
+             static_cast<mode_t>(request.installedUnixMode)) ||
+            !nameStillBindsFile(parent.descriptor.get(), publicName, installed))
+        {
+            return rollback(QStringLiteral("installed public mode cannot be applied exactly"));
+        }
     }
 
     if (exchange)

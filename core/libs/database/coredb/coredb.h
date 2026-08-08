@@ -164,6 +164,23 @@ public:
                                         const PrivacyStore& store,
                                         const QList<PrivacyStoreBinding>& bindings,
                                         const PrivacyTransaction& transaction)                                    const;
+    bool beginPrivacyItemProtection(const PrivacyItem& item,
+                                    const PrivacyTransaction& transaction,
+                                    const PrivacyTransactionJournal& journal)                                    const;
+    bool publishPrivacyItemProtection(const PrivacyItem& item,
+                                      const PrivacyContainer& container,
+                                      const QList<PrivacyAsset>& assets,
+                                      const PrivacyTransaction& transaction)                                    const;
+    bool beginPrivacyItemUnprotection(const PrivacyTransaction& transaction,
+                                      const PrivacyTransactionJournal& journal)                                 const;
+    bool publishPrivacyItemUnprotection(qlonglong imageId,
+                                        const QString& itemUuid,
+                                        const QString& categoryUuid,
+                                        qlonglong expectedItemGeneration,
+                                        const QString& priorProtectTransactionUuid,
+                                        const PrivacyTransaction& transaction)                                  const;
+    bool finalizePrivacyItemUnprotection(const QString& transactionUuid,
+                                         const QString& categoryUuid)                                           const;
 
     /**
      * Returns the version used for the unique hash in this database.

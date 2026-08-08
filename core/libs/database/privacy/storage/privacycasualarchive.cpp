@@ -32,6 +32,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QIODevice>
 #include <QSet>
 #include <QStringList>
 #include <QTimeZone>
@@ -645,6 +646,20 @@ bool prepareMember(const PrivacyCasualArchiveMember& input,
         return false;
     }
 
+    if (((input.expectedDevice != 0) &&
+         (static_cast<quint64>(initialStat.st_dev) != input.expectedDevice)) ||
+        ((input.expectedInode != 0) &&
+         (static_cast<quint64>(initialStat.st_ino) != input.expectedInode)) ||
+        ((input.expectedLinkCount != 0) &&
+         (static_cast<quint64>(initialStat.st_nlink) != input.expectedLinkCount)) ||
+        ((input.expectedSize >= 0) &&
+         (static_cast<qlonglong>(initialStat.st_size) != input.expectedSize)))
+    {
+        ::close(fd);
+        setError(error, PrivacyCasualArchiveError::SourceChanged);
+        return false;
+    }
+
     QCryptographicHash hash(QCryptographicHash::Sha256);
     QByteArray buffer(IoChunkBytes, Qt::Uninitialized);
     qlonglong total = 0;
@@ -694,6 +709,14 @@ bool prepareMember(const PrivacyCasualArchiveMember& input,
     }
 
     ::close(fd);
+
+    if (!input.expectedSha256.isEmpty() &&
+        (hash.result() != input.expectedSha256))
+    {
+        setError(error, PrivacyCasualArchiveError::SourceChanged);
+        return false;
+    }
+
     prepared->device             = static_cast<quint64>(initialStat.st_dev);
     prepared->inode              = static_cast<quint64>(initialStat.st_ino);
     prepared->sourceMtimeSeconds = static_cast<qlonglong>(initialStat.st_mtime);
@@ -751,6 +774,9 @@ zip_source_t* sourceForPreparedMember(zip_t* const archive,
         (static_cast<quint64>(statBuffer.st_ino) != member.inode) ||
         (statBuffer.st_size != member.size) ||
         (statBuffer.st_mtime != member.sourceMtimeSeconds) ||
+        ((member.input.expectedLinkCount != 0) &&
+         (static_cast<quint64>(statBuffer.st_nlink) !=
+          member.input.expectedLinkCount)) ||
         (static_cast<quint32>(statBuffer.st_mode & 0xffffU) != member.unixMode))
     {
         ::close(fd);
@@ -924,6 +950,113 @@ bool readEncryptedEntry(zip_t* const archive, zip_uint64_t index,
         });
 
     if (!invoked && (error && (*error == PrivacyCasualArchiveError::None)))
+    {
+        setError(error, PrivacyCasualArchiveError::InvalidPassword);
+    }
+
+    return (invoked && result);
+}
+
+bool streamEncryptedEntry(zip_t* const archive, zip_uint64_t index,
+                          const PrivacyPassword& password,
+                          const ExpectedMember& expected,
+                          const PrivacyCasualArchiveEngine::CancellationCheck& isCancelled,
+                          QIODevice* const destination,
+                          PrivacyCasualArchiveError* const error)
+{
+    if (!destination || !destination->isOpen() || !destination->isWritable())
+    {
+        setError(error, PrivacyCasualArchiveError::DestinationWriteFailed);
+        return false;
+    }
+
+    bool result = false;
+    const bool invoked = password.withUtf8CString(
+        [&](const char* passwordBytes)
+        {
+            zip_file_t* const file =
+                zip_fopen_index_encrypted(archive, index, 0, passwordBytes);
+
+            if (!file)
+            {
+                setError(error, PrivacyCasualArchiveError::DecryptionFailed);
+                return false;
+            }
+
+            QCryptographicHash hash(QCryptographicHash::Sha256);
+            QByteArray buffer(IoChunkBytes, Qt::Uninitialized);
+            qlonglong total = 0;
+
+            while (total < expected.size)
+            {
+                if (cancelled(isCancelled))
+                {
+                    setError(error, PrivacyCasualArchiveError::Cancelled);
+                    break;
+                }
+
+                const zip_uint64_t wanted = static_cast<zip_uint64_t>(
+                    std::min<qlonglong>(buffer.size(), expected.size - total));
+                const zip_int64_t count = zip_fread(file, buffer.data(), wanted);
+
+                if (count <= 0)
+                {
+                    setError(error, (count < 0)
+                                    ? PrivacyCasualArchiveError::DecryptionFailed
+                                    : PrivacyCasualArchiveError::SizeMismatch);
+                    break;
+                }
+
+                qint64 written = 0;
+
+                while (written < count)
+                {
+                    const qint64 amount = destination->write(
+                        buffer.constData() + written, count - written);
+
+                    if (amount <= 0)
+                    {
+                        setError(error, PrivacyCasualArchiveError::DestinationWriteFailed);
+                        break;
+                    }
+
+                    written += amount;
+                }
+
+                if (written != count)
+                {
+                    break;
+                }
+
+                hash.addData(QByteArrayView(buffer.constData(),
+                                            static_cast<qsizetype>(count)));
+                total += count;
+            }
+
+            if ((total == expected.size) && !cancelled(isCancelled))
+            {
+                char extra = 0;
+                const zip_int64_t extraCount = zip_fread(file, &extra, 1);
+                result = ((extraCount == 0) && (hash.result() == expected.sha256));
+
+                if (!result)
+                {
+                    setError(error, (extraCount == 0)
+                                    ? PrivacyCasualArchiveError::HashMismatch
+                                    : PrivacyCasualArchiveError::SizeMismatch);
+                }
+            }
+
+            if (zip_fclose(file) != 0)
+            {
+                result = false;
+                setError(error, PrivacyCasualArchiveError::DecryptionFailed);
+            }
+
+            return result;
+        });
+
+    if (!invoked && error && (*error == PrivacyCasualArchiveError::None))
     {
         setError(error, PrivacyCasualArchiveError::InvalidPassword);
     }
@@ -1403,7 +1536,14 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
         return stage;
     }
 
+    const bool exactStageRequested = !request.stagingArchivePath.isEmpty();
+
     if (!safeDestination(request.finalArchivePath) ||
+        (exactStageRequested &&
+         (!safeStagingPath(request.stagingArchivePath,
+                           request.finalArchivePath, false) ||
+          (QFileInfo(request.stagingArchivePath).absolutePath() !=
+           QFileInfo(request.finalArchivePath).absolutePath()))) ||
         !isCanonicalUuid(request.categoryUuid) ||
         !isCanonicalUuid(request.containerUuid) ||
         !isCanonicalUuid(request.itemUuid) ||
@@ -1459,7 +1599,9 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
     }
 
     const QString directory = QFileInfo(request.finalArchivePath).absolutePath();
-    const QString stagingPath = directory + QLatin1String("/.digikam-private-stage-") +
+    const QString stagingPath = exactStageRequested
+                              ? request.stagingArchivePath
+                              : directory + QLatin1String("/.digikam-private-stage-") +
                                 QUuid::createUuid().toString(QUuid::WithoutBraces) +
                                 QLatin1String(".zip");
     int openError = 0;
@@ -1694,6 +1836,128 @@ bool PrivacyCasualArchiveEngine::verifyStagedArchive(
 
     return verifyArchive(stage.m_stagingPath, stage.m_expectedManifest,
                          password, isCancelled, error);
+}
+
+bool PrivacyCasualArchiveEngine::restoreMember(
+    const PrivacyCasualArchiveRestoreRequest& request,
+    const PrivacyPassword& password, QIODevice* const destination,
+    const CancellationCheck& isCancelled,
+    PrivacyCasualArchiveError* const error) const
+{
+    setError(error, PrivacyCasualArchiveError::None);
+
+    if (!checkCapabilities(error) || !password.isValid() || !destination ||
+        !destination->isOpen() || !destination->isWritable() ||
+        !isSafeAbsoluteFilePath(request.archivePath, true) ||
+        !isCanonicalUuid(request.categoryUuid) ||
+        !isCanonicalUuid(request.containerUuid) ||
+        !isCanonicalUuid(request.itemUuid) ||
+        !isSafeOriginalName(request.originalName) || (request.role <= 0) ||
+        (request.ordinal < 0) ||
+        (request.protectedRelativePath != expectedMemberPath(
+             request.role, request.ordinal, request.originalName)) ||
+        (request.expectedArchiveSize < 0) ||
+        (request.expectedArchiveSha256.size() != 32) ||
+        (request.expectedMemberSize < 0) ||
+        (request.expectedMemberSha256.size() != 32))
+    {
+        setError(error, PrivacyCasualArchiveError::InvalidRequest);
+        return false;
+    }
+
+    QByteArray archiveHash;
+    qlonglong archiveSize = -1;
+
+    if (!hashFile(request.archivePath, &archiveHash, &archiveSize, isCancelled) ||
+        (archiveHash != request.expectedArchiveSha256) ||
+        (archiveSize != request.expectedArchiveSize))
+    {
+        setError(error, cancelled(isCancelled)
+                        ? PrivacyCasualArchiveError::Cancelled
+                        : PrivacyCasualArchiveError::ExistingArchiveMismatch);
+        return false;
+    }
+
+    QByteArray manifest;
+
+    if (!readManifestForResume(request.archivePath, password, isCancelled,
+                               &manifest, error) ||
+        !verifyArchive(request.archivePath, manifest, password,
+                       isCancelled, error))
+    {
+        return false;
+    }
+
+    QList<ExpectedMember> members;
+    QJsonObject semantic;
+
+    if (!parseManifest(manifest, &members, &semantic) ||
+        (semantic.value(QLatin1String("categoryUuid")).toString() !=
+         request.categoryUuid) ||
+        (semantic.value(QLatin1String("containerUuid")).toString() !=
+         request.containerUuid) ||
+        (semantic.value(QLatin1String("itemUuid")).toString() !=
+         request.itemUuid))
+    {
+        setError(error, PrivacyCasualArchiveError::ManifestInvalid);
+        return false;
+    }
+
+    const auto memberIt = std::find_if(
+        members.cbegin(), members.cend(),
+        [&request](const ExpectedMember& member)
+        {
+            return ((member.archiveName == request.protectedRelativePath) &&
+                    (member.originalName == request.originalName) &&
+                    (member.role == request.role) &&
+                    (member.ordinal == request.ordinal) &&
+                    (member.size == request.expectedMemberSize) &&
+                    (member.sha256 == request.expectedMemberSha256));
+        });
+
+    if (memberIt == members.cend())
+    {
+        setError(error, PrivacyCasualArchiveError::ManifestInvalid);
+        return false;
+    }
+
+    int zipError = 0;
+    const QByteArray encodedPath = QFile::encodeName(request.archivePath);
+    zip_t* const archive = zip_open(encodedPath.constData(),
+                                    ZIP_RDONLY | ZIP_CHECKCONS, &zipError);
+
+    if (!archive)
+    {
+        setError(error, PrivacyCasualArchiveError::ArchiveOpenFailed);
+        return false;
+    }
+
+    const QByteArray encodedMember = request.protectedRelativePath.toUtf8();
+    const zip_int64_t index = zip_name_locate(archive, encodedMember.constData(),
+                                               ZIP_FL_ENC_UTF_8);
+    const bool restored = (index >= 0) && streamEncryptedEntry(
+        archive, static_cast<zip_uint64_t>(index), password, *memberIt,
+        isCancelled, destination, error);
+    zip_discard(archive);
+
+    QByteArray finalArchiveHash;
+    qlonglong finalArchiveSize = -1;
+    const bool archiveStillExact = restored &&
+        hashFile(request.archivePath, &finalArchiveHash, &finalArchiveSize,
+                 isCancelled) &&
+        (finalArchiveHash == request.expectedArchiveSha256) &&
+        (finalArchiveSize == request.expectedArchiveSize);
+
+    if (restored && !archiveStillExact)
+    {
+        setError(error, PrivacyCasualArchiveError::ExistingArchiveMismatch);
+    }
+    else if (!restored && error && (*error == PrivacyCasualArchiveError::None))
+    {
+        setError(error, PrivacyCasualArchiveError::MemberReadFailed);
+    }
+
+    return archiveStillExact;
 }
 
 bool PrivacyCasualArchiveEngine::publishNew(

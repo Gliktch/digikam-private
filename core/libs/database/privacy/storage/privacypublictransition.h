@@ -94,6 +94,9 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyPublicTransitionRequest
         static_cast<PrivacyPublicTransitionFactKind>(0);
     PrivacyPublicTransitionFactKind installedFact =
         static_cast<PrivacyPublicTransitionFactKind>(0);
+    /** Optional final public mode applied only after exact installed-byte
+     * verification. -1 preserves the staged mode. */
+    int                             installedUnixMode = -1;
 };
 
 struct DIGIKAM_DATABASE_EXPORT PrivacyPublicTransitionResult
@@ -113,6 +116,30 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyPublicTransitionResult
     }
 };
 
+struct DIGIKAM_DATABASE_EXPORT PrivacyPublicReplacementStageRequest
+{
+    QString                        absoluteRootPath;
+    PrivacyJournalRootExpectation rootExpectation;
+    PrivacyJournalRecord          journalRecord;
+    QByteArray                    authoritativeJournalSha256;
+    QString                       itemUuid;
+    int                           role    = 0;
+    int                           ordinal = -1;
+};
+
+struct DIGIKAM_DATABASE_EXPORT PrivacyPublicReplacementStageResult
+{
+    PrivacyPublicTransitionError error = PrivacyPublicTransitionError::None;
+    QString                      detail;
+    QString                      stagedRelativePath;
+    PrivacyJournalObjectFact     fact;
+
+    bool succeeded() const
+    {
+        return (error == PrivacyPublicTransitionError::None);
+    }
+};
+
 /**
  * Performs one journal-governed public-name mutation. It never creates
  * archives, proxies or transaction records and never removes a displaced
@@ -123,11 +150,21 @@ class DIGIKAM_DATABASE_EXPORT PrivacyPublicTransitionEngine
 {
 public:
 
-    using FaultHook = std::function<bool(PrivacyPublicTransitionFaultPoint)>;
+    using FaultHook     = std::function<bool(PrivacyPublicTransitionFaultPoint)>;
+    using StageProducer = std::function<bool(int, QString*)>;
 
     PrivacyPublicTransitionEngine() = default;
 
     void setFaultHook(const FaultHook& hook);
+
+    /** Creates the selected Prepared asset's reserved same-parent stage. The
+     * producer receives an owned, exclusive 0600 fd which remains owned here. */
+    PrivacyPublicReplacementStageResult stageReplacement(
+        const PrivacyPublicReplacementStageRequest& request,
+        const QByteArray& bytes) const;
+    PrivacyPublicReplacementStageResult stageReplacement(
+        const PrivacyPublicReplacementStageRequest& request,
+        const StageProducer& producer) const;
     PrivacyPublicTransitionResult execute(
         const PrivacyPublicTransitionRequest& request) const;
 

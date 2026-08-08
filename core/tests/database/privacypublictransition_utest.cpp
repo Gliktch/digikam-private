@@ -102,7 +102,11 @@ public:
                     bool publicPresent = true,
                     bool advanceToProtected = true,
                     bool adjacentContainer = true,
-                    quint64 currentLinkCount = 1)
+                    quint64 currentLinkCount = 1,
+                    bool createStage = true,
+                    bool identicalPublicFacts = false,
+                    PrivacyJournalStage initialStage =
+                        PrivacyJournalStage::Staged)
     {
         if (!root.isValid())
         {
@@ -156,9 +160,13 @@ public:
             ((type == PrivacyTransactionType::ProtectItem) ||
              (type == PrivacyTransactionType::CompatibilityRelock));
         const QByteArray stagedBytes = installedIsProxy ? ProxyBytes : OriginalBytes;
-        const QByteArray currentBytes = installedIsProxy ? OriginalBytes : ProxyBytes;
+        const QByteArray currentBytes = identicalPublicFacts
+                                      ? stagedBytes
+                                      : (installedIsProxy
+                                             ? OriginalBytes
+                                             : ProxyBytes);
 
-        if (!writeNew(stagedPath, stagedBytes) ||
+        if ((createStage && !writeNew(stagedPath, stagedBytes)) ||
             (adjacentContainer && !writeNew(containerPath, ContainerBytes)) ||
             (publicPresent && !writeNew(publicPath, currentBytes, 0640)))
         {
@@ -194,6 +202,12 @@ public:
         asset.proxy                 = fact(ProxyBytes);
         asset.container             = fact(ContainerBytes);
 
+        if (identicalPublicFacts)
+        {
+            asset.original = fact(stagedBytes);
+            asset.proxy    = fact(stagedBytes);
+        }
+
         if (installedIsProxy)
         {
             asset.original.linkCount = currentLinkCount;
@@ -214,7 +228,7 @@ public:
         record.credentialGeneration     = 3;
         record.fromCredentialGeneration = 3;
         record.toCredentialGeneration   = 3;
-        record.stage                    = PrivacyJournalStage::Staged;
+        record.stage                    = initialStage;
         record.assets                   = { asset };
 
         if (!store->create(record, &journalHash, &journalError, &detail))
@@ -237,6 +251,34 @@ public:
         }
 
         return true;
+    }
+
+    bool refreshJournal()
+    {
+        const PrivacyJournalLoadResult loaded = store->load(TransactionUuid);
+
+        if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+            !loaded.authoritative || !loaded.hasRecord)
+        {
+            return false;
+        }
+
+        record      = loaded.record;
+        journalHash = loaded.sha256;
+        return true;
+    }
+
+    PrivacyPublicReplacementStageRequest stageRequest() const
+    {
+        PrivacyPublicReplacementStageRequest request;
+        request.absoluteRootPath           = root.path();
+        request.rootExpectation            = expectation;
+        request.journalRecord              = record;
+        request.authoritativeJournalSha256 = journalHash;
+        request.itemUuid                   = ItemUuid;
+        request.role                       = 1;
+        request.ordinal                    = 0;
+        return request;
     }
 
     PrivacyPublicTransitionRequest request(
@@ -295,10 +337,13 @@ private Q_SLOTS:
     void testUnprotectDirection();
     void testCrossRootProtectedProof();
     void testAcknowledgedProtectHardlinks();
+    void testDescriptorConfinedReplacementStaging();
     void testRejectJournalStageCasAndFactMismatch();
     void testHostileFilesystemEntries();
     void testParentReplacementAndNameRace();
     void testEveryNormalFaultBoundary();
+    void testApplyingReplayBeforeAndAfterMutation();
+    void testApplyingReplayRejectsMixedBytes();
     void testFinalJournalFailureRequiresReconciliation();
     void testRollbackSuccessAndFailure();
 };
@@ -379,6 +424,130 @@ void PrivacyPublicTransitionTest::testAcknowledgedProtectHardlinks()
     struct stat displaced = {};
     QCOMPARE(::stat(QFile::encodeName(fixture.stagedPath).constData(), &displaced), 0);
     QCOMPARE(static_cast<quint64>(displaced.st_nlink), quint64(2));
+}
+
+void PrivacyPublicTransitionTest::testDescriptorConfinedReplacementStaging()
+{
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(PrivacyTransactionType::ProtectItem,
+                                   true, false, true, 1, false, false,
+                                   PrivacyJournalStage::Prepared));
+        PrivacyPublicTransitionEngine engine;
+        const PrivacyPublicReplacementStageResult result =
+            engine.stageReplacement(fixture.stageRequest(), ProxyBytes);
+        QVERIFY2(result.succeeded(), qPrintable(result.detail));
+        QCOMPARE(result.stagedRelativePath, fixture.stagedRelativePath);
+        QCOMPARE(result.fact.presence,
+                 PrivacyJournalExpectedPresence::Present);
+        QCOMPARE(result.fact.size, qlonglong(ProxyBytes.size()));
+        QCOMPARE(result.fact.linkCount, quint64(1));
+        QCOMPARE(result.fact.sha256, digest(ProxyBytes));
+        QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
+
+        struct stat staged = {};
+        QCOMPARE(::stat(QFile::encodeName(fixture.stagedPath).constData(),
+                        &staged), 0);
+        QCOMPARE(staged.st_mode & 0777, mode_t(0600));
+        QCOMPARE(engine.stageReplacement(fixture.stageRequest(), ProxyBytes).error,
+                 PrivacyPublicTransitionError::UnexpectedExistingFile);
+        QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(PrivacyTransactionType::ProtectItem,
+                                   true, false, true, 1, false, false,
+                                   PrivacyJournalStage::Prepared));
+        bool producerSawSafeFd = false;
+        PrivacyPublicTransitionEngine engine;
+        const PrivacyPublicReplacementStageResult result =
+            engine.stageReplacement(
+                fixture.stageRequest(),
+                [&producerSawSafeFd](int descriptor, QString*)
+                {
+                    struct stat facts = {};
+                    producerSawSafeFd = ((::fstat(descriptor, &facts) == 0) &&
+                                         S_ISREG(facts.st_mode) &&
+                                         ((facts.st_mode & 0777) == 0600) &&
+                                         (facts.st_nlink == 1));
+                    return producerSawSafeFd &&
+                           (::write(descriptor, ProxyBytes.constData(), 7) == 7) &&
+                           (::write(descriptor, ProxyBytes.constData() + 7,
+                                    static_cast<size_t>(ProxyBytes.size() - 7)) ==
+                            ProxyBytes.size() - 7);
+                });
+        QVERIFY2(result.succeeded(), qPrintable(result.detail));
+        QVERIFY(producerSawSafeFd);
+        QCOMPARE(result.fact.sha256, digest(ProxyBytes));
+        QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(PrivacyTransactionType::ProtectItem,
+                                   true, false, true, 1, false, false,
+                                   PrivacyJournalStage::Prepared));
+        PrivacyPublicTransitionEngine engine;
+        const PrivacyPublicReplacementStageResult result =
+            engine.stageReplacement(
+                fixture.stageRequest(),
+                [](int descriptor, QString* detail)
+                {
+                    ::write(descriptor, ProxyBytes.constData(), 4);
+                    *detail = QStringLiteral("synthetic producer failure");
+                    return false;
+                });
+        QCOMPARE(result.error, PrivacyPublicTransitionError::IoFailure);
+        QCOMPARE(result.detail, QStringLiteral("synthetic producer failure"));
+        QVERIFY(!QFileInfo::exists(fixture.stagedPath));
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(PrivacyTransactionType::ProtectItem,
+                                   true, false, true, 1, false, false,
+                                   PrivacyJournalStage::Prepared));
+        QCOMPARE(::symlink("photo.jpg",
+                           QFile::encodeName(fixture.stagedPath).constData()), 0);
+        PrivacyPublicTransitionEngine engine;
+        QCOMPARE(engine.stageReplacement(fixture.stageRequest(), ProxyBytes).error,
+                 PrivacyPublicTransitionError::UnsafePath);
+        QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
+        QVERIFY(QFileInfo(fixture.stagedPath).isSymLink());
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(PrivacyTransactionType::ProtectItem,
+                                   true, false, true, 1, false, false,
+                                   PrivacyJournalStage::Prepared));
+        const QString moved = fixture.root.path() + QStringLiteral("/album/moved");
+        const QString outside = fixture.root.path() + QStringLiteral("/outside");
+        QVERIFY(QDir().mkdir(outside));
+        bool replaced = false;
+        PrivacyPublicTransitionEngine engine;
+        const PrivacyPublicReplacementStageResult result =
+            engine.stageReplacement(
+                fixture.stageRequest(),
+                [&fixture, moved, outside, &replaced](int descriptor, QString*)
+                {
+                    replaced = QDir().rename(fixture.publicDirectory, moved) &&
+                               (::symlink(QFile::encodeName(outside).constData(),
+                                          QFile::encodeName(fixture.publicDirectory)
+                                              .constData()) == 0);
+                    return replaced &&
+                           (::write(descriptor, ProxyBytes.constData(),
+                                    static_cast<size_t>(ProxyBytes.size())) ==
+                            ProxyBytes.size());
+                });
+        QVERIFY(replaced);
+        QCOMPARE(result.error, PrivacyPublicTransitionError::FileFactMismatch);
+        QVERIFY(!QFileInfo::exists(outside + QLatin1Char('/') +
+                                   QFileInfo(fixture.stagedPath).fileName()));
+        QVERIFY(!QFileInfo::exists(moved + QLatin1Char('/') +
+                                   QFileInfo(fixture.stagedPath).fileName()));
+    }
 }
 
 void PrivacyPublicTransitionTest::testRejectJournalStageCasAndFactMismatch()
@@ -680,6 +849,159 @@ void PrivacyPublicTransitionTest::testEveryNormalFaultBoundary()
     }
 }
 
+void PrivacyPublicTransitionTest::testApplyingReplayBeforeAndAfterMutation()
+{
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize());
+        PrivacyPublicTransitionEngine first;
+        first.setFaultHook([](PrivacyPublicTransitionFaultPoint point)
+        {
+            return (point ==
+                    PrivacyPublicTransitionFaultPoint::AfterApplyingJournal);
+        });
+        QCOMPARE(first.execute(fixture.request()).error,
+                 PrivacyPublicTransitionError::FaultInjected);
+        QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
+        QVERIFY(fixture.refreshJournal());
+        QCOMPARE(fixture.record.stage, PrivacyJournalStage::Applying);
+
+        PrivacyPublicTransitionEngine replay;
+        const PrivacyPublicTransitionResult resumed =
+            replay.execute(fixture.request());
+        QVERIFY2(resumed.succeeded(), qPrintable(resumed.detail));
+        QVERIFY(resumed.namespaceMutated);
+        QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+        QVERIFY(fixture.refreshJournal());
+        QCOMPARE(fixture.record.stage,
+                 PrivacyJournalStage::PublicStateVerified);
+
+        const PrivacyPublicTransitionResult idempotent =
+            replay.execute(fixture.request());
+        QVERIFY2(idempotent.succeeded(), qPrintable(idempotent.detail));
+        QVERIFY(!idempotent.namespaceMutated);
+        QVERIFY(idempotent.installedVerified);
+        QVERIFY(idempotent.displacedVerified);
+        QCOMPARE(idempotent.finalJournalSha256, fixture.journalHash);
+        QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize());
+        PrivacyPublicTransitionEngine first;
+        first.setFaultHook([](PrivacyPublicTransitionFaultPoint point)
+        {
+            return (point ==
+                    PrivacyPublicTransitionFaultPoint::AfterNamespaceMutation);
+        });
+        QCOMPARE(first.execute(fixture.request()).error,
+                 PrivacyPublicTransitionError::DurabilityUncertain);
+        QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+        QVERIFY(fixture.refreshJournal());
+        QCOMPARE(fixture.record.stage, PrivacyJournalStage::Applying);
+
+        PrivacyPublicTransitionEngine replay;
+        const PrivacyPublicTransitionResult resumed =
+            replay.execute(fixture.request());
+        QVERIFY2(resumed.succeeded(), qPrintable(resumed.detail));
+        QVERIFY(!resumed.namespaceMutated);
+        QVERIFY(resumed.installedVerified);
+        QVERIFY(resumed.displacedVerified);
+        QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+        QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+                 PrivacyJournalStage::PublicStateVerified);
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(PrivacyTransactionType::ProtectItem,
+                                   true, true, true, 1, true, true));
+        QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
+        PrivacyPublicTransitionEngine first;
+        first.setFaultHook([](PrivacyPublicTransitionFaultPoint point)
+        {
+            return (point ==
+                    PrivacyPublicTransitionFaultPoint::AfterApplyingJournal);
+        });
+        QCOMPARE(first.execute(fixture.request()).error,
+                 PrivacyPublicTransitionError::FaultInjected);
+        QVERIFY(fixture.refreshJournal());
+        QCOMPARE(fixture.record.stage, PrivacyJournalStage::Applying);
+
+        PrivacyPublicTransitionEngine replay;
+        const PrivacyPublicTransitionResult resumed =
+            replay.execute(fixture.request());
+        QVERIFY2(resumed.succeeded(), qPrintable(resumed.detail));
+        QVERIFY(!resumed.namespaceMutated);
+        QVERIFY(resumed.installedVerified);
+        QVERIFY(resumed.displacedVerified);
+        QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
+        QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+                 PrivacyJournalStage::PublicStateVerified);
+    }
+}
+
+void PrivacyPublicTransitionTest::testApplyingReplayRejectsMixedBytes()
+{
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize());
+        PrivacyPublicTransitionEngine first;
+        first.setFaultHook([](PrivacyPublicTransitionFaultPoint point)
+        {
+            return (point ==
+                    PrivacyPublicTransitionFaultPoint::AfterApplyingJournal);
+        });
+        QCOMPARE(first.execute(fixture.request()).error,
+                 PrivacyPublicTransitionError::FaultInjected);
+        QVERIFY(fixture.refreshJournal());
+        QVERIFY(replaceBytes(fixture.stagedPath,
+                             QByteArrayLiteral("unknown-staged-bytes")));
+
+        PrivacyPublicTransitionEngine replay;
+        QCOMPARE(replay.execute(fixture.request()).error,
+                 PrivacyPublicTransitionError::FileFactMismatch);
+        QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
+        QCOMPARE(readBytes(fixture.stagedPath),
+                 QByteArrayLiteral("unknown-staged-bytes"));
+        QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+                 PrivacyJournalStage::Applying);
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize());
+        PrivacyPublicTransitionEngine first;
+        first.setFaultHook([](PrivacyPublicTransitionFaultPoint point)
+        {
+            return (point ==
+                    PrivacyPublicTransitionFaultPoint::AfterNamespaceMutation);
+        });
+        QCOMPARE(first.execute(fixture.request()).error,
+                 PrivacyPublicTransitionError::DurabilityUncertain);
+        QVERIFY(fixture.refreshJournal());
+        QVERIFY(replaceBytes(fixture.publicPath,
+                             QByteArrayLiteral("unknown-public-bytes")));
+
+        PrivacyPublicTransitionEngine replay;
+        QCOMPARE(replay.execute(fixture.request()).error,
+                 PrivacyPublicTransitionError::FileFactMismatch);
+        QCOMPARE(readBytes(fixture.publicPath),
+                 QByteArrayLiteral("unknown-public-bytes"));
+        QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+        QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+                 PrivacyJournalStage::Applying);
+    }
+}
+
 void PrivacyPublicTransitionTest::testFinalJournalFailureRequiresReconciliation()
 {
     TransitionFixture fixture;
@@ -800,6 +1122,36 @@ void PrivacyPublicTransitionTest::testRollbackSuccessAndFailure()
         QCOMPARE(result.error, PrivacyPublicTransitionError::RollbackUncertain);
         QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
         QCOMPARE(readBytes(fixture.stagedPath), QByteArrayLiteral("tampered-installed"));
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(PrivacyTransactionType::UnprotectItem));
+        bool tampered = false;
+        PrivacyPublicTransitionEngine engine;
+        engine.setFaultHook([&fixture, &tampered](
+            PrivacyPublicTransitionFaultPoint point)
+        {
+            if (point ==
+                PrivacyPublicTransitionFaultPoint::AfterInstalledVerification)
+            {
+                tampered = replaceBytes(
+                    fixture.stagedPath, QByteArrayLiteral("tampered-displaced"));
+                return false;
+            }
+
+            return (point == PrivacyPublicTransitionFaultPoint::AfterRollback);
+        });
+        PrivacyPublicTransitionRequest request = fixture.request();
+        request.installedUnixMode = 0640;
+        const PrivacyPublicTransitionResult result = engine.execute(request);
+        QVERIFY(tampered);
+        QCOMPARE(result.error, PrivacyPublicTransitionError::RollbackUncertain);
+        QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+        struct stat stageFacts = {};
+        QCOMPARE(::stat(QFile::encodeName(fixture.stagedPath).constData(),
+                        &stageFacts), 0);
+        QCOMPARE(stageFacts.st_mode & 0777, mode_t(0600));
     }
 
     {

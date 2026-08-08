@@ -27,6 +27,7 @@
 #include "coredb.h"
 #include "coredbaccess.h"
 #include "privacycontracts.h"
+#include "privacytransactionjournal.h"
 
 namespace Digikam
 {
@@ -563,6 +564,104 @@ bool PrivacyRepository::publishCategoryCreation(
 
     return access.db()->publishPrivacyCategoryCreation(category, credential, store,
                                                         bindings, transaction);
+}
+
+bool PrivacyRepository::beginItemProtection(
+    const PrivacyItem& item, const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    PrivacyItem normalizedItem = item;
+    normalizedItem.uuid = normalizedUuid(item.uuid);
+    normalizedItem.categoryUuid = normalizedUuid(item.categoryUuid);
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    normalizedTransaction.itemUuid = normalizedUuid(transaction.itemUuid);
+    PrivacyTransactionJournal normalizedJournal = journal;
+    normalizedJournal.transactionUuid = normalizedUuid(journal.transactionUuid);
+    normalizedJournal.rootUuid = normalizedUuid(journal.rootUuid);
+    CoreDbAccess access;
+
+    return access.db()->beginPrivacyItemProtection(normalizedItem,
+                                                    normalizedTransaction,
+                                                    normalizedJournal);
+}
+
+bool PrivacyRepository::publishItemProtection(
+    const PrivacyItem& item, const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets,
+    const PrivacyTransaction& transaction) const
+{
+    PrivacyItem normalizedItem = item;
+    normalizedItem.uuid = normalizedUuid(item.uuid);
+    normalizedItem.categoryUuid = normalizedUuid(item.categoryUuid);
+    PrivacyContainer normalizedContainer = container;
+    normalizedContainer.uuid = normalizedUuid(container.uuid);
+    normalizedContainer.itemUuid = normalizedUuid(container.itemUuid);
+    normalizedContainer.rootUuid = normalizedUuid(container.rootUuid);
+    QList<PrivacyAsset> normalizedAssets = assets;
+
+    for (PrivacyAsset& asset : normalizedAssets)
+    {
+        asset.itemUuid = normalizedUuid(asset.itemUuid);
+        asset.publicRootUuid = normalizedUuid(asset.publicRootUuid);
+        asset.containerUuid = normalizedUuid(asset.containerUuid);
+    }
+
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    normalizedTransaction.itemUuid = normalizedUuid(transaction.itemUuid);
+    CoreDbAccess access;
+
+    return access.db()->publishPrivacyItemProtection(normalizedItem,
+                                                      normalizedContainer,
+                                                      normalizedAssets,
+                                                      normalizedTransaction);
+}
+
+bool PrivacyRepository::beginItemUnprotection(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    normalizedTransaction.itemUuid = normalizedUuid(transaction.itemUuid);
+    PrivacyTransactionJournal normalizedJournal = journal;
+    normalizedJournal.transactionUuid = normalizedUuid(journal.transactionUuid);
+    normalizedJournal.rootUuid = normalizedUuid(journal.rootUuid);
+    CoreDbAccess access;
+
+    return access.db()->beginPrivacyItemUnprotection(normalizedTransaction,
+                                                      normalizedJournal);
+}
+
+bool PrivacyRepository::publishItemUnprotection(
+    qlonglong imageId, const QString& itemUuid, const QString& categoryUuid,
+    qlonglong expectedItemGeneration,
+    const QString& priorProtectTransactionUuid,
+    const PrivacyTransaction& transaction) const
+{
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    normalizedTransaction.itemUuid = normalizedUuid(transaction.itemUuid);
+    CoreDbAccess access;
+
+    return access.db()->publishPrivacyItemUnprotection(
+        imageId, normalizedUuid(itemUuid), normalizedUuid(categoryUuid),
+        expectedItemGeneration, normalizedUuid(priorProtectTransactionUuid),
+        normalizedTransaction);
+}
+
+bool PrivacyRepository::finalizeItemUnprotection(
+    const QString& transactionUuid, const QString& categoryUuid) const
+{
+    CoreDbAccess access;
+
+    return access.db()->finalizePrivacyItemUnprotection(
+        normalizedUuid(transactionUuid), normalizedUuid(categoryUuid));
 }
 
 bool PrivacyRepository::loadSnapshot(QList<PrivacyCategory>* categories,

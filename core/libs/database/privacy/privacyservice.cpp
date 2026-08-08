@@ -46,6 +46,8 @@ void PrivacyService::reset(const QList<PrivacyCategory>& categories,
     m_categoryTagVisibilityModes.clear();
     m_categoryEpochs.clear();
     m_itemCategories.clear();
+    m_itemUuids.clear();
+    m_imageIdsByItemUuid.clear();
     m_itemGenerations.clear();
     m_initialized = false;
 
@@ -61,26 +63,47 @@ void PrivacyService::reset(const QList<PrivacyCategory>& categories,
         }
     }
 
+    QHash<qlonglong, int> imageIdCounts;
+    QHash<QString, int> itemUuidCounts;
+
+    for (const PrivacyItem& item : items)
+    {
+        if (item.imageId > 0)
+        {
+            ++imageIdCounts[item.imageId];
+            ++itemUuidCounts[normalizedUuid(item.uuid)];
+        }
+    }
+
     for (const PrivacyItem& item : items)
     {
         if (item.imageId > 0)
         {
             const QString categoryUuid = normalizedUuid(item.categoryUuid);
+            const QString itemUuid = normalizedUuid(item.uuid);
 
-            if (m_itemCategories.contains(item.imageId))
+            if (!item.isValid() || (imageIdCounts.value(item.imageId) != 1) ||
+                itemUuid.isEmpty() || (itemUuidCounts.value(itemUuid) != 1))
             {
-                // A duplicate mapping cannot occur in a valid schema. Keep the
-                // item protected, but make the conflicting category impossible
-                // to unlock until the database inconsistency is repaired.
+                // Malformed or duplicate mappings remain protected but cannot
+                // inherit an unlock state until the durable facts are repaired.
 
                 m_itemCategories.insert(item.imageId, QString());
+                m_itemUuids.insert(item.imageId, QString());
                 m_itemGenerations.insert(item.imageId, -1);
+
+                if (!itemUuid.isEmpty())
+                {
+                    m_imageIdsByItemUuid.insert(itemUuid, -1);
+                }
             }
             else
             {
                 m_itemCategories.insert(item.imageId, categoryUuid);
+                m_itemUuids.insert(item.imageId, itemUuid);
+                m_imageIdsByItemUuid.insert(itemUuid, item.imageId);
                 m_itemGenerations.insert(item.imageId,
-                                         item.isValid() ? item.generation : -1);
+                                         item.generation);
             }
         }
     }
@@ -127,6 +150,64 @@ bool PrivacyService::addCategory(const PrivacyCategory& category)
     m_categoryUnlockState.insert(uuid, false);
     m_categoryTagVisibilityModes.insert(uuid, category.tagVisibilityMode);
     m_categoryEpochs.insert(uuid, advanceEpoch());
+
+    return true;
+}
+
+bool PrivacyService::addItem(const PrivacyItem& item)
+{
+    if (!item.isValid())
+    {
+        return false;
+    }
+
+    QWriteLocker locker(&m_lock);
+    const QString categoryUuid = normalizedUuid(item.categoryUuid);
+    const QString itemUuid = normalizedUuid(item.uuid);
+
+    if (!m_initialized || categoryUuid.isEmpty() || itemUuid.isEmpty() ||
+        !m_categoryUnlockState.contains(categoryUuid) ||
+        m_itemCategories.contains(item.imageId) ||
+        m_imageIdsByItemUuid.contains(itemUuid))
+    {
+        return false;
+    }
+
+    m_itemCategories.insert(item.imageId, categoryUuid);
+    m_itemUuids.insert(item.imageId, itemUuid);
+    m_imageIdsByItemUuid.insert(itemUuid, item.imageId);
+    m_itemGenerations.insert(item.imageId, item.generation);
+    m_categoryEpochs.insert(categoryUuid, advanceEpoch());
+
+    return true;
+}
+
+bool PrivacyService::removeItem(const PrivacyItem& item)
+{
+    if (!item.isValid())
+    {
+        return false;
+    }
+
+    QWriteLocker locker(&m_lock);
+    const QString categoryUuid = normalizedUuid(item.categoryUuid);
+    const QString itemUuid = normalizedUuid(item.uuid);
+
+    if (!m_initialized || categoryUuid.isEmpty() || itemUuid.isEmpty() ||
+        !m_categoryUnlockState.contains(categoryUuid) ||
+        (m_itemCategories.value(item.imageId) != categoryUuid) ||
+        (m_itemUuids.value(item.imageId) != itemUuid) ||
+        (m_imageIdsByItemUuid.value(itemUuid, -1) != item.imageId) ||
+        (m_itemGenerations.value(item.imageId, -1) != item.generation))
+    {
+        return false;
+    }
+
+    m_itemCategories.remove(item.imageId);
+    m_itemUuids.remove(item.imageId);
+    m_imageIdsByItemUuid.remove(itemUuid);
+    m_itemGenerations.remove(item.imageId);
+    m_categoryEpochs.insert(categoryUuid, advanceEpoch());
 
     return true;
 }

@@ -18,6 +18,10 @@
 
 #include "coredb.h"
 
+// C++ includes
+
+#include <algorithm>
+
 // KDE includes
 
 #include <ksharedconfig.h>
@@ -35,6 +39,7 @@
 #include "collectionmanager.h"
 #include "dbengineactiontype.h"
 #include "tagscache.h"
+#include "privacytransactionjournal.h"
 
 namespace Digikam
 {
@@ -1682,6 +1687,361 @@ bool CoreDB::publishPrivacyCategoryCreation(
         !categoryQuery.isActive() || (categoryQuery.numRowsAffected() != 1) ||
         !compareAndUpdatePrivacyTransaction(transaction,
                                             PrivacyTransactionState::Created, 0))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::beginPrivacyItemProtection(
+    const PrivacyItem& item,
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    if (!item.isValid() || !transaction.isValid() || !journal.isValid() ||
+        (item.transactionState != static_cast<int>(PrivacyTransactionState::Created)) ||
+        (transaction.itemUuid != item.uuid) ||
+        (transaction.categoryUuid != item.categoryUuid) ||
+        (transaction.type != PrivacyTransactionType::ProtectItem) ||
+        (transaction.state != PrivacyTransactionState::Created) ||
+        (transaction.generation != 0) ||
+        (journal.transactionUuid != transaction.uuid) ||
+        (journal.stage != static_cast<int>(PrivacyJournalStage::Created)) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList conflicts;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyItems WHERE imageId=? OR uuid=?), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?);"),
+        item.imageId, item.uuid, transaction.uuid, &conflicts);
+
+    if ((conflicts.size() != 2) || conflicts.at(0).toBool() ||
+        conflicts.at(1).toBool() || !insertPrivacyItem(item) ||
+        !insertPrivacyTransaction(transaction) ||
+        !insertPrivacyTransactionJournal(journal))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::publishPrivacyItemProtection(
+    const PrivacyItem& item,
+    const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets,
+    const PrivacyTransaction& transaction) const
+{
+    if (!item.isValid() || !container.isValid() || assets.isEmpty() ||
+        !transaction.isValid() ||
+        (item.transactionState != static_cast<int>(PrivacyTransactionState::Complete)) ||
+        (container.itemUuid != item.uuid) ||
+        (container.state != PrivacyContainerState::Verified) ||
+        (transaction.itemUuid != item.uuid) ||
+        (transaction.categoryUuid != item.categoryUuid) ||
+        (transaction.type != PrivacyTransactionType::ProtectItem) ||
+        (transaction.state != PrivacyTransactionState::Complete) ||
+        (transaction.generation != 2) || d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    const PrivacyItem existing = getPrivacyItem(item.imageId);
+
+    if (!existing.isValid() || (existing.uuid != item.uuid) ||
+        (existing.categoryUuid != item.categoryUuid) ||
+        (existing.originalHash != item.originalHash) ||
+        (existing.originalSize != item.originalSize) ||
+        (existing.originalWidth != item.originalWidth) ||
+        (existing.originalHeight != item.originalHeight) ||
+        (existing.originalCreationDate != item.originalCreationDate) ||
+        (existing.expectedProxyHash != item.expectedProxyHash) ||
+        (existing.expectedProxySize != item.expectedProxySize) ||
+        (existing.presentationVersion != item.presentationVersion) ||
+        (existing.generation != item.generation) ||
+        (existing.transactionState !=
+         static_cast<int>(PrivacyTransactionState::Created)))
+    {
+        return abort();
+    }
+
+    QVariantList expected;
+    QVariantList expectedBindings;
+    expectedBindings << transaction.uuid << item.categoryUuid << item.uuid
+                     << static_cast<int>(PrivacyTransactionType::ProtectItem)
+                     << static_cast<int>(PrivacyTransactionState::Prepared)
+                     << transaction.uuid
+                     << static_cast<int>(PrivacyJournalStage::Complete)
+                     << item.uuid << item.uuid;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? "
+        "AND categoryUuid=? AND itemUuid=? AND type=? AND state=? AND generation=1), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactionJournals WHERE transactionUuid=? "
+        "AND stage=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyContainers WHERE itemUuid=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyAssets WHERE itemUuid=?);"),
+        expectedBindings, &expected);
+
+    if ((expected.size() != 4) ||
+        std::any_of(expected.cbegin(), expected.cend(),
+                    [](const QVariant& value) { return !value.toBool(); }) ||
+        !insertPrivacyContainer(container))
+    {
+        return abort();
+    }
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        if ((asset.itemUuid != item.uuid) ||
+            (asset.containerUuid != container.uuid) || !insertPrivacyAsset(asset))
+        {
+            return abort();
+        }
+    }
+
+    QVariantList itemBindings;
+    itemBindings << static_cast<int>(PrivacyTransactionState::Complete)
+                 << item.imageId << item.uuid << item.categoryUuid
+                 << item.generation
+                 << static_cast<int>(PrivacyTransactionState::Created);
+    const QSqlQuery itemQuery = d->db->execQuery(
+        QString::fromUtf8("UPDATE PrivacyItems SET transactionState=? "
+                          "WHERE imageId=? AND uuid=? AND categoryUuid=? "
+                          "AND generation=? AND transactionState=?;"),
+        itemBindings);
+
+    if (!itemQuery.isActive() || (itemQuery.numRowsAffected() != 1) ||
+        !compareAndUpdatePrivacyTransaction(transaction,
+                                            PrivacyTransactionState::Prepared, 1))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::beginPrivacyItemUnprotection(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    if (!transaction.isValid() || !journal.isValid() ||
+        transaction.itemUuid.isEmpty() ||
+        (transaction.type != PrivacyTransactionType::UnprotectItem) ||
+        (transaction.state != PrivacyTransactionState::Created) ||
+        (transaction.generation != 0) ||
+        (journal.transactionUuid != transaction.uuid) ||
+        (journal.stage != static_cast<int>(PrivacyJournalStage::Created)) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList expected;
+    QVariantList expectedBindings;
+    expectedBindings << transaction.itemUuid << transaction.categoryUuid
+                     << transaction.uuid << transaction.itemUuid
+                     << static_cast<int>(PrivacyTransactionState::Complete);
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyItems WHERE uuid=? AND categoryUuid=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE itemUuid=? AND state<>?);"),
+        expectedBindings, &expected);
+
+    if ((expected.size() != 3) ||
+        std::any_of(expected.cbegin(), expected.cend(),
+                    [](const QVariant& value) { return !value.toBool(); }) ||
+        !insertPrivacyTransaction(transaction) ||
+        !insertPrivacyTransactionJournal(journal))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::publishPrivacyItemUnprotection(
+    qlonglong imageId, const QString& itemUuid, const QString& categoryUuid,
+    qlonglong expectedItemGeneration,
+    const QString& priorProtectTransactionUuid,
+    const PrivacyTransaction& transaction) const
+{
+    if ((imageId <= 0) || itemUuid.isEmpty() || categoryUuid.isEmpty() ||
+        (expectedItemGeneration < 0) || priorProtectTransactionUuid.isEmpty() ||
+        (priorProtectTransactionUuid == transaction.uuid) || !transaction.isValid() ||
+        (transaction.itemUuid != itemUuid) ||
+        (transaction.categoryUuid != categoryUuid) ||
+        (transaction.type != PrivacyTransactionType::UnprotectItem) ||
+        (transaction.state != PrivacyTransactionState::Applying) ||
+        (transaction.generation != 2) || d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList expected;
+    QVariantList expectedBindings;
+    expectedBindings << imageId << itemUuid << categoryUuid
+                     << expectedItemGeneration << transaction.uuid << itemUuid
+                     << categoryUuid
+                     << static_cast<int>(PrivacyTransactionType::UnprotectItem)
+                     << static_cast<int>(PrivacyTransactionState::Prepared)
+                     << transaction.uuid
+                     << static_cast<int>(PrivacyJournalStage::Complete)
+                     << priorProtectTransactionUuid << itemUuid << categoryUuid
+                     << static_cast<int>(PrivacyTransactionType::ProtectItem)
+                     << static_cast<int>(PrivacyTransactionState::Complete)
+                     << priorProtectTransactionUuid
+                     << static_cast<int>(PrivacyJournalStage::Complete);
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyItems WHERE imageId=? AND uuid=? "
+        "AND categoryUuid=? AND generation=?), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? AND itemUuid=? "
+        "AND categoryUuid=? AND type=? AND state=? AND generation=1), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactionJournals WHERE transactionUuid=? "
+        "AND stage=?), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? AND itemUuid=? "
+        "AND categoryUuid=? AND type=? AND state=? AND generation=2), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactionJournals WHERE transactionUuid=? "
+        "AND stage=?);"),
+        expectedBindings, &expected);
+
+    if ((expected.size() != 5) ||
+        std::any_of(expected.cbegin(), expected.cend(),
+                    [](const QVariant& value) { return !value.toBool(); }))
+    {
+        return abort();
+    }
+
+    QVariantList detachBindings;
+    detachBindings << static_cast<int>(transaction.state)
+                   << transaction.generation
+                   << transaction.payloadFormatVersion
+                   << (transaction.payloadData.isEmpty()
+                       ? QVariant() : QVariant(transaction.payloadData))
+                   << d->db->asDBDateTime(transaction.updatedAt)
+                   << transaction.uuid << itemUuid << categoryUuid
+                   << static_cast<int>(PrivacyTransactionType::UnprotectItem)
+                   << static_cast<int>(PrivacyTransactionState::Prepared);
+    const QSqlQuery detach = d->db->execQuery(
+        QString::fromUtf8("UPDATE PrivacyTransactions SET itemUuid=NULL, state=?, "
+                          "generation=?, payloadFormatVersion=?, payloadData=?, updatedAt=? "
+                          "WHERE uuid=? AND itemUuid=? AND categoryUuid=? AND type=? "
+                          "AND state=? AND generation=1;"),
+        detachBindings);
+
+    QVariantList priorDeleteBindings;
+    priorDeleteBindings << priorProtectTransactionUuid << itemUuid << categoryUuid
+                        << static_cast<int>(PrivacyTransactionType::ProtectItem)
+                        << static_cast<int>(PrivacyTransactionState::Complete);
+
+    if (!detach.isActive() || (detach.numRowsAffected() != 1) ||
+        (BdEngineBackend::NoErrors != d->db->execSql(QString::fromUtf8(
+            "DELETE FROM PrivacyTransactionJournals WHERE transactionUuid=?;"),
+            priorProtectTransactionUuid)) ||
+        (BdEngineBackend::NoErrors != d->db->execSql(QString::fromUtf8(
+            "DELETE FROM PrivacyTransactions WHERE uuid=? AND itemUuid=? "
+            "AND categoryUuid=? AND type=? AND state=? AND generation=2;"),
+            priorDeleteBindings)) ||
+        (BdEngineBackend::NoErrors != d->db->execSql(
+            QString::fromUtf8("DELETE FROM PrivacyDerivatives WHERE itemUuid=?;"),
+            itemUuid)) ||
+        (BdEngineBackend::NoErrors != d->db->execSql(
+            QString::fromUtf8("DELETE FROM PrivacyAssets WHERE itemUuid=?;"),
+            itemUuid)) ||
+        (BdEngineBackend::NoErrors != d->db->execSql(
+            QString::fromUtf8("DELETE FROM PrivacyContainers WHERE itemUuid=?;"),
+            itemUuid)))
+    {
+        return abort();
+    }
+
+    QVariantList itemDeleteBindings;
+    itemDeleteBindings << imageId << itemUuid << categoryUuid
+                       << expectedItemGeneration;
+    const QSqlQuery itemDelete = d->db->execQuery(
+        QString::fromUtf8("DELETE FROM PrivacyItems WHERE imageId=? AND uuid=? "
+                          "AND categoryUuid=? AND generation=?;"),
+        itemDeleteBindings);
+
+    if (!itemDelete.isActive() || (itemDelete.numRowsAffected() != 1))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::finalizePrivacyItemUnprotection(
+    const QString& transactionUuid, const QString& categoryUuid) const
+{
+    if (transactionUuid.isEmpty() || categoryUuid.isEmpty() ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList expected;
+    QVariantList expectedBindings;
+    expectedBindings << transactionUuid << categoryUuid
+                     << static_cast<int>(PrivacyTransactionType::UnprotectItem)
+                     << static_cast<int>(PrivacyTransactionState::Applying)
+                     << transactionUuid
+                     << static_cast<int>(PrivacyJournalStage::Complete);
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? "
+        "AND categoryUuid=? AND itemUuid IS NULL AND type=? AND state=? "
+        "AND generation=2), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactionJournals WHERE transactionUuid=? "
+        "AND stage=?);"),
+        expectedBindings, &expected);
+
+    if ((expected.size() != 2) || !expected.at(0).toBool() ||
+        !expected.at(1).toBool() ||
+        (BdEngineBackend::NoErrors != d->db->execSql(
+            QString::fromUtf8("DELETE FROM PrivacyTransactionJournals "
+                              "WHERE transactionUuid=?;"), transactionUuid)) ||
+        (BdEngineBackend::NoErrors != d->db->execSql(
+            QString::fromUtf8("DELETE FROM PrivacyTransactions WHERE uuid=? "
+                              "AND categoryUuid=? AND itemUuid IS NULL;"),
+            transactionUuid, categoryUuid)))
     {
         return abort();
     }

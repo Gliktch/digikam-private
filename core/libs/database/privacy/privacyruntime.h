@@ -189,12 +189,43 @@ public:
     qlonglong expectedPublicProxySize(qlonglong imageId) const;
 
     bool setCategoryUnlocked(const QString& categoryUuid, bool unlocked);
+    bool isCategoryUnlocked(const QString& categoryUuid) const;
     bool publishCategory(const PrivacyCategory& category);
     bool publishCategoryCreation(const PrivacyCategory& category,
                                  const PrivacyCredential& credential,
                                  const PrivacyStorageRoot& root,
                                  const PrivacyStore& store,
                                  const QList<PrivacyStoreBinding>& bindings);
+    /// Publishes one newly completed Casual protection set. Existing or
+    /// partial item facts are rejected; use hasProtectedItem() for replay.
+    bool publishProtectedItem(const PrivacyItem& item,
+                              const PrivacyContainer& container,
+                              const QList<PrivacyAsset>& assets);
+    /// Replaces only the exact DB-begun partial item held by a cold runtime
+    /// after its sole Protect transaction has durably completed.
+    bool publishProtectedItemForProtectRecovery(
+        const PrivacyItem& item,
+        const PrivacyContainer& container,
+        const QList<PrivacyAsset>& assets,
+        const PrivacyTransaction& completedTransaction);
+    /// True only when every supplied item/container/asset fact exactly matches
+    /// the coherent live snapshot and verified roots.
+    bool hasProtectedItem(const PrivacyItem& item,
+                          const PrivacyContainer& container,
+                          const QList<PrivacyAsset>& assets) const;
+    /// Removes only an exact completed Casual protection set.
+    bool removeProtectedItem(const PrivacyItem& item,
+                             const PrivacyContainer& container,
+                             const QList<PrivacyAsset>& assets);
+    /// Removes an exact protected set during cold Unprotect replay when the
+    /// supplied active transaction is the sole reason every required root is
+    /// Recovering. Offline, identity-mismatched, and conflicting roots remain
+    /// ineligible.
+    bool removeProtectedItemForUnprotectRecovery(
+        const PrivacyItem& item,
+        const PrivacyContainer& container,
+        const QList<PrivacyAsset>& assets,
+        const QString& transactionUuid);
     quint64 categoryEpoch(const QString& categoryUuid) const;
     bool setCategoryTagVisibilityMode(const QString& categoryUuid,
                                       PrivacyTagVisibilityMode mode,
@@ -225,6 +256,11 @@ public:
     bool rootContainsProtectedItems(int albumRootId) const override;
 
 private:
+
+    bool removeProtectedItemInternal(const PrivacyItem& item,
+                                     const PrivacyContainer& container,
+                                     const QList<PrivacyAsset>& assets,
+                                     const QString& recoveryTransactionUuid);
 
     class Private;
     Private* const d = nullptr;
