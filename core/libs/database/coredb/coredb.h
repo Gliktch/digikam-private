@@ -131,6 +131,8 @@ public:
     bool ensurePrivacyAlbumRoot(const PrivacyStorageRoot& candidate,
                                 PrivacyStorageRoot* persisted,
                                 bool* created)                                                                     const;
+    bool removeUnreferencedPrivacyAlbumRoot(const QString& uuid,
+                                            bool* absent)                                                          const;
     bool getPrivacyStorageRoots(QList<PrivacyStorageRoot>* roots)                                                  const;
     bool insertPrivacyStore(const PrivacyStore& store)                                                             const;
     bool getPrivacyStores(QList<PrivacyStore>* stores)                                                             const;

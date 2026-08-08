@@ -280,6 +280,60 @@ PrivacyAlbumRootRegistrationResult PrivacyRepository::ensureAlbumRoot(
     return result;
 }
 
+bool PrivacyRepository::removeUnreferencedAlbumRoot(const QString& uuid,
+                                                    bool* const absent) const
+{
+    const QString normalized = normalizedUuid(uuid);
+
+    if (!absent || normalized.isEmpty())
+    {
+        return false;
+    }
+
+    CoreDbAccess access;
+
+    return access.db()->removeUnreferencedPrivacyAlbumRoot(normalized, absent);
+}
+
+bool PrivacyRepository::pruneUnreferencedAlbumRoots(
+    QStringList* const removedUuids) const
+{
+    if (removedUuids)
+    {
+        removedUuids->clear();
+    }
+
+    CoreDbAccess access;
+    QList<PrivacyStorageRoot> roots;
+
+    if (!access.db()->getPrivacyStorageRoots(&roots))
+    {
+        return false;
+    }
+
+    for (const PrivacyStorageRoot& root : std::as_const(roots))
+    {
+        if (root.kind != PrivacyStorageRootKind::AlbumRoot)
+        {
+            continue;
+        }
+
+        bool absent = false;
+
+        if (!access.db()->removeUnreferencedPrivacyAlbumRoot(root.uuid, &absent))
+        {
+            return false;
+        }
+
+        if (absent && removedUuids)
+        {
+            removedUuids->append(root.uuid);
+        }
+    }
+
+    return true;
+}
+
 bool PrivacyRepository::addStore(const PrivacyStore& store) const
 {
     PrivacyStore normalized = store;

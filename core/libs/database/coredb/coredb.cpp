@@ -593,6 +593,80 @@ bool CoreDB::ensurePrivacyAlbumRoot(const PrivacyStorageRoot& candidate,
     return true;
 }
 
+bool CoreDB::removeUnreferencedPrivacyAlbumRoot(const QString& uuid,
+                                                bool* const absent) const
+{
+    if (!absent || uuid.isEmpty() || d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    const QVariantList evidenceBindings = {
+        uuid,
+        static_cast<int>(PrivacyStorageRootKind::AlbumRoot),
+        uuid,
+        uuid,
+        uuid,
+        uuid
+    };
+    QVariantList evidence;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT "
+        "EXISTS(SELECT 1 FROM PrivacyStorageRoots WHERE uuid=? AND kind=?), "
+        "EXISTS(SELECT 1 FROM PrivacyStores WHERE rootUuid=?), "
+        "EXISTS(SELECT 1 FROM PrivacyContainers WHERE rootUuid=?), "
+        "EXISTS(SELECT 1 FROM PrivacyAssets WHERE publicRootUuid=?), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactionJournals WHERE rootUuid=?);"),
+        evidenceBindings, &evidence);
+
+    if (evidence.size() != 5)
+    {
+        return abort();
+    }
+
+    const bool rootExists = evidence.at(0).toBool();
+    const bool rootReferenced = evidence.at(1).toBool() ||
+                                evidence.at(2).toBool() ||
+                                evidence.at(3).toBool() ||
+                                evidence.at(4).toBool();
+
+    if (!rootExists || rootReferenced)
+    {
+        if (d->db->commitTransaction() != BdEngineBackend::NoErrors)
+        {
+            return false;
+        }
+
+        *absent = !rootExists;
+        return true;
+    }
+
+    QSqlQuery query = d->db->execQuery(
+        QString::fromUtf8("DELETE FROM PrivacyStorageRoots WHERE uuid=? AND kind=?;"),
+        QVariantList { uuid, static_cast<int>(PrivacyStorageRootKind::AlbumRoot) });
+
+    if (!query.isActive() || (query.numRowsAffected() != 1))
+    {
+        return abort();
+    }
+
+    if (d->db->commitTransaction() != BdEngineBackend::NoErrors)
+    {
+        return false;
+    }
+
+    *absent = true;
+
+    return true;
+}
+
 bool CoreDB::getPrivacyStorageRoots(QList<PrivacyStorageRoot>* roots) const
 {
     if (!roots)

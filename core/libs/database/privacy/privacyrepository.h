@@ -59,6 +59,8 @@ public:
         int albumRootId,
         const QString& configuredPath,
         const QString& collectionIdentifier) const;
+    bool removeUnreferencedAlbumRoot(const QString& uuid, bool* absent) const;
+    bool pruneUnreferencedAlbumRoots(QStringList* removedUuids = nullptr) const;
     bool addStore(const PrivacyStore& store) const;
     bool addStoreBinding(const PrivacyStoreBinding& binding) const;
 

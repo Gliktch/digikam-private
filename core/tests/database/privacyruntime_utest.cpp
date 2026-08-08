@@ -481,6 +481,7 @@ void PrivacyRuntimeTest::testExpectedProxyAndCanonicalAsset()
     QCOMPARE(report.state, PrivacyStartupState::Ready);
     QVERIFY(runtime.rootContainsProtectedItems(9));
     QCOMPARE(runtime.publicSourceDisposition(42), PrivacyPublicSourceDisposition::LockedProxy);
+    QVERIFY(!runtime.unregisterUnreferencedAlbumRoot(rootUuid));
     QVERIFY(!runtime.publicSourceCacheNamespace(42).isEmpty());
     QCOMPARE(runtime.expectedPublicProxySize(42), 55LL);
     QCOMPARE(runtime.publicSourceDisposition(999), PrivacyPublicSourceDisposition::Unprotected);
@@ -974,6 +975,12 @@ void PrivacyRuntimeTest::testDynamicAlbumRootRegistration()
     QCOMPARE(runtime.registerAlbumRoot(makeRoot(registeredUuid, 99)),
              PrivacyRootRecoveryResult::Deferred);
     QCOMPARE(runtime.rootUuidForAlbumRootId(10), registeredUuid);
+    QVERIFY(runtime.unregisterUnreferencedAlbumRoot(registeredUuid));
+    QVERIFY(runtime.rootUuidForAlbumRootId(10).isEmpty());
+    QCOMPARE(runtime.rootState(registeredUuid), PrivacyRootRuntimeState::Unknown);
+    QVERIFY(runtime.unregisterUnreferencedAlbumRoot(registeredUuid));
+    QVERIFY(runtime.stateForItem(42, &itemState));
+    QCOMPARE(itemState.access, PrivacyItemAccess::Unlocked);
 
     QCOMPARE(runtime.registerAlbumRoot(makeRoot(offlineUuid, 11)),
              PrivacyRootRecoveryResult::PublishedOffline);

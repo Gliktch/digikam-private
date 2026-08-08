@@ -1735,6 +1735,121 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::registerAlbumRoot(
     return recoverRoot(recoveryUuid);
 }
 
+bool PrivacyRuntimeCoordinator::unregisterUnreferencedAlbumRoot(
+    const QString& rootUuid)
+{
+    if (!isCanonicalUuid(rootUuid))
+    {
+        return false;
+    }
+
+    QWriteLocker locker(&d->lock);
+    int rootIndex = -1;
+
+    for (int i = 0 ; i < d->snapshot.storageRoots.size() ; ++i)
+    {
+        const PrivacyStorageRoot& root = d->snapshot.storageRoots.at(i);
+
+        if (root.uuid == rootUuid)
+        {
+            if (root.kind != PrivacyStorageRootKind::AlbumRoot)
+            {
+                return false;
+            }
+
+            rootIndex = i;
+            break;
+        }
+    }
+
+    if (!d->initialized)
+    {
+        return false;
+    }
+
+    if (rootIndex < 0)
+    {
+        return true;
+    }
+
+    for (const PrivacyAsset& asset : std::as_const(d->snapshot.assets))
+    {
+        if (asset.publicRootUuid == rootUuid)
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyContainer& container : std::as_const(d->snapshot.containers))
+    {
+        if (container.rootUuid == rootUuid)
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyStore& store : std::as_const(d->snapshot.stores))
+    {
+        if (store.rootUuid == rootUuid)
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyTransactionJournal& journal :
+         std::as_const(d->snapshot.transactionJournals))
+    {
+        if (journal.rootUuid == rootUuid)
+        {
+            return false;
+        }
+    }
+
+    const PrivacyStorageRoot root = d->snapshot.storageRoots.takeAt(rootIndex);
+
+    if (d->albumRootUuids.value(root.albumRootId) == rootUuid)
+    {
+        d->albumRootUuids.remove(root.albumRootId);
+    }
+
+    const PrivacyRootRuntimeState previousState = d->rootStates.take(rootUuid);
+    d->rootEpochs.remove(rootUuid);
+    d->rootSummaries.remove(rootUuid);
+    d->proxyIssueItemsByRoot.remove(rootUuid);
+    d->originalIssueItemsByRoot.remove(rootUuid);
+    d->conflictingRootUuids.remove(rootUuid);
+
+    for (int i = d->report.roots.size() - 1 ; i >= 0 ; --i)
+    {
+        if (d->report.roots.at(i).rootUuid == rootUuid)
+        {
+            d->report.roots.removeAt(i);
+        }
+    }
+
+    switch (previousState)
+    {
+        case PrivacyRootRuntimeState::VerifiedAvailable:
+            d->report.verifiedRootCount = qMax(0, d->report.verifiedRootCount - 1);
+            break;
+
+        case PrivacyRootRuntimeState::Offline:
+            d->report.offlineRootCount = qMax(0, d->report.offlineRootCount - 1);
+            break;
+
+        case PrivacyRootRuntimeState::IdentityMismatch:
+            d->report.mismatchedRootCount = qMax(0, d->report.mismatchedRootCount - 1);
+            break;
+
+        case PrivacyRootRuntimeState::Unknown:
+        case PrivacyRootRuntimeState::Recovering:
+            d->report.recoveringRootCount = qMax(0, d->report.recoveringRootCount - 1);
+            break;
+    }
+
+    return true;
+}
+
 bool PrivacyRuntimeCoordinator::beginRootRecovery(const QString& rootUuid)
 {
     if (!isCanonicalUuid(rootUuid))
@@ -2199,6 +2314,7 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
     PrivacyRepository repository;
     QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
     PrivacyStartupReport result;
+    const bool unusedRootsPruned = repository.pruneUnreferencedAlbumRoots();
 
     if (repository.loadSnapshot(&snapshot))
     {
@@ -2214,6 +2330,13 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
     {
         result.state = PrivacyStartupState::Degraded;
         result.diagnostics << QLatin1String("Privacy repository snapshot could not be validated");
+    }
+
+    if (!unusedRootsPruned)
+    {
+        result.state = PrivacyStartupState::Degraded;
+        result.diagnostics << QLatin1String(
+            "Unused privacy album-root registrations could not be reconciled");
     }
 
     PrivacyScanGate::setProvider(runtime);
