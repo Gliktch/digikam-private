@@ -215,6 +215,23 @@ quint64 PrivacySourceResolver::currentGeneration()
     return resolverData->generation;
 }
 
+bool PrivacySourceResolver::advanceGenerationIfCurrent(quint64 expectedGeneration)
+{
+    QWriteLocker locker(&resolverData->lock);
+
+    if (resolverData->generation != expectedGeneration)
+    {
+        return false;
+    }
+
+    if (++resolverData->generation == 0)
+    {
+        ++resolverData->generation;
+    }
+
+    return true;
+}
+
 QString PrivacySourceResolver::cacheNamespaceDigest(const QString& cacheNamespace)
 {
     if (cacheNamespace.isEmpty())

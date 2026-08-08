@@ -140,6 +140,15 @@ public:
      * An empty namespace returns an empty string.
      */
     static QString cacheNamespaceDigest(const QString& cacheNamespace);
+
+private:
+
+    /** Advances only the still-installed provider generation captured by a
+     * cache transition. Kept private so ordinary callers cannot publish a
+     * generation independently of the transition lifecycle. */
+    static bool advanceGenerationIfCurrent(quint64 expectedGeneration);
+
+    friend class PrivacyCacheTransition;
 };
 
 } // namespace Digikam

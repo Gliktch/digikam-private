@@ -28,7 +28,38 @@
 namespace Digikam
 {
 
-class LoadSaveThread;
+class LoadingDescription;
+
+class DIGIKAM_EXPORT PrivacySourceUseGuard
+{
+public:
+
+    /**
+     * Registers one resolved, non-denied source snapshot before a loading task
+     * rechecks freshness or touches caches/files. Ordinary NotHandled sources
+     * are registered with an empty namespace: they are the source snapshots
+     * which Protect must drain most critically.
+     */
+    explicit PrivacySourceUseGuard(const LoadingDescription& description);
+    ~PrivacySourceUseGuard();
+
+    bool isAcquired() const;
+    void release();
+
+private:
+
+    QString m_logicalFilePath;
+    QString m_cacheNamespace;
+    quint64 m_resolverGeneration = 0;
+    bool    m_acquired           = false;
+    bool    m_registered         = false;
+
+private:
+
+    Q_DISABLE_COPY(PrivacySourceUseGuard)
+};
+
+// -----------------------------------------------------------------------------
 
 class DIGIKAM_EXPORT PrivacyPersistentCacheWriteGuard
 {
@@ -99,11 +130,10 @@ public:
 
     /**
      * These assertions must be made by the higher coordinator after consulting
-     * its consumer/thread registry, transition journal/history and item/face
-     * inventory. False keeps the resolver barrier active and prevents
-     * transition completion.
+     * its transition journal/history and item/face inventory. Source consumers
+     * are instead covered intrinsically by PrivacySourceUseGuard and begin().
+     * False keeps the resolver barrier active and prevents completion.
      */
-    bool loadThreadInventoryComplete = false;
     bool priorPersistentIdentifierInventoryComplete = false;
     bool detailAndFaceInventoryComplete = false;
 
@@ -125,7 +155,6 @@ public:
     PrivacyCacheTransitionBackend()          = default;
     virtual ~PrivacyCacheTransitionBackend() = default;
 
-    virtual bool cancelAndDrain(const QList<ThumbnailIdentifier>& priorIdentifiers) = 0;
     virtual void evictRamCaches(const QString& logicalFilePath) = 0;
     virtual bool removePersistentThumbnail(const ThumbnailIdentifier& identifier,
                                            const QRect& detailRect) = 0;
@@ -142,24 +171,11 @@ class DIGIKAM_EXPORT ThreadImageIOPrivacyCacheTransitionBackend
 {
 public:
 
-    /**
-     * The caller retains every thread for the synchronous purge call and must
-     * provide the complete set of LoadSaveThread consumers which could
-     * hold this logical source. The inventory completion flag records that
-     * higher-level proof; this backend deliberately has no global raw-pointer
-     * registry.
-     */
-    explicit ThreadImageIOPrivacyCacheTransitionBackend(
-        const QList<LoadSaveThread*>& loadThreads);
+    ThreadImageIOPrivacyCacheTransitionBackend() = default;
 
-    bool cancelAndDrain(const QList<ThumbnailIdentifier>& priorIdentifiers) override;
     void evictRamCaches(const QString& logicalFilePath) override;
     bool removePersistentThumbnail(const ThumbnailIdentifier& identifier,
                                    const QRect& detailRect) override;
-
-private:
-
-    QList<LoadSaveThread*> m_loadThreads;
 };
 
 // -----------------------------------------------------------------------------
@@ -175,7 +191,6 @@ public:
         InvalidInventory,
         IncompleteOwnershipInventory,
         TransitionInProgress,
-        CancellationFailed,
         PersistentPurgeFailed
     };
 
@@ -192,25 +207,30 @@ public:
 public:
 
     /**
-     * Atomically blocks new source resolutions for the logical path if the
-     * supplied old snapshot still belongs to the current resolver generation.
-     * Repeating begin() for the same active snapshot returns the same token.
+     * Atomically blocks new source resolutions/use guards for the logical path
+     * if the supplied old snapshot still belongs to the current resolver
+     * generation, then waits for prior source users and persistent writers.
+     * Version 1 admits one live path transition process-wide. Repeating begin()
+     * for the same active snapshot returns the same token; another path is
+     * rejected until that token finishes or rolls back.
      */
     static PrivacyCacheTransitionToken begin(const ThumbnailIdentifier& priorIdentifier);
 
     /**
-     * Cancel/drain old-source work, evict all logical RAM namespaces and remove
-     * only exact persistent addresses derived from the token/inventory. Safe
-     * exact cleanup is performed even for incomplete inventories, but the path
-     * remains blocked and the result is IncompleteOwnershipInventory.
+     * After begin() has drained old-source work, evict all logical RAM
+     * namespaces and remove only exact persistent addresses derived from the
+     * token/inventory. Safe exact cleanup is performed even for incomplete
+     * inventories, but the path remains blocked and the result is
+     * IncompleteOwnershipInventory.
      */
     static Result purge(const PrivacyCacheTransitionToken& token,
                         const PrivacyCacheTransitionInventory& inventory,
                         PrivacyCacheTransitionBackend* const backend);
 
     /**
-     * Releases the path barrier only after a complete purge and a resolver
-     * provider-generation change. Repeating completion for the same token is
+     * After the higher owner has published its runtime state, atomically
+     * advances the unchanged resolver provider's expected generation and
+     * releases the path barrier. Repeating completion for the same token is
      * idempotent; a stale token can never release a newer transition.
      */
     static bool finish(const PrivacyCacheTransitionToken& token);

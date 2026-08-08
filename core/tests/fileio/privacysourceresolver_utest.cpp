@@ -23,6 +23,7 @@
 
 #include <QMutex>
 #include <QMutexLocker>
+#include <QElapsedTimer>
 #include <QRect>
 #include <QSemaphore>
 #include <QSet>
@@ -32,6 +33,9 @@
 // Local includes
 
 #include "loadingdescription.h"
+#ifndef DIGIKAM_PRIVACY_TRANSITION_UNIT_ONLY
+#include "previewloadthread.h"
+#endif
 #include "privacycachetransition.h"
 #include "privacysourceresolver.h"
 #include "thumbnailinfo.h"
@@ -59,12 +63,16 @@ public:
             return PrivacySourceResult::notHandled();
         }
 
-        {
-            QMutexLocker locker(&m_mutex);
-            m_lastRequest = request;
-        }
+        QMutexLocker locker(&m_mutex);
+        m_lastRequest = request;
 
         return m_result;
+    }
+
+    void setResult(const PrivacySourceResult& result)
+    {
+        QMutexLocker locker(&m_mutex);
+        m_result = result;
     }
 
     PrivacySourceRequest lastRequest() const
@@ -76,7 +84,7 @@ public:
 
 private:
 
-    PrivacySourceResult         m_result;
+    PrivacySourceResult          m_result;
     QString                     m_handledPath;
     mutable QMutex              m_mutex;
     mutable PrivacySourceRequest m_lastRequest;
@@ -147,19 +155,6 @@ class FakeTransitionBackend : public PrivacyCacheTransitionBackend
 {
 public:
 
-    bool cancelAndDrain(const QList<ThumbnailIdentifier>&) override
-    {
-        ++cancelCalls;
-
-        if (!lateWriteAddress.isEmpty())
-        {
-            persistentRows.insert(lateWriteAddress);
-            lateWriteAddress.clear();
-        }
-
-        return cancelSucceeds;
-    }
-
     void evictRamCaches(const QString& logicalFilePath) override
     {
         evictedPaths << logicalFilePath;
@@ -180,9 +175,6 @@ public:
     QSet<QString> persistentRows;
     QStringList   removedAddresses;
     QStringList   evictedPaths;
-    QString       lateWriteAddress;
-    int           cancelCalls     = 0;
-    bool          cancelSucceeds  = true;
     bool          removalSucceeds = true;
 };
 
@@ -197,17 +189,26 @@ private Q_SLOTS:
     void init();
     void cleanup();
 
+#ifndef DIGIKAM_PRIVACY_TRANSITION_UNIT_ONLY
     void testLegacyCacheKeyStability();
+#endif
     void testPrivacyNamespaceSeparation();
     void testPhysicalSourceAndFailClosedResolution();
     void testSourceSnapshotInvalidationAndCachePolicy();
     void testProviderSnapshotLifetime();
     void testIdenticalProviderReinstallInvalidatesHandledSnapshot();
     void testThreadSafeProviderReset();
+    void testOrdinarySourceUseGuardDrainsAndBlocksNewcomers();
+    void testProviderChangeWhileBeginWaitsRemovesBarrier();
+#ifndef DIGIKAM_PRIVACY_TRANSITION_UNIT_ONLY
+    void testSynchronousPreviewHonorsSourceUseBarrier();
+#endif
+    void testCrossPathTransitionOverlapRejected();
     void testProtectTransitionBlocksAndPurgesInFlightWrite();
     void testRelockAndPresentationGenerationExactCleanup();
     void testRepeatedPurgeAndIncompleteInventoryFailClosed();
     void testInvalidOwnershipInventoryDoesNotDelete();
+    void testProviderReplacementMakesFinishFailClosed();
 };
 
 void PrivacySourceResolverTest::init()
@@ -219,6 +220,8 @@ void PrivacySourceResolverTest::cleanup()
 {
     PrivacySourceResolver::resetProvider();
 }
+
+#ifndef DIGIKAM_PRIVACY_TRANSITION_UNIT_ONLY
 
 void PrivacySourceResolverTest::testLegacyCacheKeyStability()
 {
@@ -268,6 +271,8 @@ void PrivacySourceResolverTest::testLegacyCacheKeyStability()
     };
     QCOMPARE(preview.lookupCacheKeys(), expectedLookupKeys);
 }
+
+#endif
 
 void PrivacySourceResolverTest::testPrivacyNamespaceSeparation()
 {
@@ -636,10 +641,226 @@ void PrivacySourceResolverTest::testThreadSafeProviderReset()
     QCOMPARE(afterReset.disposition, PrivacySourceResult::NotHandled);
 }
 
+void PrivacySourceResolverTest::testOrdinarySourceUseGuardDrainsAndBlocksNewcomers()
+{
+    const QString path = QLatin1String("/ordinary/item.jpg");
+    LoadingDescription ordinary(path, PreviewSettings(), 128,
+                                LoadingDescription::NoColorConversion,
+                                LoadingDescription::PreviewParameters::Thumbnail);
+    ordinary.previewParameters.storageReference = 42;
+    ordinary.resolveSource();
+    QVERIFY(ordinary.sourceResolutionIsCurrent());
+    QVERIFY(ordinary.privacyCacheNamespace().isEmpty());
+
+    PrivacySourceUseGuard incumbent(ordinary);
+    QVERIFY(incumbent.isAcquired());
+
+    PrivacyCacheTransitionToken token;
+    PrivacyCacheTransitionToken repeatedToken;
+    std::atomic<bool> beginStarted(false);
+    std::atomic<bool> beginReturned(false);
+    std::atomic<bool> repeatedStarted(false);
+    std::atomic<bool> repeatedReturned(false);
+    std::thread beginWorker([&]()
+    {
+        beginStarted.store(true);
+        token = PrivacyCacheTransition::begin(ordinary.thumbnailIdentifier());
+        beginReturned.store(true);
+    });
+
+    while (!beginStarted.load())
+    {
+        std::this_thread::yield();
+    }
+
+    PrivacySourceRequest request;
+    request.logicalFilePath = path;
+    request.itemReference   = 42;
+    request.consumer        = PrivacySourceRequest::Thumbnail;
+    PrivacySourceResult blocked;
+    QElapsedTimer timer;
+    timer.start();
+
+    while (timer.elapsed() < 5000)
+    {
+        blocked = PrivacySourceResolver::resolve(request);
+
+        if (blocked.disposition == PrivacySourceResult::Denied)
+        {
+            break;
+        }
+
+        std::this_thread::yield();
+    }
+
+    std::thread repeatedWorker([&]()
+    {
+        repeatedStarted.store(true);
+        repeatedToken = PrivacyCacheTransition::begin(ordinary.thumbnailIdentifier());
+        repeatedReturned.store(true);
+    });
+
+    while (!repeatedStarted.load())
+    {
+        std::this_thread::yield();
+    }
+
+    PrivacySourceUseGuard newcomer(ordinary);
+    const bool blockedObserved =
+        (blocked.disposition == PrivacySourceResult::Denied);
+    const bool firstReturnedBeforeRelease = beginReturned.load();
+    const bool repeatedReturnedBeforeRelease = repeatedReturned.load();
+    const bool newcomerAcquired = newcomer.isAcquired();
+
+    incumbent.release();
+    beginWorker.join();
+    repeatedWorker.join();
+
+    QVERIFY(blockedObserved);
+    QVERIFY(!firstReturnedBeforeRelease);
+    QVERIFY(!repeatedReturnedBeforeRelease);
+    QVERIFY(!newcomerAcquired);
+    QVERIFY(token.isValid());
+    QVERIFY(repeatedToken.isValid());
+    QCOMPARE(repeatedToken.logicalFilePath(), token.logicalFilePath());
+    QVERIFY(PrivacyCacheTransition::rollback(token));
+    QVERIFY(PrivacyCacheTransition::rollback(repeatedToken));
+}
+
+void PrivacySourceResolverTest::testProviderChangeWhileBeginWaitsRemovesBarrier()
+{
+    const QString path = QLatin1String("/logical/item.jpg");
+    PrivacySourceResolver::setProvider(
+        QSharedPointer<FixedProvider>(
+            new FixedProvider(PrivacySourceResult::notHandled())));
+    LoadingDescription description(path, PreviewSettings(), 128,
+                                   LoadingDescription::NoColorConversion,
+                                   LoadingDescription::PreviewParameters::Thumbnail);
+    description.previewParameters.storageReference = 42;
+    description.resolveSource();
+    PrivacySourceUseGuard incumbent(description);
+    QVERIFY(incumbent.isAcquired());
+
+    PrivacyCacheTransitionToken token;
+    std::atomic<bool> beginStarted(false);
+    std::thread beginWorker([&]()
+    {
+        beginStarted.store(true);
+        token = PrivacyCacheTransition::begin(description.thumbnailIdentifier());
+    });
+
+    while (!beginStarted.load())
+    {
+        std::this_thread::yield();
+    }
+
+    PrivacySourceRequest request;
+    request.logicalFilePath = path;
+    request.itemReference   = 42;
+    request.consumer        = PrivacySourceRequest::Thumbnail;
+    PrivacySourceResult blocked;
+    QElapsedTimer timer;
+    timer.start();
+
+    while (timer.elapsed() < 5000)
+    {
+        blocked = PrivacySourceResolver::resolve(request);
+
+        if (blocked.disposition == PrivacySourceResult::Denied)
+        {
+            break;
+        }
+
+        std::this_thread::yield();
+    }
+
+    const bool barrierObserved =
+        (blocked.disposition == PrivacySourceResult::Denied);
+    PrivacySourceResolver::setProvider(
+        QSharedPointer<FixedProvider>(
+            new FixedProvider(PrivacySourceResult::notHandled())));
+    incumbent.release();
+    beginWorker.join();
+
+    QVERIFY(barrierObserved);
+    QVERIFY(!token.isValid());
+
+    LoadingDescription current(path, PreviewSettings(), 128,
+                               LoadingDescription::NoColorConversion,
+                               LoadingDescription::PreviewParameters::Thumbnail);
+    current.previewParameters.storageReference = 42;
+    current.resolveSource();
+    const PrivacyCacheTransitionToken currentToken =
+        PrivacyCacheTransition::begin(current.thumbnailIdentifier());
+    QVERIFY(currentToken.isValid());
+    QVERIFY(PrivacyCacheTransition::rollback(currentToken));
+}
+
+#ifndef DIGIKAM_PRIVACY_TRANSITION_UNIT_ONLY
+
+void PrivacySourceResolverTest::testSynchronousPreviewHonorsSourceUseBarrier()
+{
+    const QString path = QLatin1String("/definitely/missing/private-source.jpg");
+    LoadingDescription transitionDescription(
+        path, PreviewSettings(), 128,
+        LoadingDescription::NoColorConversion,
+        LoadingDescription::PreviewParameters::Thumbnail);
+    transitionDescription.previewParameters.storageReference = 42;
+    transitionDescription.resolveSource();
+    LoadingDescription preview(path, PreviewSettings(), 128);
+    preview.resolveSource();
+
+    const PrivacyCacheTransitionToken token =
+        PrivacyCacheTransition::begin(transitionDescription.thumbnailIdentifier());
+    QVERIFY(token.isValid());
+
+    const DImg image = PreviewLoadThread::loadSynchronously(preview);
+    QVERIFY(image.isNull());
+    QVERIFY(PrivacyCacheTransition::rollback(token));
+}
+
+#endif
+
+void PrivacySourceResolverTest::testCrossPathTransitionOverlapRejected()
+{
+    LoadingDescription first(QLatin1String("/ordinary/first.jpg"),
+                             PreviewSettings(), 128,
+                             LoadingDescription::NoColorConversion,
+                             LoadingDescription::PreviewParameters::Thumbnail);
+    first.previewParameters.storageReference = 41;
+    first.resolveSource();
+    LoadingDescription second(QLatin1String("/ordinary/second.jpg"),
+                              PreviewSettings(), 128,
+                              LoadingDescription::NoColorConversion,
+                              LoadingDescription::PreviewParameters::Thumbnail);
+    second.previewParameters.storageReference = 42;
+    second.resolveSource();
+
+    const PrivacyCacheTransitionToken firstToken =
+        PrivacyCacheTransition::begin(first.thumbnailIdentifier());
+    QVERIFY(firstToken.isValid());
+
+    const PrivacyCacheTransitionToken repeated =
+        PrivacyCacheTransition::begin(first.thumbnailIdentifier());
+    QVERIFY(repeated.isValid());
+    QCOMPARE(repeated.logicalFilePath(), firstToken.logicalFilePath());
+
+    QVERIFY(!PrivacyCacheTransition::begin(second.thumbnailIdentifier()).isValid());
+    QVERIFY(PrivacyCacheTransition::rollback(firstToken));
+
+    const PrivacyCacheTransitionToken secondToken =
+        PrivacyCacheTransition::begin(second.thumbnailIdentifier());
+    QVERIFY(secondToken.isValid());
+    QVERIFY(PrivacyCacheTransition::rollback(secondToken));
+}
+
 void PrivacySourceResolverTest::testProtectTransitionBlocksAndPurgesInFlightWrite()
 {
     const QString path = QLatin1String("/logical/item.jpg");
     const QRect faceRect(10, 20, 30, 40);
+    QSharedPointer<FixedProvider> provider(
+        new FixedProvider(PrivacySourceResult::notHandled()));
+    PrivacySourceResolver::setProvider(provider);
     LoadingDescription oldDescription(path, PreviewSettings(), 128,
                                       LoadingDescription::NoColorConversion,
                                       LoadingDescription::PreviewParameters::Thumbnail);
@@ -698,12 +919,11 @@ void PrivacySourceResolverTest::testProtectTransitionBlocksAndPurgesInFlightWrit
     QVERIFY(!blocked.cacheNamespace.isEmpty());
 
     FakeTransitionBackend backend;
-    backend.lateWriteAddress = persistentAddress(oldIdentifier, QRect());
+    backend.persistentRows.insert(persistentAddress(oldIdentifier, QRect()));
     backend.persistentRows.insert(persistentAddress(oldIdentifier, faceRect));
 
     PrivacyCacheTransitionInventory inventory;
     inventory.detailAndFaceRectangles << faceRect;
-    inventory.loadThreadInventoryComplete   = true;
     inventory.priorPersistentIdentifierInventoryComplete = true;
     inventory.detailAndFaceInventoryComplete = true;
     inventory.legacyPrimaryAliasInventoryComplete = true;
@@ -711,19 +931,16 @@ void PrivacySourceResolverTest::testProtectTransitionBlocksAndPurgesInFlightWrit
     const PrivacyCacheTransition::Result purge =
         PrivacyCacheTransition::purge(token, inventory, &backend);
     QCOMPARE(purge.status, PrivacyCacheTransition::Complete);
-    QCOMPARE(backend.cancelCalls, 1);
     QCOMPARE(backend.evictedPaths.size(), 1);
     QCOMPARE(backend.evictedPaths.constFirst(), path);
     QVERIFY(backend.persistentRows.isEmpty());
-    QVERIFY(!PrivacyCacheTransition::finish(token));
-
-    PrivacySourceResolver::setProvider(
-        QSharedPointer<FixedProvider>(
-            new FixedProvider(PrivacySourceResult::resolved(
-                                  path,
-                                  QLatin1String("category-a:locked:1"),
-                                  PrivacySourceResult::Persistent))));
+    const quint64 priorGeneration = PrivacySourceResolver::currentGeneration();
+    provider->setResult(PrivacySourceResult::resolved(
+                            path,
+                            QLatin1String("category-a:locked:1"),
+                            PrivacySourceResult::Persistent));
     QVERIFY(PrivacyCacheTransition::finish(token));
+    QVERIFY(PrivacySourceResolver::currentGeneration() > priorGeneration);
     QVERIFY(PrivacyCacheTransition::finish(token));
     QVERIFY(!PrivacyCacheTransition::isActive(token));
 }
@@ -732,11 +949,11 @@ void PrivacySourceResolverTest::testRelockAndPresentationGenerationExactCleanup(
 {
     const QString path = QLatin1String("/logical/item.jpg");
     const QRect cropRect(1, 2, 50, 60);
-    PrivacySourceResolver::setProvider(
-        QSharedPointer<FixedProvider>(
-            new FixedProvider(PrivacySourceResult::resolved(
-                                  QLatin1String("/runtime/original.jpg"),
-                                  QLatin1String("category-a:unlocked:2")))));
+    QSharedPointer<FixedProvider> provider(
+        new FixedProvider(PrivacySourceResult::resolved(
+                              QLatin1String("/runtime/original.jpg"),
+                              QLatin1String("category-a:unlocked:2"))));
+    PrivacySourceResolver::setProvider(provider);
 
     LoadingDescription unlocked(path, PreviewSettings(), 128,
                                 LoadingDescription::NoColorConversion,
@@ -777,7 +994,6 @@ void PrivacySourceResolverTest::testRelockAndPresentationGenerationExactCleanup(
     PrivacyCacheTransitionInventory inventory;
     inventory.priorPersistentIdentifiers << olderClearIdentifier;
     inventory.detailAndFaceRectangles << cropRect;
-    inventory.loadThreadInventoryComplete    = true;
     inventory.priorPersistentIdentifierInventoryComplete = true;
     inventory.detailAndFaceInventoryComplete = true;
     inventory.legacyPrimaryAliasInventoryComplete = true;
@@ -787,12 +1003,10 @@ void PrivacySourceResolverTest::testRelockAndPresentationGenerationExactCleanup(
     QCOMPARE(backend.persistentRows.size(), 1);
     QVERIFY(backend.persistentRows.contains(unrelatedAddress));
 
-    PrivacySourceResolver::setProvider(
-        QSharedPointer<FixedProvider>(
-            new FixedProvider(PrivacySourceResult::resolved(
-                                  path,
-                                  QLatin1String("category-a:locked:2"),
-                                  PrivacySourceResult::Persistent))));
+    provider->setResult(PrivacySourceResult::resolved(
+                            path,
+                            QLatin1String("category-a:locked:2"),
+                            PrivacySourceResult::Persistent));
     QVERIFY(PrivacyCacheTransition::finish(relockToken));
 
     LoadingDescription locked(path, PreviewSettings(), 128,
@@ -806,7 +1020,6 @@ void PrivacySourceResolverTest::testRelockAndPresentationGenerationExactCleanup(
     QVERIFY(presentationToken.isValid());
 
     PrivacyCacheTransitionInventory presentationInventory;
-    presentationInventory.loadThreadInventoryComplete    = true;
     presentationInventory.priorPersistentIdentifierInventoryComplete = true;
     presentationInventory.detailAndFaceInventoryComplete = true;
     presentationInventory.legacyPrimaryAliasInventoryComplete = true;
@@ -817,12 +1030,10 @@ void PrivacySourceResolverTest::testRelockAndPresentationGenerationExactCleanup(
     QVERIFY(backend.removedAddresses.contains(
                 persistentAddress(lockedIdentifier, QRect())));
 
-    PrivacySourceResolver::setProvider(
-        QSharedPointer<FixedProvider>(
-            new FixedProvider(PrivacySourceResult::resolved(
-                                  path,
-                                  QLatin1String("category-a:locked:3"),
-                                  PrivacySourceResult::Persistent))));
+    provider->setResult(PrivacySourceResult::resolved(
+                            path,
+                            QLatin1String("category-a:locked:3"),
+                            PrivacySourceResult::Persistent));
     QVERIFY(PrivacyCacheTransition::finish(presentationToken));
 }
 
@@ -844,11 +1055,7 @@ void PrivacySourceResolverTest::testRepeatedPurgeAndIncompleteInventoryFailClose
              PrivacyCacheTransition::IncompleteOwnershipInventory);
     QVERIFY(PrivacyCacheTransition::isActive(token));
 
-    PrivacySourceResolver::resetProvider();
-    QVERIFY(!PrivacyCacheTransition::finish(token));
-
     PrivacyCacheTransitionInventory complete;
-    complete.loadThreadInventoryComplete    = true;
     complete.priorPersistentIdentifierInventoryComplete = true;
     complete.detailAndFaceInventoryComplete = true;
     complete.legacyPrimaryAliasInventoryComplete = true;
@@ -859,8 +1066,6 @@ void PrivacySourceResolverTest::testRepeatedPurgeAndIncompleteInventoryFailClose
     backend.removalSucceeds = false;
     QCOMPARE(PrivacyCacheTransition::purge(token, complete, &backend).status,
              PrivacyCacheTransition::PersistentPurgeFailed);
-    QCOMPARE(backend.cancelCalls, 4);
-
     // A failed idempotent retry cannot revoke a previously completed purge.
 
     QVERIFY(PrivacyCacheTransition::finish(token));
@@ -892,19 +1097,16 @@ void PrivacySourceResolverTest::testInvalidOwnershipInventoryDoesNotDelete()
 
     PrivacyCacheTransitionInventory invalid;
     invalid.priorPersistentIdentifiers << unrelated;
-    invalid.loadThreadInventoryComplete    = true;
     invalid.priorPersistentIdentifierInventoryComplete = true;
     invalid.detailAndFaceInventoryComplete = true;
     invalid.legacyPrimaryAliasInventoryComplete = true;
     QCOMPARE(PrivacyCacheTransition::purge(token, invalid, &backend).status,
              PrivacyCacheTransition::InvalidInventory);
-    QCOMPARE(backend.cancelCalls, 0);
     QCOMPARE(backend.persistentRows.size(), 1);
     QVERIFY(backend.persistentRows.contains(unrelatedAddress));
     QVERIFY(PrivacyCacheTransition::isActive(token));
 
     PrivacyCacheTransitionInventory valid;
-    valid.loadThreadInventoryComplete    = true;
     valid.priorPersistentIdentifierInventoryComplete = true;
     valid.detailAndFaceInventoryComplete = true;
     valid.legacyPrimaryAliasInventoryComplete = true;
@@ -913,7 +1115,6 @@ void PrivacySourceResolverTest::testInvalidOwnershipInventoryDoesNotDelete()
     QCOMPARE(backend.persistentRows.size(), 1);
     QVERIFY(backend.persistentRows.contains(unrelatedAddress));
 
-    PrivacySourceResolver::resetProvider();
     QVERIFY(PrivacyCacheTransition::finish(token));
 
     LoadingDescription rollbackDescription(path, PreviewSettings(), 128,
@@ -927,6 +1128,38 @@ void PrivacySourceResolverTest::testInvalidOwnershipInventoryDoesNotDelete()
     QVERIFY(PrivacyCacheTransition::rollback(rollbackToken));
     QVERIFY(PrivacyCacheTransition::rollback(rollbackToken));
     QVERIFY(!PrivacyCacheTransition::isActive(rollbackToken));
+}
+
+void PrivacySourceResolverTest::testProviderReplacementMakesFinishFailClosed()
+{
+    const QString path = QLatin1String("/logical/item.jpg");
+    PrivacySourceResolver::setProvider(
+        QSharedPointer<FixedProvider>(
+            new FixedProvider(PrivacySourceResult::notHandled())));
+    LoadingDescription description(path, PreviewSettings(), 128,
+                                   LoadingDescription::NoColorConversion,
+                                   LoadingDescription::PreviewParameters::Thumbnail);
+    description.previewParameters.storageReference = 42;
+    description.resolveSource();
+    const PrivacyCacheTransitionToken token =
+        PrivacyCacheTransition::begin(description.thumbnailIdentifier());
+    QVERIFY(token.isValid());
+
+    FakeTransitionBackend backend;
+    PrivacyCacheTransitionInventory inventory;
+    inventory.priorPersistentIdentifierInventoryComplete = true;
+    inventory.detailAndFaceInventoryComplete = true;
+    inventory.legacyPrimaryAliasInventoryComplete = true;
+    QCOMPARE(PrivacyCacheTransition::purge(token, inventory, &backend).status,
+             PrivacyCacheTransition::Complete);
+
+    PrivacySourceResolver::setProvider(
+        QSharedPointer<FixedProvider>(
+            new FixedProvider(PrivacySourceResult::resolved(
+                                  path,
+                                  QLatin1String("replacement-provider")))));
+    QVERIFY(!PrivacyCacheTransition::finish(token));
+    QVERIFY(PrivacyCacheTransition::isActive(token));
 }
 
 QTEST_GUILESS_MAIN(PrivacySourceResolverTest)

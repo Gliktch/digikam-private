@@ -32,6 +32,7 @@
 #include "iccmanager.h"
 #include "jpegutils.h"
 #include "metaenginesettings.h"
+#include "privacycachetransition.h"
 #include "thumbnailloadthread.h"
 #include "thumbnailcreator.h"
 
@@ -60,7 +61,10 @@ void ThumbnailLoadingTask::execute()
         return;
     }
 
-    if (m_loadingDescription.isSourceDenied() ||
+    PrivacySourceUseGuard sourceUse(m_loadingDescription);
+
+    if (!sourceUse.isAcquired()                ||
+        m_loadingDescription.isSourceDenied() ||
         !m_loadingDescription.sourceResolutionIsCurrent())
     {
         m_thread->taskHasFinished();

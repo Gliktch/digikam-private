@@ -30,6 +30,7 @@
 #include "jpegutils.h"
 #include "metaenginesettings.h"
 #include "previewloadthread.h"
+#include "privacycachetransition.h"
 
 namespace Digikam
 {
@@ -56,7 +57,10 @@ void PreviewLoadingTask::execute()
         m_thread->imageStartedLoading(m_loadingDescription);
     }
 
-    if (m_loadingDescription.isSourceDenied() ||
+    PrivacySourceUseGuard sourceUse(m_loadingDescription);
+
+    if (!sourceUse.isAcquired()                ||
+        m_loadingDescription.isSourceDenied() ||
         !m_loadingDescription.sourceResolutionIsCurrent())
     {
         if (m_thread)

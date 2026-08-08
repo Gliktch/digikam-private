@@ -23,6 +23,7 @@
 #include "icctransform.h"
 #include "loadsavethread.h"
 #include "managedloadsavethread.h"
+#include "privacycachetransition.h"
 #include "sharedloadsavethread.h"
 
 namespace Digikam
@@ -70,8 +71,10 @@ void LoadingTask::execute()
     }
 
     DImg img;
+    PrivacySourceUseGuard sourceUse(m_loadingDescription);
 
-    if (!m_loadingDescription.isSourceDenied() &&
+    if (sourceUse.isAcquired()                 &&
+        !m_loadingDescription.isSourceDenied() &&
         m_loadingDescription.sourceResolutionIsCurrent())
     {
         img = DImg(m_loadingDescription.effectiveFilePath(), this,
@@ -142,8 +145,10 @@ void SharedLoadingTask::execute()
     // send StartedLoadingEvent from each single Task, not via LoadingProcess list
 
     m_thread->imageStartedLoading(m_loadingDescription);
+    PrivacySourceUseGuard sourceUse(m_loadingDescription);
 
-    if (m_loadingDescription.isSourceDenied() ||
+    if (!sourceUse.isAcquired()                ||
+        m_loadingDescription.isSourceDenied() ||
         !m_loadingDescription.sourceResolutionIsCurrent())
     {
         m_thread->taskHasFinished();

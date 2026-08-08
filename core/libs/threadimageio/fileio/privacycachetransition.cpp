@@ -14,10 +14,6 @@
 
 #include "privacycachetransition.h"
 
-// C++ includes
-
-#include <utility>
-
 // Qt includes
 
 #include <QCryptographicHash>
@@ -30,7 +26,7 @@
 // Local includes
 
 #include "loadingcacheinterface.h"
-#include "loadsavethread.h"
+#include "loadingdescription.h"
 #include "privacysourceresolver.h"
 #include "thumbnailloadthread.h"
 
@@ -59,6 +55,7 @@ public:
     QHash<QString, TransitionState> active;
     QHash<QString, quint64>         completed;
     QHash<QString, quint64>         rolledBack;
+    QHash<QString, QHash<QPair<QString, quint64>, int> > sourceUsers;
     QHash<QString, int>             persistentWriters;
     QWaitCondition                  stateChanged;
     quint64                         nextSerial = 0;
@@ -95,6 +92,84 @@ ThumbnailIdentifier persistentIdentityOnly(const ThumbnailIdentifier& identifier
 }
 
 } // namespace
+
+PrivacySourceUseGuard::PrivacySourceUseGuard(
+    const LoadingDescription& description)
+    : m_logicalFilePath    (description.filePath),
+      m_cacheNamespace     (description.privacyCacheNamespace()),
+      m_resolverGeneration(description.sourceResolverGeneration())
+{
+    if (m_logicalFilePath.isEmpty()             ||
+        !description.sourceResolutionApplied() ||
+        description.isSourceDenied())
+    {
+        return;
+    }
+
+    QMutexLocker locker(&transitionData->mutex);
+
+    if (transitionData->active.contains(m_logicalFilePath))
+    {
+        return;
+    }
+
+    const QPair<QString, quint64> snapshot(m_cacheNamespace,
+                                           m_resolverGeneration);
+    transitionData->sourceUsers[m_logicalFilePath][snapshot] += 1;
+    m_acquired  = true;
+    m_registered = true;
+}
+
+PrivacySourceUseGuard::~PrivacySourceUseGuard()
+{
+    release();
+}
+
+bool PrivacySourceUseGuard::isAcquired() const
+{
+    return m_acquired;
+}
+
+void PrivacySourceUseGuard::release()
+{
+    if (!m_registered)
+    {
+        return;
+    }
+
+    QMutexLocker locker(&transitionData->mutex);
+    auto users = transitionData->sourceUsers.find(m_logicalFilePath);
+
+    if (users != transitionData->sourceUsers.end())
+    {
+        const QPair<QString, quint64> snapshot(m_cacheNamespace,
+                                               m_resolverGeneration);
+        auto count = users->find(snapshot);
+
+        if (count != users->end())
+        {
+            const int remaining = count.value() - 1;
+
+            if (remaining <= 0)
+            {
+                users->erase(count);
+            }
+            else
+            {
+                count.value() = remaining;
+            }
+        }
+
+        if (users->isEmpty())
+        {
+            transitionData->sourceUsers.erase(users);
+        }
+
+        transitionData->stateChanged.wakeAll();
+    }
+
+    m_registered = false;
+}
 
 PrivacyPersistentCacheWriteGuard::PrivacyPersistentCacheWriteGuard(
     const QString& logicalFilePath,
@@ -179,37 +254,6 @@ ThumbnailIdentifier PrivacyCacheTransitionToken::priorThumbnailIdentifier() cons
     return m_priorIdentifier;
 }
 
-ThreadImageIOPrivacyCacheTransitionBackend::ThreadImageIOPrivacyCacheTransitionBackend(
-    const QList<LoadSaveThread*>& loadThreads)
-    : m_loadThreads(loadThreads)
-{
-}
-
-bool ThreadImageIOPrivacyCacheTransitionBackend::cancelAndDrain(
-    const QList<ThumbnailIdentifier>& priorIdentifiers)
-{
-    for (LoadSaveThread* const thread : std::as_const(m_loadThreads))
-    {
-        if (!thread)
-        {
-            return false;
-        }
-
-        for (const ThumbnailIdentifier& priorIdentifier : priorIdentifiers)
-        {
-            if (!thread->stopLoadingAndWaitForSource(
-                    priorIdentifier.filePath,
-                    priorIdentifier.cacheNamespace,
-                    priorIdentifier.sourceResolverGeneration))
-            {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
 void ThreadImageIOPrivacyCacheTransitionBackend::evictRamCaches(const QString& logicalFilePath)
 {
     LoadingCacheInterface::cleanFileCache(logicalFilePath);
@@ -235,6 +279,12 @@ PrivacyCacheTransitionToken PrivacyCacheTransition::begin(
 
     QMutexLocker locker(&transitionData->mutex);
     auto existing = transitionData->active.constFind(priorIdentifier.filePath);
+
+    if ((existing == transitionData->active.constEnd()) &&
+        !transitionData->active.isEmpty())
+    {
+        return token;
+    }
 
     if (existing != transitionData->active.constEnd())
     {
@@ -279,7 +329,8 @@ PrivacyCacheTransitionToken PrivacyCacheTransition::begin(
     state.serial = transitionData->nextSerial;
     transitionData->active.insert(priorIdentifier.filePath, state);
 
-    while (transitionData->persistentWriters.value(priorIdentifier.filePath) > 0)
+    while ((transitionData->persistentWriters.value(priorIdentifier.filePath) > 0) ||
+           !transitionData->sourceUsers.value(priorIdentifier.filePath).isEmpty())
     {
         transitionData->stateChanged.wait(locker.mutex());
     }
@@ -407,14 +458,6 @@ PrivacyCacheTransition::Result PrivacyCacheTransition::purge(
         }
     }
 
-    if (!backend->cancelAndDrain(identities))
-    {
-        result.status = CancellationFailed;
-        finishPurgeAttempt(false);
-
-        return result;
-    }
-
     backend->evictRamCaches(token.logicalFilePath());
     result.ramCachesEvicted = true;
 
@@ -446,8 +489,7 @@ PrivacyCacheTransition::Result PrivacyCacheTransition::purge(
         return result;
     }
 
-    if (!inventory.loadThreadInventoryComplete                    ||
-        !inventory.priorPersistentIdentifierInventoryComplete     ||
+    if (!inventory.priorPersistentIdentifierInventoryComplete     ||
         !inventory.detailAndFaceInventoryComplete                 ||
         !inventory.legacyPrimaryAliasInventoryComplete)
     {
@@ -482,8 +524,8 @@ bool PrivacyCacheTransition::finish(const PrivacyCacheTransitionToken& token)
     if ((state->serial != token.m_serial) ||
         state->purgeInProgress            ||
         !state->purgeComplete             ||
-        (PrivacySourceResolver::currentGeneration() ==
-         token.m_priorIdentifier.sourceResolverGeneration))
+        !PrivacySourceResolver::advanceGenerationIfCurrent(
+            token.m_priorIdentifier.sourceResolverGeneration))
     {
         return false;
     }
