@@ -123,6 +123,23 @@ void SetupMisc::setupBehavior()
     QGroupBox* const upOptionsGroup = new QGroupBox(i18n("Updates"), behaviorPanel);
     QVBoxLayout* const gLayout5     = new QVBoxLayout();
 
+#ifdef DIGIKAM_PRIVATE_MANUAL_UPDATES
+
+    QLabel* const managedUpdateLabel = new QLabel(
+        i18n("Updates for this managed digiKam build are installed manually. "
+             "The upstream checker and downloader are disabled so they cannot "
+             "replace the custom AppImage."), upOptionsGroup);
+    managedUpdateLabel->setWordWrap(true);
+    d->updateType      = new QComboBox(upOptionsGroup);
+    d->updateType->addItem(i18n("Only For Stable Releases"), 0);
+    d->updateType->addItem(i18n("Weekly Pre-Releases"),      1);
+    d->updateType->hide();
+    d->updateWithDebug = new QCheckBox(upOptionsGroup);
+    d->updateWithDebug->hide();
+    gLayout5->addWidget(managedUpdateLabel);
+
+#else
+
     DHBox* const updateHbox      = new DHBox(upOptionsGroup);
     d->updateTypeLabel           = new QLabel(i18n("Check for new version:"), updateHbox);
     d->updateType                = new QComboBox(updateHbox);
@@ -164,6 +181,9 @@ void SetupMisc::setupBehavior()
     gLayout5->addWidget(updateHbox);
     gLayout5->addWidget(d->updateWithDebug);
     gLayout5->addWidget(updateHbox2);
+
+#endif
+
     upOptionsGroup->setLayout(gLayout5);
 
     // ---------------------------------------------------------

@@ -15,6 +15,10 @@
 
 #include "setup_p.h"
 
+// Local includes
+
+#include "digikam_config.h"
+
 namespace Digikam
 {
 
@@ -221,6 +225,15 @@ Setup::Page Setup::activePageIndex() const
 
 void Setup::onlineVersionCheck()
 {
+#ifdef DIGIKAM_PRIVATE_MANUAL_UPDATES
+
+    QMessageBox::information(qApp->activeWindow(), qApp->applicationName(),
+                             i18n("Updates for this managed digiKam build are installed "
+                                  "manually. The upstream checker and downloader are disabled "
+                                  "so they cannot replace the custom AppImage."));
+
+#else
+
     OnlineVersionDlg* const dlg = new OnlineVersionDlg(qApp->activeWindow(),
                                                        QLatin1String(digikam_version_short),
                                                        digiKamBuildDate(),
@@ -235,6 +248,8 @@ void Setup::onlineVersionCheck()
     );
 
     dlg->exec();
+
+#endif
 }
 
 } // namespace Digikam

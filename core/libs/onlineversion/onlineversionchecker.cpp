@@ -30,6 +30,7 @@
 // Local includes
 
 #include "digikam_version.h"
+#include "digikam_config.h"
 #include "digikam_globals.h"
 #include "digikam_debug.h"
 
@@ -110,6 +111,15 @@ QString OnlineVersionChecker::lastCheckDate()
 
 void OnlineVersionChecker::checkForNewVersion()
 {
+#ifdef DIGIKAM_PRIVATE_MANUAL_UPDATES
+
+    Q_EMIT signalNewVersionCheckError(
+        i18n("The upstream update checker is disabled for this manually managed build."));
+
+    return;
+
+#endif
+
     KSharedConfig::Ptr config = KSharedConfig::openConfig();
     KConfigGroup group        = config->group(QLatin1String("Updates"));
     group.writeEntry(QLatin1String("Last Check For New Version"), QDateTime::currentDateTime());

@@ -19,6 +19,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QApplication>
+#include <QMessageBox>
 
 // KDE includes
 
@@ -29,6 +30,7 @@
 // Local includes
 
 #include "digikam_globals.h"
+#include "digikam_config.h"
 #include "setupeditoriface.h"
 #include "setupicc.h"
 #include "setupiofiles.h"
@@ -592,6 +594,15 @@ bool ShowfotoSetup::execLocalize(QWidget* const parent)
 
 void ShowfotoSetup::onlineVersionCheck()
 {
+#ifdef DIGIKAM_PRIVATE_MANUAL_UPDATES
+
+    QMessageBox::information(qApp->activeWindow(), qApp->applicationName(),
+                             i18n("Updates for this managed digiKam build are installed "
+                                  "manually. The upstream checker and downloader are disabled "
+                                  "so they cannot replace the custom AppImage."));
+
+#else
+
     OnlineVersionDlg* const dlg = new OnlineVersionDlg(qApp->activeWindow(),
                                                        QLatin1String(digikam_version_short),
                                                        digiKamBuildDate(),
@@ -606,6 +617,8 @@ void ShowfotoSetup::onlineVersionCheck()
     );
 
     dlg->exec();
+
+#endif
 }
 
 } // namespace ShowFoto

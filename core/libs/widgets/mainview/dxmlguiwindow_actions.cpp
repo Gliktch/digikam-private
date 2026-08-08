@@ -86,7 +86,11 @@ void DXmlGuiWindow::createHelpActions(const QString& handbookSection, bool coreO
     actionCollection()->addAction(QLatin1String("help_contribute"), contributeAction);
 
     QAction* const onlineVerCheckAction = new QAction(QIcon::fromTheme(QLatin1String("globe")),
+#ifdef DIGIKAM_PRIVATE_MANUAL_UPDATES
+                                                                       i18n("Managed Build Update Information..."), this);
+#else
                                                                        i18n("Check for New Version..."), this);
+#endif
     connect(onlineVerCheckAction, SIGNAL(triggered()), this, SLOT(slotOnlineVersionCheck()));
     actionCollection()->addAction(QLatin1String("help_onlineversioncheck"), onlineVerCheckAction);
 

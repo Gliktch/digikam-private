@@ -322,6 +322,12 @@ echo -e "---------- Copy target binaries\n"
 
 cp /usr/bin/digikam                 ./usr/bin
 cp /usr/bin/showfoto                ./usr/bin
+cp /usr/bin/gocryptfs               ./usr/bin
+cp /usr/bin/gocryptfs-xray          ./usr/bin
+
+mkdir -p ./usr/share/licenses/digikam-private
+cp /usr/share/licenses/digikam-private/gocryptfs-*       ./usr/share/licenses/digikam-private
+cp /usr/share/licenses/digikam-private/libzip-LICENSE    ./usr/share/licenses/digikam-private
 
 if [[ $DK_QTVERSION == 5 ]] ; then
 

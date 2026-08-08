@@ -39,6 +39,7 @@
 // Local includes
 
 #include "digikam_debug.h"
+#include "digikam_config.h"
 #include "onlineversionchecker.h"
 #include "actionthreadbase.h"
 
@@ -116,6 +117,17 @@ void OnlineVersionDwnl::cancelDownload()
 
 void OnlineVersionDwnl::startDownload(const QString& version)
 {
+#ifdef DIGIKAM_PRIVATE_MANUAL_UPDATES
+
+    Q_UNUSED(version);
+
+    Q_EMIT signalDownloadError(
+        i18n("The upstream update downloader is disabled for this manually managed build."));
+
+    return;
+
+#endif
+
     QUrl url;
 
     if (d->preRelease)
