@@ -17,6 +17,7 @@
 
 // Qt includes
 
+#include <QByteArrayView>
 #include <QDir>
 #include <QFileInfo>
 #include <QSet>
@@ -101,9 +102,9 @@ QString selectionCollisionKey(const PrivacyInventoryCatalogueItem& item)
 void addDigestField(QCryptographicHash* const digest, const QByteArray& value)
 {
     digest->addData(QByteArray::number(value.size()));
-    digest->addData(":", 1);
+    digest->addData(QByteArrayView(":", 1));
     digest->addData(value);
-    digest->addData("\n", 1);
+    digest->addData(QByteArrayView("\n", 1));
 }
 
 void addDigestField(QCryptographicHash* const digest, const QString& value)
@@ -421,7 +422,14 @@ bool itemHasFatalIssue(const PrivacyAssetInventoryBridgeItemResult& item)
 
 bool PrivacyInventoryCatalogueItem::isValid() const
 {
-    return (imageId > 0) && canonicalUuid(publicRootUuid) &&
+    // The production catalogue covers every digiKam collection so alias and
+    // group evidence can be evaluated. A root UUID is absent until that
+    // collection first participates in Protect; selected or related unresolved
+    // rows are rejected/deferred later, rather than invalidating unrelated
+    // catalogue evidence here.
+
+    return (imageId > 0) &&
+           (publicRootUuid.isEmpty() || canonicalUuid(publicRootUuid)) &&
            safeRelativePath(publicRelativePath) && (fileSize >= -1) &&
            (!contentIdentityAuthoritative || !storedContentIdentity.isEmpty());
 }
@@ -990,6 +998,11 @@ PrivacyAssetInventoryBridgeResult PrivacyAssetInventoryBridge::build(
             addBridgeIssue(&itemResult.issues,
                            PrivacyAssetInventoryBridgeIssueCode::Canceled,
                            imageId);
+            itemResult.inventory.status = PrivacyInventoryStatus::Incomplete;
+        }
+        else if (!itemHasFatalIssue(itemResult))
+        {
+            itemResult.inventory.status = PrivacyInventoryStatus::Incomplete;
         }
 
         result.items << itemResult;

@@ -58,6 +58,17 @@ PrivacyInventoryCatalogueItem catalogueItem(
     return item;
 }
 
+PrivacyInventoryCatalogueItem unregisteredCatalogueItem(
+    qlonglong imageId,
+    const QString& relativePath)
+{
+    PrivacyInventoryCatalogueItem item = catalogueItem(
+        imageId, relativePath, QString(), QLatin1String("sha256:unregistered"));
+    item.publicRootUuid.clear();
+
+    return item;
+}
+
 PrivacyInventoryRootRecord rootRecord(const QString& path,
                                       PrivacyRootRuntimeState state)
 {
@@ -143,26 +154,27 @@ public:
     bool canceled = false;
 };
 
-FakeCatalogueProvider catalogue(const QList<PrivacyInventoryCatalogueItem>& items)
+PrivacyInventoryCatalogueSnapshot catalogue(
+    const QList<PrivacyInventoryCatalogueItem>& items)
 {
-    FakeCatalogueProvider provider;
-    provider.value.complete   = true;
-    provider.value.generation = QByteArray("catalogue-generation-1");
-    provider.value.items      = items;
+    PrivacyInventoryCatalogueSnapshot snapshot;
+    snapshot.complete   = true;
+    snapshot.generation = QByteArray("catalogue-generation-1");
+    snapshot.items      = items;
 
-    return provider;
+    return snapshot;
 }
 
-FakeRootProvider roots(const QString& path,
-                       PrivacyRootRuntimeState state =
-                           PrivacyRootRuntimeState::VerifiedAvailable)
+PrivacyInventoryRootSnapshot roots(
+    const QString& path,
+    PrivacyRootRuntimeState state = PrivacyRootRuntimeState::VerifiedAvailable)
 {
-    FakeRootProvider provider;
-    provider.value.complete   = true;
-    provider.value.generation = QByteArray("root-generation-1");
-    provider.value.roots << rootRecord(path, state);
+    PrivacyInventoryRootSnapshot snapshot;
+    snapshot.complete   = true;
+    snapshot.generation = QByteArray("root-generation-1");
+    snapshot.roots << rootRecord(path, state);
 
-    return provider;
+    return snapshot;
 }
 
 PrivacyAssetInventoryBridgeRequest requestFor(
@@ -217,6 +229,7 @@ private Q_SLOTS:
     void testProviderFailureCancellationAndGenerationDrift();
     void testAlreadyProtectedAndReservedArchiveInput();
     void testSampledDigiKamHashIsWarningOnlyAndDoesNotBlockPreview();
+    void testUnregisteredRootsOnlyDeferSelectedOrRelatedItems();
     void testDeterministicSelectionOrdering();
 };
 
@@ -230,7 +243,8 @@ void PrivacyAssetInventoryBridgeTest::testAvailableRootCustomSidecarsAndCatalogu
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("copies/C.JPG"))));
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("groups/G.JPG"))));
 
-    FakeCatalogueProvider catalogueProvider = catalogue({
+    FakeCatalogueProvider catalogueProvider;
+    catalogueProvider.value = catalogue({
         catalogueItem(1, QLatin1String("album/A.JPG"), QLatin1String("logical-a")),
         catalogueItem(2, QLatin1String("aliases/B.JPG"), QLatin1String("logical-a"),
                       QLatin1String("sha256:other")),
@@ -243,7 +257,8 @@ void PrivacyAssetInventoryBridgeTest::testAvailableRootCustomSidecarsAndCatalogu
     group.memberImageId = 1;
     group.leaderImageId = 4;
     catalogueProvider.value.groups << group;
-    FakeRootProvider rootProvider = roots(temporary.path());
+    FakeRootProvider rootProvider;
+    rootProvider.value = roots(temporary.path());
     PrivacyAssetInventoryBridgeRequest request = requestFor({ 1 });
     request.configuredSidecarExtensions << QLatin1String("pp3");
 
@@ -268,12 +283,14 @@ void PrivacyAssetInventoryBridgeTest::testOfflineAndMismatchedRootsRemainDistinc
 {
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    FakeCatalogueProvider catalogueProvider = catalogue({
+    FakeCatalogueProvider catalogueProvider;
+    catalogueProvider.value = catalogue({
         catalogueItem(1, QLatin1String("album/A.JPG"))
     });
 
-    FakeRootProvider rootProvider = roots(temporary.path(),
-                                           PrivacyRootRuntimeState::Offline);
+    FakeRootProvider rootProvider;
+    rootProvider.value = roots(temporary.path(),
+                               PrivacyRootRuntimeState::Offline);
     PrivacyAssetInventoryBridgeResult result = PrivacyAssetInventoryBridge::build(
         requestFor({ 1 }), catalogueProvider, rootProvider);
     QCOMPARE(result.status, PrivacyInventoryStatus::Incomplete);
@@ -282,7 +299,8 @@ void PrivacyAssetInventoryBridgeTest::testOfflineAndMismatchedRootsRemainDistinc
     QVERIFY(!hasIssue(result.items.constFirst().issues,
                       PrivacyAssetInventoryBridgeIssueCode::RootIdentityMismatch));
 
-    rootProvider = roots(temporary.path(), PrivacyRootRuntimeState::IdentityMismatch);
+    rootProvider.value = roots(temporary.path(),
+                               PrivacyRootRuntimeState::IdentityMismatch);
     result = PrivacyAssetInventoryBridge::build(requestFor({ 1 }),
                                                 catalogueProvider, rootProvider);
     QCOMPARE(result.status, PrivacyInventoryStatus::Rejected);
@@ -295,11 +313,13 @@ void PrivacyAssetInventoryBridgeTest::testDuplicateSelectionAndSelectedPathColli
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("album/A.JPG"))));
-    FakeCatalogueProvider catalogueProvider = catalogue({
+    FakeCatalogueProvider catalogueProvider;
+    catalogueProvider.value = catalogue({
         catalogueItem(1, QLatin1String("album/A.JPG")),
         catalogueItem(2, QLatin1String("album/A.JPG"))
     });
-    FakeRootProvider rootProvider = roots(temporary.path());
+    FakeRootProvider rootProvider;
+    rootProvider.value = roots(temporary.path());
 
     PrivacyAssetInventoryBridgeResult result = PrivacyAssetInventoryBridge::build(
         requestFor({ 1, 1 }), catalogueProvider, rootProvider);
@@ -322,10 +342,12 @@ void PrivacyAssetInventoryBridgeTest::testProviderFailureCancellationAndGenerati
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("album/A.JPG"))));
-    FakeCatalogueProvider catalogueProvider = catalogue({
+    FakeCatalogueProvider catalogueProvider;
+    catalogueProvider.value = catalogue({
         catalogueItem(1, QLatin1String("album/A.JPG"))
     });
-    FakeRootProvider rootProvider = roots(temporary.path());
+    FakeRootProvider rootProvider;
+    rootProvider.value = roots(temporary.path());
 
     catalogueProvider.value.complete = false;
     PrivacyAssetInventoryBridgeResult result = PrivacyAssetInventoryBridge::build(
@@ -358,12 +380,14 @@ void PrivacyAssetInventoryBridgeTest::testAlreadyProtectedAndReservedArchiveInpu
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("album/A.JPG"))));
     QVERIFY(writeFixture(temporary.filePath(
         QLatin1String("album/A.JPG.digikam-private.zip"))));
-    FakeCatalogueProvider catalogueProvider = catalogue({
+    FakeCatalogueProvider catalogueProvider;
+    catalogueProvider.value = catalogue({
         catalogueItem(1, QLatin1String("album/A.JPG")),
         catalogueItem(2, QLatin1String("album/A.JPG.digikam-private.zip"))
     });
     catalogueProvider.value.protectedImageIds.insert(1);
-    FakeRootProvider rootProvider = roots(temporary.path());
+    FakeRootProvider rootProvider;
+    rootProvider.value = roots(temporary.path());
 
     PrivacyAssetInventoryBridgeResult result = PrivacyAssetInventoryBridge::build(
         requestFor({ 1 }), catalogueProvider, rootProvider);
@@ -384,13 +408,15 @@ void PrivacyAssetInventoryBridgeTest::testSampledDigiKamHashIsWarningOnlyAndDoes
     QVERIFY(temporary.isValid());
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("album/A.JPG"))));
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("copies/B.JPG"))));
-    FakeCatalogueProvider catalogueProvider = catalogue({
+    FakeCatalogueProvider catalogueProvider;
+    catalogueProvider.value = catalogue({
         catalogueItem(1, QLatin1String("album/A.JPG"), QString(),
                       QLatin1String("digikam-unique-hash-v3:sample:7"), false),
         catalogueItem(2, QLatin1String("copies/B.JPG"), QString(),
                       QLatin1String("digikam-unique-hash-v3:sample:7"), false)
     });
-    FakeRootProvider rootProvider = roots(temporary.path());
+    FakeRootProvider rootProvider;
+    rootProvider.value = roots(temporary.path());
 
     const PrivacyAssetInventoryBridgeResult result = PrivacyAssetInventoryBridge::build(
         requestFor({ 1 }), catalogueProvider, rootProvider);
@@ -402,19 +428,53 @@ void PrivacyAssetInventoryBridgeTest::testSampledDigiKamHashIsWarningOnlyAndDoes
                         PrivacyInventoryAliasKind::ContentIdentityAlias, 2));
 }
 
+void PrivacyAssetInventoryBridgeTest::testUnregisteredRootsOnlyDeferSelectedOrRelatedItems()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(writeFixture(temporary.filePath(QLatin1String("album/A.JPG"))));
+    FakeCatalogueProvider catalogueProvider;
+    catalogueProvider.value = catalogue({
+        catalogueItem(1, QLatin1String("album/A.JPG")),
+        unregisteredCatalogueItem(2, QLatin1String("unrelated/B.JPG"))
+    });
+    FakeRootProvider rootProvider;
+    rootProvider.value = roots(temporary.path());
+
+    PrivacyAssetInventoryBridgeResult result = PrivacyAssetInventoryBridge::build(
+        requestFor({ 1 }), catalogueProvider, rootProvider);
+    QCOMPARE(result.status, PrivacyInventoryStatus::Ready);
+
+    PrivacyInventoryGroupRelation group;
+    group.memberImageId = 1;
+    group.leaderImageId = 2;
+    catalogueProvider.value.groups << group;
+    result = PrivacyAssetInventoryBridge::build(requestFor({ 1 }),
+                                                catalogueProvider, rootProvider);
+    QCOMPARE(result.status, PrivacyInventoryStatus::Incomplete);
+
+    result = PrivacyAssetInventoryBridge::build(requestFor({ 2 }),
+                                                catalogueProvider, rootProvider);
+    QCOMPARE(result.status, PrivacyInventoryStatus::Rejected);
+    QVERIFY(hasIssue(result.items.constFirst().issues,
+                     PrivacyAssetInventoryBridgeIssueCode::RootUnavailable));
+}
+
 void PrivacyAssetInventoryBridgeTest::testDeterministicSelectionOrdering()
 {
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("album/A.JPG"))));
     QVERIFY(writeFixture(temporary.filePath(QLatin1String("album/B.JPG"))));
-    FakeCatalogueProvider catalogueProvider = catalogue({
+    FakeCatalogueProvider catalogueProvider;
+    catalogueProvider.value = catalogue({
         catalogueItem(2, QLatin1String("album/B.JPG"), QString(),
                       QLatin1String("sha256:b")),
         catalogueItem(1, QLatin1String("album/A.JPG"), QString(),
                       QLatin1String("sha256:a"))
     });
-    FakeRootProvider rootProvider = roots(temporary.path());
+    FakeRootProvider rootProvider;
+    rootProvider.value = roots(temporary.path());
 
     const PrivacyAssetInventoryBridgeResult result = PrivacyAssetInventoryBridge::build(
         requestFor({ 2, 1 }), catalogueProvider, rootProvider);
