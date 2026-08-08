@@ -116,25 +116,22 @@ class DIGIKAM_EXPORT PrivacyCacheTransitionInventory
 {
 public:
 
-    /**
-     * Older exact source snapshots retained by the higher lifecycle journal.
-     * The transition token already contributes its immediately prior snapshot.
-     */
-    QList<ThumbnailIdentifier> priorPersistentIdentifiers;
+    enum Direction
+    {
+        Protect,
+        Unprotect
+    };
 
     /**
-     * Complete set of rectangles used for detail, crop and face thumbnails for
-     * this logical item. ThreadImageIO cannot derive this set from ThumbsDB.
+     * Complete set of actual ordinary detail/crop/face CustomIdentifier rows
+     * for this logical item. Used only by Protect.
      */
     QList<QRect> detailAndFaceRectangles;
 
     /**
-     * These assertions must be made by the higher coordinator after consulting
-     * its transition journal/history and item/face inventory. Source consumers
-     * are instead covered intrinsically by PrivacySourceUseGuard and begin().
-     * False keeps the resolver barrier active and prevents completion.
+     * This assertion is made only after query-safe enumeration of the actual
+     * CustomIdentifiers table while the resolver barrier is active.
      */
-    bool priorPersistentIdentifierInventoryComplete = false;
     bool detailAndFaceInventoryComplete = false;
 
     /**
@@ -144,6 +141,8 @@ public:
      * namespaced and rectangle-custom entries remain exactly addressable.
      */
     bool legacyPrimaryAliasInventoryComplete = false;
+
+    Direction direction = Protect;
 };
 
 // -----------------------------------------------------------------------------

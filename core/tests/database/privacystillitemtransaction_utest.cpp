@@ -64,7 +64,8 @@ class FakeCache final : public PrivacyStillItemCacheGate
 {
 public:
 
-    bool begin(qlonglong imageId, const QString& path, bool protecting) override
+    bool begin(qlonglong imageId, const QString& path, bool protecting,
+               bool aliasInventoryComplete) override
     {
         const QString key = QString::number(imageId) + path +
                             QString::number(protecting);
@@ -75,10 +76,13 @@ public:
         }
 
         active = key;
+        beginPaths << path;
+        beginAliasEvidence << aliasInventoryComplete;
         return true;
     }
 
-    bool finish(qlonglong imageId, const QString& path, bool protecting) override
+    bool finish(qlonglong imageId, const QString& path, bool protecting,
+                bool publicStateVerifiedOrLater) override
     {
         const QString key = QString::number(imageId) + path +
                             QString::number(protecting);
@@ -88,11 +92,22 @@ public:
             return false;
         }
 
+        if (!publicStateVerifiedOrLater)
+        {
+            return false;
+        }
+
         active.clear();
+        finishPaths << path;
+        finishJournalEvidence << publicStateVerifiedOrLater;
         return true;
     }
 
     QString active;
+    QStringList beginPaths;
+    QStringList finishPaths;
+    QList<bool> beginAliasEvidence;
+    QList<bool> finishJournalEvidence;
 };
 
 class FakePersistence final : public PrivacyStillItemPersistence
@@ -624,6 +639,10 @@ void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup()
         protect, protectPassword);
     QVERIFY2(protectResult.status == PrivacyStillItemTransactionStatus::Protected,
              qPrintable(protectResult.detail));
+    QCOMPARE(cache.beginPaths, QStringList({ sourcePath }));
+    QCOMPARE(cache.finishPaths, QStringList({ sourcePath }));
+    QCOMPARE(cache.beginAliasEvidence, QList<bool>({ true }));
+    QCOMPARE(cache.finishJournalEvidence, QList<bool>({ true }));
     QVERIFY(QFileInfo::exists(sourcePath + QLatin1String(".digikam-private.zip")));
     QVERIFY(runtime.hasProtectedItem(persistence.snapshot.items.constFirst(),
                                      persistence.snapshot.containers.constFirst(),
@@ -673,6 +692,23 @@ void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup()
     struct stat restoredStat = {};
     QVERIFY(::stat(QFile::encodeName(sourcePath).constData(), &restoredStat) == 0);
     QCOMPARE(restoredStat.st_mode & 07777, mode_t(0640));
+
+    for (const QString& path : cache.beginPaths + cache.finishPaths +
+                               coldCache.beginPaths + coldCache.finishPaths)
+    {
+        QVERIFY2(QDir::isAbsolutePath(path), qPrintable(path));
+        QCOMPARE(QDir::cleanPath(path), QDir::cleanPath(sourcePath));
+    }
+
+    for (bool evidence : coldCache.finishJournalEvidence)
+    {
+        QVERIFY(evidence);
+    }
+
+    for (bool aliasEvidence : coldCache.beginAliasEvidence)
+    {
+        QVERIFY(!aliasEvidence);
+    }
     QCOMPARE(restoredStat.st_mtim.tv_sec, time_t(1700000000));
     QCOMPARE(restoredStat.st_mtim.tv_nsec, long(123000000));
 }

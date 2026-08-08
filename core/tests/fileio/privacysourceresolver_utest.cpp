@@ -28,17 +28,24 @@
 #include <QSemaphore>
 #include <QSet>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTest>
+#include <QUrl>
+#include <QUrlQuery>
 
 // Local includes
 
 #include "loadingdescription.h"
+#include "dbengineparameters.h"
 #ifndef DIGIKAM_PRIVACY_TRANSITION_UNIT_ONLY
 #include "previewloadthread.h"
 #endif
 #include "privacycachetransition.h"
 #include "privacysourceresolver.h"
+#include "thumbsdb.h"
+#include "thumbsdbaccess.h"
 #include "thumbnailinfo.h"
+#include "thumbnailloadthread.h"
 
 using namespace Digikam;
 
@@ -205,9 +212,10 @@ private Q_SLOTS:
 #endif
     void testCrossPathTransitionOverlapRejected();
     void testProtectTransitionBlocksAndPurgesInFlightWrite();
-    void testRelockAndPresentationGenerationExactCleanup();
+    void testUnprotectDeletesOnlyExactNamespacedPrimary();
     void testRepeatedPurgeAndIncompleteInventoryFailClosed();
     void testInvalidOwnershipInventoryDoesNotDelete();
+    void testActualLegacyDetailInventoryFailsClosed();
     void testProviderReplacementMakesFinishFailClosed();
 };
 
@@ -924,7 +932,6 @@ void PrivacySourceResolverTest::testProtectTransitionBlocksAndPurgesInFlightWrit
 
     PrivacyCacheTransitionInventory inventory;
     inventory.detailAndFaceRectangles << faceRect;
-    inventory.priorPersistentIdentifierInventoryComplete = true;
     inventory.detailAndFaceInventoryComplete = true;
     inventory.legacyPrimaryAliasInventoryComplete = true;
 
@@ -945,7 +952,7 @@ void PrivacySourceResolverTest::testProtectTransitionBlocksAndPurgesInFlightWrit
     QVERIFY(!PrivacyCacheTransition::isActive(token));
 }
 
-void PrivacySourceResolverTest::testRelockAndPresentationGenerationExactCleanup()
+void PrivacySourceResolverTest::testUnprotectDeletesOnlyExactNamespacedPrimary()
 {
     const QString path = QLatin1String("/logical/item.jpg");
     const QRect cropRect(1, 2, 50, 60);
@@ -961,13 +968,9 @@ void PrivacySourceResolverTest::testRelockAndPresentationGenerationExactCleanup(
     unlocked.previewParameters.storageReference = 42;
     unlocked.resolveSource();
     const ThumbnailIdentifier unlockedIdentifier = unlocked.thumbnailIdentifier();
-    const PrivacyCacheTransitionToken relockToken =
+    const PrivacyCacheTransitionToken token =
         PrivacyCacheTransition::begin(unlockedIdentifier);
-    QVERIFY(relockToken.isValid());
-
-    ThumbnailIdentifier olderClearIdentifier = unlockedIdentifier;
-    olderClearIdentifier.cacheNamespace = QLatin1String("category-a:unlocked:1");
-    --olderClearIdentifier.sourceResolverGeneration;
+    QVERIFY(token.isValid());
 
     ThumbnailIdentifier legacy(path);
     legacy.id = 42;
@@ -976,65 +979,31 @@ void PrivacySourceResolverTest::testRelockAndPresentationGenerationExactCleanup(
     unrelated.id = 77;
 
     FakeTransitionBackend backend;
-    const QList<ThumbnailIdentifier> targetIdentities = {
-        unlockedIdentifier,
-        olderClearIdentifier,
-        legacy
-    };
-
-    for (const ThumbnailIdentifier& identity : targetIdentities)
-    {
-        backend.persistentRows.insert(persistentAddress(identity, QRect()));
-        backend.persistentRows.insert(persistentAddress(identity, cropRect));
-    }
+    backend.persistentRows.insert(persistentAddress(unlockedIdentifier, QRect()));
+    backend.persistentRows.insert(persistentAddress(unlockedIdentifier, cropRect));
+    backend.persistentRows.insert(persistentAddress(legacy, QRect()));
+    backend.persistentRows.insert(persistentAddress(legacy, cropRect));
 
     const QString unrelatedAddress = persistentAddress(unrelated, QRect());
     backend.persistentRows.insert(unrelatedAddress);
 
     PrivacyCacheTransitionInventory inventory;
-    inventory.priorPersistentIdentifiers << olderClearIdentifier;
-    inventory.detailAndFaceRectangles << cropRect;
-    inventory.priorPersistentIdentifierInventoryComplete = true;
-    inventory.detailAndFaceInventoryComplete = true;
-    inventory.legacyPrimaryAliasInventoryComplete = true;
+    inventory.direction = PrivacyCacheTransitionInventory::Unprotect;
 
-    QCOMPARE(PrivacyCacheTransition::purge(relockToken, inventory, &backend).status,
+    QCOMPARE(PrivacyCacheTransition::purge(token, inventory, &backend).status,
              PrivacyCacheTransition::Complete);
-    QCOMPARE(backend.persistentRows.size(), 1);
+    QCOMPARE(backend.persistentRows.size(), 4);
     QVERIFY(backend.persistentRows.contains(unrelatedAddress));
+    QVERIFY(backend.persistentRows.contains(persistentAddress(legacy, QRect())));
+    QVERIFY(backend.persistentRows.contains(persistentAddress(legacy, cropRect)));
+    QVERIFY(backend.persistentRows.contains(
+                persistentAddress(unlockedIdentifier, cropRect)));
 
     provider->setResult(PrivacySourceResult::resolved(
                             path,
                             QLatin1String("category-a:locked:2"),
                             PrivacySourceResult::Persistent));
-    QVERIFY(PrivacyCacheTransition::finish(relockToken));
-
-    LoadingDescription locked(path, PreviewSettings(), 128,
-                              LoadingDescription::NoColorConversion,
-                              LoadingDescription::PreviewParameters::Thumbnail);
-    locked.previewParameters.storageReference = 42;
-    locked.resolveSource();
-    const ThumbnailIdentifier lockedIdentifier = locked.thumbnailIdentifier();
-    const PrivacyCacheTransitionToken presentationToken =
-        PrivacyCacheTransition::begin(lockedIdentifier);
-    QVERIFY(presentationToken.isValid());
-
-    PrivacyCacheTransitionInventory presentationInventory;
-    presentationInventory.priorPersistentIdentifierInventoryComplete = true;
-    presentationInventory.detailAndFaceInventoryComplete = true;
-    presentationInventory.legacyPrimaryAliasInventoryComplete = true;
-    QCOMPARE(PrivacyCacheTransition::purge(presentationToken,
-                                           presentationInventory,
-                                           &backend).status,
-             PrivacyCacheTransition::Complete);
-    QVERIFY(backend.removedAddresses.contains(
-                persistentAddress(lockedIdentifier, QRect())));
-
-    provider->setResult(PrivacySourceResult::resolved(
-                            path,
-                            QLatin1String("category-a:locked:3"),
-                            PrivacySourceResult::Persistent));
-    QVERIFY(PrivacyCacheTransition::finish(presentationToken));
+    QVERIFY(PrivacyCacheTransition::finish(token));
 }
 
 void PrivacySourceResolverTest::testRepeatedPurgeAndIncompleteInventoryFailClosed()
@@ -1056,7 +1025,6 @@ void PrivacySourceResolverTest::testRepeatedPurgeAndIncompleteInventoryFailClose
     QVERIFY(PrivacyCacheTransition::isActive(token));
 
     PrivacyCacheTransitionInventory complete;
-    complete.priorPersistentIdentifierInventoryComplete = true;
     complete.detailAndFaceInventoryComplete = true;
     complete.legacyPrimaryAliasInventoryComplete = true;
     QCOMPARE(PrivacyCacheTransition::purge(token, complete, &backend).status,
@@ -1084,22 +1052,16 @@ void PrivacySourceResolverTest::testInvalidOwnershipInventoryDoesNotDelete()
         PrivacyCacheTransition::begin(description.thumbnailIdentifier());
     QVERIFY(token.isValid());
 
-    ThumbnailIdentifier unrelated(path);
+    ThumbnailIdentifier unrelated(QLatin1String("/logical/ordinary.jpg"));
     unrelated.id = 99;
-    unrelated.cacheNamespace = QLatin1String("unrelated-namespace");
-    unrelated.sourceResolutionApplied = true;
-    unrelated.sourceResolverGeneration =
-        description.thumbnailIdentifier().sourceResolverGeneration;
 
     FakeTransitionBackend backend;
     const QString unrelatedAddress = persistentAddress(unrelated, QRect());
     backend.persistentRows.insert(unrelatedAddress);
 
     PrivacyCacheTransitionInventory invalid;
-    invalid.priorPersistentIdentifiers << unrelated;
-    invalid.priorPersistentIdentifierInventoryComplete = true;
-    invalid.detailAndFaceInventoryComplete = true;
-    invalid.legacyPrimaryAliasInventoryComplete = true;
+    invalid.direction =
+        static_cast<PrivacyCacheTransitionInventory::Direction>(99);
     QCOMPARE(PrivacyCacheTransition::purge(token, invalid, &backend).status,
              PrivacyCacheTransition::InvalidInventory);
     QCOMPARE(backend.persistentRows.size(), 1);
@@ -1107,7 +1069,6 @@ void PrivacySourceResolverTest::testInvalidOwnershipInventoryDoesNotDelete()
     QVERIFY(PrivacyCacheTransition::isActive(token));
 
     PrivacyCacheTransitionInventory valid;
-    valid.priorPersistentIdentifierInventoryComplete = true;
     valid.detailAndFaceInventoryComplete = true;
     valid.legacyPrimaryAliasInventoryComplete = true;
     QCOMPARE(PrivacyCacheTransition::purge(token, valid, &backend).status,
@@ -1130,6 +1091,79 @@ void PrivacySourceResolverTest::testInvalidOwnershipInventoryDoesNotDelete()
     QVERIFY(!PrivacyCacheTransition::isActive(rollbackToken));
 }
 
+void PrivacySourceResolverTest::testActualLegacyDetailInventoryFailsClosed()
+{
+    QTemporaryDir databaseDirectory;
+    QVERIFY(databaseDirectory.isValid());
+
+    DbEngineParameters parameters;
+    parameters.databaseType = DbEngineParameters::SQLiteDatabaseType();
+    parameters.setThumbsDatabasePath(
+        databaseDirectory.filePath(QLatin1String("thumbnails.db")));
+    parameters.legacyAndDefaultChecks();
+    ThumbnailLoadThread::initializeThumbnailDatabase(parameters);
+    QVERIFY(ThumbsDbAccess::isInitialized());
+
+    const QString path = QLatin1String("/logical/item.jpg");
+    const QRect expectedRect(3, 4, 50, 60);
+    LoadingDescription description(path, PreviewSettings(), 128,
+                                   LoadingDescription::NoColorConversion,
+                                   LoadingDescription::PreviewParameters::Thumbnail);
+    description.previewParameters.storageReference = 42;
+    description.resolveSource();
+    const PrivacyCacheTransitionToken token =
+        PrivacyCacheTransition::begin(description.thumbnailIdentifier());
+    QVERIFY(token.isValid());
+
+    const auto detailIdentifier = [](const QString& ownerPath,
+                                     const QString& rectangle)
+    {
+        QUrl url = QUrl::fromLocalFile(ownerPath);
+        url.setScheme(QLatin1String("detail"));
+        QUrlQuery query;
+        query.addQueryItem(QLatin1String("rect"), rectangle);
+        url.setQuery(query);
+        return url.toString();
+    };
+    const auto insertIdentifier = [](const QString& identifier)
+    {
+        ThumbsDbAccess access;
+        ThumbsDbInfo info;
+        info.type = DatabaseThumbnail::PGF;
+        info.modificationDate = QDateTime::currentDateTimeUtc();
+        info.data = QByteArray("thumbnail");
+        QVariant id;
+
+        if (access.db()->insertThumbnail(info, &id) !=
+            BdEngineBackend::NoErrors)
+        {
+            return false;
+        }
+
+        return (access.db()->insertCustomIdentifier(identifier, id.toInt()) ==
+                BdEngineBackend::NoErrors);
+    };
+
+    QVERIFY(insertIdentifier(detailIdentifier(
+        path, QLatin1String("3,4-50x60"))));
+    QVERIFY(insertIdentifier(detailIdentifier(
+        QLatin1String("/logical/unrelated.jpg"), QLatin1String("broken"))));
+
+    QList<QRect> rectangles;
+    QVERIFY(ThumbnailLoadThread::privacyLegacyDetailRectangles(token,
+                                                               &rectangles));
+    QCOMPARE(rectangles, QList<QRect>({ expectedRect }));
+
+    // This row is not reachable through face/catalogue inventory. Direct table
+    // enumeration must still see it and reject its malformed target identity.
+    QVERIFY(insertIdentifier(detailIdentifier(path, QLatin1String("broken"))));
+    QVERIFY(!ThumbnailLoadThread::privacyLegacyDetailRectangles(token,
+                                                                &rectangles));
+    QVERIFY(rectangles.isEmpty());
+    QVERIFY(PrivacyCacheTransition::rollback(token));
+    ThumbsDbAccess::cleanUpDatabase();
+}
+
 void PrivacySourceResolverTest::testProviderReplacementMakesFinishFailClosed()
 {
     const QString path = QLatin1String("/logical/item.jpg");
@@ -1147,7 +1181,6 @@ void PrivacySourceResolverTest::testProviderReplacementMakesFinishFailClosed()
 
     FakeTransitionBackend backend;
     PrivacyCacheTransitionInventory inventory;
-    inventory.priorPersistentIdentifierInventoryComplete = true;
     inventory.detailAndFaceInventoryComplete = true;
     inventory.legacyPrimaryAliasInventoryComplete = true;
     QCOMPARE(PrivacyCacheTransition::purge(token, inventory, &backend).status,

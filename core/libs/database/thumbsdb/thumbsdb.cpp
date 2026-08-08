@@ -216,6 +216,32 @@ QList<int> ThumbsDb::findAll()
     return thumbIds;
 }
 
+BdEngineBackend::QueryState ThumbsDb::customIdentifiers(QStringList* identifiers)
+{
+    if (!identifiers)
+    {
+        return BdEngineBackend::QueryState(BdEngineBackend::SQLError);
+    }
+
+    identifiers->clear();
+    QVariantList values;
+    const BdEngineBackend::QueryState state = d->db->execSql(
+        QLatin1String("SELECT identifier FROM CustomIdentifiers;"), &values);
+
+    if (state != BdEngineBackend::NoErrors)
+    {
+        identifiers->clear();
+        return state;
+    }
+
+    for (const QVariant& value : std::as_const(values))
+    {
+        identifiers->append(value.toString());
+    }
+
+    return state;
+}
+
 QHash<QString, int> ThumbsDb::getFilePathsWithThumbnail()
 {
     QSqlQuery query = d->db->prepareQuery(QString::fromLatin1("SELECT path, thumbId "

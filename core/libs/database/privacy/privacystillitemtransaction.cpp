@@ -1665,7 +1665,9 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     if (dbJournal &&
         (dbJournal->stage < static_cast<int>(PrivacyJournalStage::PublicStateVerified)))
     {
-        if (!d->cache.begin(request.imageId, publicRelativePath, true))
+        if (!d->cache.begin(request.imageId, sourcePath, true,
+                            request.associatedAssetsAcknowledged &&
+                            inventory.isReady()))
         {
             return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
                         QStringLiteral("cannot begin protected-source cache transition"));
@@ -1858,7 +1860,14 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                     QStringLiteral("fault after runtime publication"));
     }
 
-    if (!d->cache.finish(request.imageId, publicRelativePath, true))
+    dbJournal = databaseJournalFor(snapshot, transactionUuid,
+                                   request.publicRoot.uuid);
+
+    if (!d->cache.finish(
+            request.imageId, sourcePath, true,
+            dbJournal &&
+            (dbJournal->stage >=
+             static_cast<int>(PrivacyJournalStage::PublicStateVerified))))
     {
         return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
                     QStringLiteral("cannot finish protected-source cache transition"));
@@ -1948,6 +1957,9 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         const QString itemUuid = journalAsset.itemUuid;
         const QString publicPath = absolutePath(request.publicRoot,
                                                 journalAsset.publicRelativePath);
+        const PrivacyTransactionJournal* const replayJournal =
+            databaseJournalFor(snapshot, transactionUuid,
+                               request.publicRoot.uuid);
         PrivacyJournalObjectFact publicFact;
         mode_t publicMode = 0;
         mode_t expectedMode = 0;
@@ -1987,9 +1999,11 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                         QStringLiteral("detached runtime state is not exact or absent"));
         }
 
-        if (!d->cache.finish(teardownItem.imageId,
-                             journalAsset.publicRelativePath,
-                             false))
+        if (!d->cache.finish(
+                teardownItem.imageId, publicPath, false,
+                replayJournal &&
+                (replayJournal->stage >=
+                 static_cast<int>(PrivacyJournalStage::PublicStateVerified))))
         {
             return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
                         itemUuid,
@@ -2571,7 +2585,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                     QStringLiteral("fault after Unprotect protected-copy journal"));
     }
 
-    if (!d->cache.begin(request.imageId, asset.publicRelativePath, false))
+    if (!d->cache.begin(request.imageId, publicPath, false, false))
     {
         return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
                     itemUuid,
@@ -2738,7 +2752,14 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                     QStringLiteral("fault after Unprotect runtime removal"));
     }
 
-    if (!d->cache.finish(request.imageId, asset.publicRelativePath, false))
+    dbJournal = databaseJournalFor(snapshot, transactionUuid,
+                                   request.publicRoot.uuid);
+
+    if (!d->cache.finish(
+            request.imageId, publicPath, false,
+            dbJournal &&
+            (dbJournal->stage >=
+             static_cast<int>(PrivacyJournalStage::PublicStateVerified))))
     {
         return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
                     itemUuid,

@@ -19,6 +19,8 @@
 
 #include <QPixmap>
 #include <QImage>
+#include <QList>
+#include <QRect>
 
 // Local includes
 
@@ -29,6 +31,7 @@ namespace Digikam
 {
 
 class DbEngineParameters;
+class PrivacyCacheTransitionToken;
 class ThumbnailCreator;
 class ThumbnailInfoProvider;
 
@@ -65,6 +68,15 @@ public:
      * You can optionally provide a thumbnail info provider.
      */
     static void initializeThumbnailDatabase(const DbEngineParameters& params, ThumbnailInfoProvider* const provider = nullptr);
+
+    /**
+     * Enumerates the complete set of ordinary, path-owned detail thumbnail
+     * rectangles for one logical file. This fails closed unless digiKam's
+     * active thumbnail storage is an initialized ThumbnailDatabase. The
+     * caller must already hold the privacy transition barrier for the path.
+     */
+    static bool privacyLegacyDetailRectangles(const PrivacyCacheTransitionToken& token,
+                                              QList<QRect>* rectangles);
 
     /**
      * For color management, this sets the widget the thumbnails will be color managed for.

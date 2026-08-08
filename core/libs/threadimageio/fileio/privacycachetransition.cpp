@@ -72,16 +72,6 @@ bool samePersistentIdentity(const ThumbnailIdentifier& first,
             (first.sourceResolverGeneration == second.sourceResolverGeneration));
 }
 
-bool validInventoryIdentifier(const ThumbnailIdentifier& identifier,
-                              const PrivacyCacheTransitionToken& token)
-{
-    const ThumbnailIdentifier prior = token.priorThumbnailIdentifier();
-
-    return (!identifier.filePath.isEmpty()                   &&
-            (identifier.filePath == token.logicalFilePath()) &&
-            (identifier.id       == prior.id));
-}
-
 ThumbnailIdentifier persistentIdentityOnly(const ThumbnailIdentifier& identifier)
 {
     ThumbnailIdentifier sanitized = identifier;
@@ -412,39 +402,25 @@ PrivacyCacheTransition::Result PrivacyCacheTransition::purge(
         }
     };
 
-    QList<ThumbnailIdentifier> identities;
-    identities << persistentIdentityOnly(token.priorThumbnailIdentifier());
+    const ThumbnailIdentifier prior =
+        persistentIdentityOnly(token.priorThumbnailIdentifier());
+    const bool priorIsNamespaced = !prior.cacheNamespace.isEmpty();
 
-    ThumbnailIdentifier legacy(token.logicalFilePath());
-    legacy.id = token.priorThumbnailIdentifier().id;
-    identities << legacy;
-
-    for (const ThumbnailIdentifier& supplied : inventory.priorPersistentIdentifiers)
+    if (((inventory.direction != PrivacyCacheTransitionInventory::Protect) &&
+         (inventory.direction != PrivacyCacheTransitionInventory::Unprotect)) ||
+        ((inventory.direction == PrivacyCacheTransitionInventory::Protect) &&
+         priorIsNamespaced) ||
+        ((inventory.direction == PrivacyCacheTransitionInventory::Unprotect) &&
+         !priorIsNamespaced) ||
+        ((inventory.direction == PrivacyCacheTransitionInventory::Unprotect) &&
+         (!inventory.detailAndFaceRectangles.isEmpty() ||
+          inventory.detailAndFaceInventoryComplete ||
+          inventory.legacyPrimaryAliasInventoryComplete)))
     {
-        if (!validInventoryIdentifier(supplied, token))
-        {
-            result.status = InvalidInventory;
-            finishPurgeAttempt(false);
+        result.status = InvalidInventory;
+        finishPurgeAttempt(false);
 
-            return result;
-        }
-
-        const ThumbnailIdentifier sanitized = persistentIdentityOnly(supplied);
-        bool duplicate = false;
-
-        for (const ThumbnailIdentifier& identity : std::as_const(identities))
-        {
-            if (samePersistentIdentity(identity, sanitized))
-            {
-                duplicate = true;
-                break;
-            }
-        }
-
-        if (!duplicate)
-        {
-            identities << sanitized;
-        }
+        return result;
     }
 
     for (const QRect& rect : inventory.detailAndFaceRectangles)
@@ -463,22 +439,27 @@ PrivacyCacheTransition::Result PrivacyCacheTransition::purge(
 
     bool purgeSucceeded = true;
 
-    for (const ThumbnailIdentifier& identity : std::as_const(identities))
+    if (inventory.direction == PrivacyCacheTransitionInventory::Protect)
     {
-        if (!identity.cacheNamespace.isEmpty() ||
-            inventory.legacyPrimaryAliasInventoryComplete)
+        if (inventory.legacyPrimaryAliasInventoryComplete)
         {
-            purgeSucceeded = backend->removePersistentThumbnail(identity, QRect()) &&
+            purgeSucceeded = backend->removePersistentThumbnail(prior, QRect()) &&
                              purgeSucceeded;
             ++result.primaryEntriesAddressed;
         }
 
         for (const QRect& rect : inventory.detailAndFaceRectangles)
         {
-            purgeSucceeded = backend->removePersistentThumbnail(identity, rect) &&
+            purgeSucceeded = backend->removePersistentThumbnail(prior, rect) &&
                              purgeSucceeded;
             ++result.detailEntriesAddressed;
         }
+    }
+    else
+    {
+        purgeSucceeded = backend->removePersistentThumbnail(prior, QRect()) &&
+                         purgeSucceeded;
+        ++result.primaryEntriesAddressed;
     }
 
     if (!purgeSucceeded)
@@ -489,9 +470,9 @@ PrivacyCacheTransition::Result PrivacyCacheTransition::purge(
         return result;
     }
 
-    if (!inventory.priorPersistentIdentifierInventoryComplete     ||
-        !inventory.detailAndFaceInventoryComplete                 ||
-        !inventory.legacyPrimaryAliasInventoryComplete)
+    if ((inventory.direction == PrivacyCacheTransitionInventory::Protect) &&
+        (!inventory.detailAndFaceInventoryComplete ||
+         !inventory.legacyPrimaryAliasInventoryComplete))
     {
         result.status = IncompleteOwnershipInventory;
         finishPurgeAttempt(false);

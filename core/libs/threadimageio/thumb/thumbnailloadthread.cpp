@@ -16,6 +16,23 @@
 
 #include "thumbnailloadthread_p.h"
 
+// C++ includes
+
+#include <algorithm>
+
+// Qt includes
+
+#include <QDir>
+#include <QRegularExpression>
+#include <QSet>
+#include <QUrl>
+#include <QUrlQuery>
+
+// Local includes
+
+#include "thumbsdb.h"
+#include "privacycachetransition.h"
+
 namespace Digikam
 {
 
@@ -179,6 +196,141 @@ void ThumbnailLoadThread::initializeThumbnailDatabase(const DbEngineParameters& 
                                        "Failed to Initialize Thumbnails Database"),
                                  i18n("Error message: %1", ThumbsDbAccess().lastError()));
     }
+}
+
+bool ThumbnailLoadThread::privacyLegacyDetailRectangles(
+    const PrivacyCacheTransitionToken& token, QList<QRect>* const rectangles)
+{
+    if (!rectangles)
+    {
+        return false;
+    }
+
+    rectangles->clear();
+    const QString cleanPath = QDir::cleanPath(token.logicalFilePath());
+
+    if (!PrivacyCacheTransition::isActive(token) ||
+        !QDir::isAbsolutePath(cleanPath) ||
+        (static_d->storageMethod != ThumbnailCreator::ThumbnailDatabase) ||
+        !ThumbsDbAccess::isInitialized())
+    {
+        return false;
+    }
+
+    QStringList identifiers;
+    ThumbsDbAccess access;
+
+    if (!access.db() ||
+        (access.db()->customIdentifiers(&identifiers) != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    static const QRegularExpression rectExpression(
+        QLatin1String("^(-?[0-9]+),(-?[0-9]+)-([1-9][0-9]*)x([1-9][0-9]*)$"));
+    QSet<QRect> uniqueRectangles;
+
+    for (const QString& identifier : std::as_const(identifiers))
+    {
+        const QUrl url(identifier);
+
+        if (!url.isValid() || (url.scheme() != QLatin1String("detail")))
+        {
+            continue;
+        }
+
+        const QString identifierPath = QDir::cleanPath(url.path());
+
+        if (identifierPath != cleanPath)
+        {
+            continue;
+        }
+
+        const QUrlQuery query(url);
+        const QList<QPair<QString, QString> > items = query.queryItems();
+
+        if ((items.size() != 1) ||
+            (items.constFirst().first != QLatin1String("rect")))
+        {
+            return false;
+        }
+
+        const QRegularExpressionMatch match =
+            rectExpression.match(items.constFirst().second);
+
+        if (!match.hasMatch())
+        {
+            return false;
+        }
+
+        bool valuesValid = false;
+        const int x = match.captured(1).toInt(&valuesValid);
+
+        if (!valuesValid)
+        {
+            return false;
+        }
+
+        const int y = match.captured(2).toInt(&valuesValid);
+
+        if (!valuesValid)
+        {
+            return false;
+        }
+
+        const int width = match.captured(3).toInt(&valuesValid);
+
+        if (!valuesValid)
+        {
+            return false;
+        }
+
+        const int height = match.captured(4).toInt(&valuesValid);
+        const QRect rect(x, y, width, height);
+
+        if (!valuesValid || !rect.isValid() || rect.isEmpty())
+        {
+            return false;
+        }
+
+        QUrl canonical = QUrl::fromLocalFile(cleanPath);
+        canonical.setScheme(QLatin1String("detail"));
+        QUrlQuery canonicalQuery;
+        canonicalQuery.addQueryItem(QLatin1String("rect"),
+                                    items.constFirst().second);
+        canonical.setQuery(canonicalQuery);
+
+        if (canonical.toString() != identifier)
+        {
+            return false;
+        }
+
+        uniqueRectangles.insert(rect);
+    }
+
+    *rectangles = uniqueRectangles.values();
+    std::sort(rectangles->begin(), rectangles->end(),
+              [](const QRect& first, const QRect& second)
+              {
+                  if (first.x() != second.x())
+                  {
+                      return first.x() < second.x();
+                  }
+
+                  if (first.y() != second.y())
+                  {
+                      return first.y() < second.y();
+                  }
+
+                  if (first.width() != second.width())
+                  {
+                      return first.width() < second.width();
+                  }
+
+                  return first.height() < second.height();
+              });
+
+    return true;
 }
 
 void ThumbnailLoadThread::setDisplayingWidget(QWidget* const widget)

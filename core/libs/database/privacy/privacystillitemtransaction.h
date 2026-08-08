@@ -169,12 +169,16 @@ class DIGIKAM_DATABASE_EXPORT PrivacyStillItemCacheGate
 public:
 
     virtual ~PrivacyStillItemCacheGate() = default;
-    /** Both operations are idempotent for one image/path/direction. finish()
-     * succeeds when a cold restart has already discarded the process token. */
+    /** Both operations are idempotent for one image/path/direction. Protect
+     * begin requires exact legacy-primary alias-completeness evidence. A
+     * tokenless cold-replay finish requires authoritative evidence that the
+     * journal reached PublicStateVerified or later. */
     virtual bool begin(qlonglong imageId, const QString& logicalPath,
-                       bool protecting) = 0;
+                       bool protecting,
+                       bool legacyPrimaryAliasInventoryComplete) = 0;
     virtual bool finish(qlonglong imageId, const QString& logicalPath,
-                        bool protecting) = 0;
+                        bool protecting,
+                        bool publicStateVerifiedOrLater) = 0;
 };
 
 enum class PrivacyStillItemFaultPoint

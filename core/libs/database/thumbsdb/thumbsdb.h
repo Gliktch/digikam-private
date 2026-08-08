@@ -19,6 +19,7 @@
 
 #include <QDateTime>
 #include <QString>
+#include <QStringList>
 #include <QHash>
 #include <QList>
 
@@ -88,6 +89,10 @@ public:
      * Returns the thumbnail ids of all thumbnails in the database.
      */
     QList<int> findAll();
+
+    /** Enumerates the actual CustomIdentifiers rows. The output is cleared
+     * both before the query and when the query fails. */
+    BdEngineBackend::QueryState customIdentifiers(QStringList* identifiers);
 
     BdEngineBackend::QueryState insertUniqueHash(const QString& uniqueHash, qlonglong fileSize, int thumbId);
     BdEngineBackend::QueryState insertFilePath(const QString& path, int thumbId);
