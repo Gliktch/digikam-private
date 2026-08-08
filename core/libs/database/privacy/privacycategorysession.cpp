@@ -17,7 +17,12 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutexLocker>
+#include <QWaitCondition>
 #include <QUuid>
+
+// C++ includes
+
+#include <utility>
 
 // Local includes
 
@@ -327,36 +332,36 @@ class PrivacyCategorySessionCoordinator::Private
 {
 public:
 
+    enum class OperationKind
+    {
+        Create,
+        Unlock,
+        Lock
+    };
+
+    struct Operation
+    {
+        OperationKind kind = OperationKind::Unlock;
+        quint64 token = 0;
+        bool cancelRequested = false;
+    };
+
     class Session
     {
     public:
 
         Session(QString uuid, PrivacyPassword&& normalizedPassword,
-                std::unique_ptr<PrivacyCategoryStoreLease>&& storeLease,
-                PrivacySecretLifetimeObserver* lifetimeObserver)
+                std::unique_ptr<PrivacyCategoryStoreLease>&& storeLease)
             : categoryUuid(std::move(uuid)),
-              password(std::move(normalizedPassword)),
-              lease(std::move(storeLease)),
-              observer(lifetimeObserver)
+              password(std::make_unique<PrivacyPassword>(
+                           std::move(normalizedPassword))),
+              lease(std::move(storeLease))
         {
-            if (observer)
-            {
-                observer->secretRetained(categoryUuid);
-            }
-        }
-
-        ~Session()
-        {
-            if (observer)
-            {
-                observer->secretReleased(categoryUuid);
-            }
         }
 
         QString categoryUuid;
-        PrivacyPassword password;
+        std::unique_ptr<PrivacyPassword> password;
         std::unique_ptr<PrivacyCategoryStoreLease> lease;
-        PrivacySecretLifetimeObserver* observer = nullptr;
     };
 
     Private(PrivacyCategorySessionRepository& sessionRepository,
@@ -372,13 +377,59 @@ public:
     {
     }
 
+    quint64 beginOperation(const QString& categoryUuid, OperationKind kind)
+    {
+        if ((lockAllInProgress && (kind != OperationKind::Lock)) ||
+            operations.contains(categoryUuid))
+        {
+            return 0;
+        }
+
+        quint64 token = ++nextOperationToken;
+
+        if (token == 0)
+        {
+            token = ++nextOperationToken;
+        }
+
+        Operation operation;
+        operation.kind = kind;
+        operation.token = token;
+        operations.insert(categoryUuid, operation);
+
+        return token;
+    }
+
+    bool operationCanceled(const QString& categoryUuid, quint64 token) const
+    {
+        const auto it = operations.constFind(categoryUuid);
+
+        return ((it == operations.constEnd()) || (it->token != token) ||
+                it->cancelRequested || lockAllInProgress);
+    }
+
+    void finishOperation(const QString& categoryUuid, quint64 token)
+    {
+        const auto it = operations.find(categoryUuid);
+
+        if ((it != operations.end()) && (it->token == token))
+        {
+            operations.erase(it);
+            operationChanged.wakeAll();
+        }
+    }
+
     PrivacyCategorySessionRepository& repository;
     PrivacyCategoryStoreBackend& storeBackend;
     const PrivacyRootVerifier& rootVerifier;
     PrivacyRuntimeCoordinator& runtime;
     PrivacySecretLifetimeObserver* observer = nullptr;
     mutable QMutex lock;
+    QWaitCondition operationChanged;
     QHash<QString, std::shared_ptr<Session> > sessions;
+    QHash<QString, Operation> operations;
+    quint64 nextOperationToken = 0;
+    bool lockAllInProgress = false;
 };
 
 PrivacyCategorySessionCoordinator::PrivacyCategorySessionCoordinator(
@@ -395,12 +446,50 @@ PrivacyCategorySessionCoordinator::PrivacyCategorySessionCoordinator(
 PrivacyCategorySessionCoordinator::~PrivacyCategorySessionCoordinator()
 {
     lockAllCategories();
+
+    // A backend can report that a managed-store unmount failed. Normal lock
+    // calls retain that session so the caller can retry without losing track
+    // of the live lease or its authentication secret. Destruction has no
+    // retrying owner, so force a fail-closed local teardown: publish locked,
+    // detach all remaining sessions, destroy their leases and passwords, and
+    // only then report that each secret was released. Lease/password
+    // destruction and callbacks deliberately happen outside the mutex.
+    QList<std::shared_ptr<Private::Session> > remainingSessions;
+
+    {
+        QMutexLocker locker(&d->lock);
+        remainingSessions = d->sessions.values();
+        d->sessions.clear();
+    }
+
+    for (const std::shared_ptr<Private::Session>& session :
+         std::as_const(remainingSessions))
+    {
+        d->runtime.setCategoryUnlocked(session->categoryUuid, false);
+        session->lease.reset();
+        session->password.reset();
+
+        if (d->observer)
+        {
+            d->observer->secretReleased(session->categoryUuid);
+        }
+    }
 }
 
 PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
     const PrivacyCategoryCreateRequest& request, const QString& passwordText)
 {
     PrivacyCategorySessionResult result;
+
+    // Strong categories require the recovery-key export and acknowledgement
+    // workflow before any durable category/store mutation. That workflow is
+    // deliberately outside this casual-category slice.
+    if (request.backend == PrivacyBackend::Strong)
+    {
+        result.status = PrivacyCategorySessionStatus::StrongRecoveryRequired;
+        return result;
+    }
+
     PrivacyPassword password = PrivacyPassword::fromUnicode(passwordText,
                                                              &result.passwordError);
 
@@ -426,6 +515,26 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
         return result;
     }
 
+    quint64 operationToken = 0;
+
+    {
+        QMutexLocker locker(&d->lock);
+        operationToken = d->beginOperation(categoryUuid,
+                                           Private::OperationKind::Create);
+    }
+
+    if (operationToken == 0)
+    {
+        result.status = PrivacyCategorySessionStatus::TransactionBlocked;
+        return result;
+    }
+
+    const auto finishOperation = [this, &categoryUuid, operationToken]()
+    {
+        QMutexLocker locker(&d->lock);
+        d->finishOperation(categoryUuid, operationToken);
+    };
+
     const PrivacyRootRuntimeState rootState = d->rootVerifier.verify(root);
 
     if (rootState != PrivacyRootRuntimeState::VerifiedAvailable)
@@ -433,6 +542,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
         result.status = (rootState == PrivacyRootRuntimeState::Offline)
                       ? PrivacyCategorySessionStatus::StoreOffline
                       : PrivacyCategorySessionStatus::StoreIdentityMismatch;
+        finishOperation();
         return result;
     }
 
@@ -490,6 +600,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
         !journal.isValid())
     {
         result.status = PrivacyCategorySessionStatus::InvalidRequest;
+        finishOperation();
         return result;
     }
 
@@ -501,6 +612,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
             !sameCreatingRecords(snapshot, category, root, store, transaction))
         {
             result.status = PrivacyCategorySessionStatus::Conflict;
+            finishOperation();
             return result;
         }
     }
@@ -514,12 +626,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
                                         &result.storeError) || !envelope.isValid())
     {
         result.status = PrivacyCategorySessionStatus::StoreFailure;
-        return result;
-    }
-
-    if (request.backend == PrivacyBackend::Strong)
-    {
-        result.status = PrivacyCategorySessionStatus::StrongRecoveryRequired;
+        finishOperation();
         return result;
     }
 
@@ -559,16 +666,19 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
                                        bindings, transaction))
     {
         result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
+        finishOperation();
         return result;
     }
 
     if (!d->runtime.publishCategory(category))
     {
         result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
+        finishOperation();
         return result;
     }
 
     result.status = PrivacyCategorySessionStatus::Created;
+    finishOperation();
     return result;
 }
 
@@ -577,6 +687,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
 {
     PrivacyCategorySessionResult result;
     const QString categoryUuid = normalizedUuid(categoryUuidText);
+    quint64 operationToken = 0;
 
     {
         QMutexLocker locker(&d->lock);
@@ -586,7 +697,22 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
             result.status = PrivacyCategorySessionStatus::AlreadyUnlocked;
             return result;
         }
+
+        operationToken = d->beginOperation(categoryUuid,
+                                           Private::OperationKind::Unlock);
     }
+
+    if (operationToken == 0)
+    {
+        result.status = PrivacyCategorySessionStatus::TransactionBlocked;
+        return result;
+    }
+
+    const auto finishOperation = [this, &categoryUuid, operationToken]()
+    {
+        QMutexLocker locker(&d->lock);
+        d->finishOperation(categoryUuid, operationToken);
+    };
 
     PrivacyPassword password = PrivacyPassword::fromUnicode(passwordText,
                                                              &result.passwordError);
@@ -596,6 +722,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
         result.status = password.isValid()
                       ? PrivacyCategorySessionStatus::InvalidRequest
                       : PrivacyCategorySessionStatus::InvalidPassword;
+        finishOperation();
         return result;
     }
 
@@ -605,6 +732,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
     if (!d->repository.loadSnapshot(&snapshot) ||
         !loadActiveBundle(snapshot, categoryUuid, &bundle, &result.status))
     {
+        finishOperation();
         return result;
     }
 
@@ -612,6 +740,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
         (sha256(bundle.credential.envelopeBlob) != bundle.credential.envelopeHash))
     {
         result.status = PrivacyCategorySessionStatus::AuthenticationFailed;
+        finishOperation();
         return result;
     }
 
@@ -624,6 +753,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
         !d->storeBackend.validateEnvelope(envelope, password, &result.storeError))
     {
         result.status = PrivacyCategorySessionStatus::AuthenticationFailed;
+        finishOperation();
         return result;
     }
 
@@ -633,6 +763,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
     if (rootState == PrivacyRootRuntimeState::IdentityMismatch)
     {
         result.status = PrivacyCategorySessionStatus::StoreIdentityMismatch;
+        finishOperation();
         return result;
     }
 
@@ -641,6 +772,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
         if (bundle.category.backend == PrivacyBackend::Strong)
         {
             result.status = PrivacyCategorySessionStatus::StoreOffline;
+            finishOperation();
             return result;
         }
     }
@@ -653,39 +785,111 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
         if (!lease || !lease->isActive())
         {
             result.status = PrivacyCategorySessionStatus::StoreFailure;
+            finishOperation();
             return result;
         }
     }
     else
     {
         result.status = PrivacyCategorySessionStatus::StoreIdentityMismatch;
+        finishOperation();
         return result;
     }
 
-    QMutexLocker locker(&d->lock);
-
-    if (d->sessions.contains(categoryUuid))
+    const auto retainFailedCleanup = [this, &categoryUuid, operationToken,
+                                      &password, &lease]()
     {
-        if (lease)
+        std::shared_ptr<Private::Session> session =
+            std::make_shared<Private::Session>(categoryUuid,
+                                               std::move(password),
+                                               std::move(lease));
+
         {
-            d->storeBackend.lock(lease, &result.storeError);
+            QMutexLocker locker(&d->lock);
+            d->sessions.insert(categoryUuid, session);
+            d->finishOperation(categoryUuid, operationToken);
         }
 
-        result.status = PrivacyCategorySessionStatus::AlreadyUnlocked;
+        if (d->observer)
+        {
+            d->observer->secretRetained(categoryUuid);
+        }
+    };
+
+    const auto canceled = [this, &categoryUuid, operationToken]()
+    {
+        QMutexLocker locker(&d->lock);
+        return d->operationCanceled(categoryUuid, operationToken);
+    };
+
+    if (canceled())
+    {
+        if (!d->storeBackend.lock(lease, &result.storeError))
+        {
+            d->runtime.setCategoryUnlocked(categoryUuid, true);
+            retainFailedCleanup();
+            result.status = PrivacyCategorySessionStatus::LockFailed;
+            return result;
+        }
+
+        finishOperation();
+        result.status = PrivacyCategorySessionStatus::Canceled;
         return result;
     }
-
-    std::shared_ptr<Private::Session> session = std::make_shared<Private::Session>(
-        categoryUuid, std::move(password), std::move(lease), d->observer);
-    d->sessions.insert(categoryUuid, session);
 
     if (!d->runtime.setCategoryUnlocked(categoryUuid, true))
     {
-        std::unique_ptr<PrivacyCategoryStoreLease>& candidateLease = session->lease;
-        d->storeBackend.lock(candidateLease, &result.storeError);
-        d->sessions.remove(categoryUuid);
+        if (!d->storeBackend.lock(lease, &result.storeError))
+        {
+            d->runtime.setCategoryUnlocked(categoryUuid, true);
+            retainFailedCleanup();
+            result.status = PrivacyCategorySessionStatus::LockFailed;
+            return result;
+        }
+
+        finishOperation();
         result.status = PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
         return result;
+    }
+
+    bool canceledAfterPublication = false;
+    std::shared_ptr<Private::Session> session;
+
+    {
+        QMutexLocker locker(&d->lock);
+        canceledAfterPublication = d->operationCanceled(categoryUuid,
+                                                        operationToken);
+
+        if (!canceledAfterPublication)
+        {
+            session = std::make_shared<Private::Session>(categoryUuid,
+                                                        std::move(password),
+                                                        std::move(lease));
+            d->sessions.insert(categoryUuid, session);
+            d->finishOperation(categoryUuid, operationToken);
+        }
+    }
+
+    if (canceledAfterPublication)
+    {
+        d->runtime.setCategoryUnlocked(categoryUuid, false);
+
+        if (!d->storeBackend.lock(lease, &result.storeError))
+        {
+            d->runtime.setCategoryUnlocked(categoryUuid, true);
+            retainFailedCleanup();
+            result.status = PrivacyCategorySessionStatus::LockFailed;
+            return result;
+        }
+
+        finishOperation();
+        result.status = PrivacyCategorySessionStatus::Canceled;
+        return result;
+    }
+
+    if (d->observer)
+    {
+        d->observer->secretRetained(categoryUuid);
     }
 
     result.status = (rootState == PrivacyRootRuntimeState::Offline)
@@ -699,21 +903,60 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::lockCategory(
 {
     PrivacyCategorySessionResult result;
     const QString categoryUuid = normalizedUuid(categoryUuidText);
-    QMutexLocker locker(&d->lock);
-    const auto it = d->sessions.find(categoryUuid);
 
-    if (it == d->sessions.end())
+    if (categoryUuid.isEmpty())
     {
-        result.status = categoryUuid.isEmpty()
-                      ? PrivacyCategorySessionStatus::InvalidRequest
-                      : PrivacyCategorySessionStatus::AlreadyLocked;
+        result.status = PrivacyCategorySessionStatus::InvalidRequest;
         return result;
     }
 
-    const std::shared_ptr<Private::Session> session = it.value();
+    quint64 operationToken = 0;
+    std::shared_ptr<Private::Session> session;
+
+    {
+        QMutexLocker locker(&d->lock);
+
+        while (d->operations.contains(categoryUuid))
+        {
+            auto operation = d->operations.find(categoryUuid);
+
+            if (operation->kind == Private::OperationKind::Unlock)
+            {
+                operation->cancelRequested = true;
+            }
+
+            d->operationChanged.wait(&d->lock);
+        }
+
+        const auto sessionIt = d->sessions.constFind(categoryUuid);
+
+        if (sessionIt == d->sessions.constEnd())
+        {
+            result.status = PrivacyCategorySessionStatus::AlreadyLocked;
+            return result;
+        }
+
+        operationToken = d->beginOperation(categoryUuid,
+                                           Private::OperationKind::Lock);
+
+        if (operationToken == 0)
+        {
+            result.status = PrivacyCategorySessionStatus::TransactionBlocked;
+            return result;
+        }
+
+        session = sessionIt.value();
+    }
+
+    const auto finishOperation = [this, &categoryUuid, operationToken]()
+    {
+        QMutexLocker locker(&d->lock);
+        d->finishOperation(categoryUuid, operationToken);
+    };
 
     if (!d->runtime.setCategoryUnlocked(categoryUuid, false))
     {
+        finishOperation();
         result.status = PrivacyCategorySessionStatus::LockFailed;
         return result;
     }
@@ -721,11 +964,34 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::lockCategory(
     if (!d->storeBackend.lock(session->lease, &result.storeError))
     {
         d->runtime.setCategoryUnlocked(categoryUuid, true);
+        finishOperation();
         result.status = PrivacyCategorySessionStatus::LockFailed;
         return result;
     }
 
-    d->sessions.erase(it);
+    {
+        QMutexLocker locker(&d->lock);
+        const auto sessionIt = d->sessions.find(categoryUuid);
+
+        if ((sessionIt != d->sessions.end()) &&
+            (sessionIt.value() == session))
+        {
+            d->sessions.erase(sessionIt);
+        }
+
+        d->finishOperation(categoryUuid, operationToken);
+    }
+
+    // Destroy the normalized password before reporting its release. Neither
+    // destruction nor the observer callback runs under the coordinator lock.
+    session->password.reset();
+    session.reset();
+
+    if (d->observer)
+    {
+        d->observer->secretReleased(categoryUuid);
+    }
+
     result.status = PrivacyCategorySessionStatus::Locked;
     return result;
 }
@@ -737,6 +1003,27 @@ PrivacyCategorySessionCoordinator::lockAllCategories()
 
     {
         QMutexLocker locker(&d->lock);
+
+        while (d->lockAllInProgress)
+        {
+            d->operationChanged.wait(&d->lock);
+        }
+
+        d->lockAllInProgress = true;
+
+        for (auto it = d->operations.begin() ; it != d->operations.end() ; ++it)
+        {
+            if (it->kind == Private::OperationKind::Unlock)
+            {
+                it->cancelRequested = true;
+            }
+        }
+
+        while (!d->operations.isEmpty())
+        {
+            d->operationChanged.wait(&d->lock);
+        }
+
         categoryUuids = d->sessions.keys();
     }
 
@@ -745,6 +1032,12 @@ PrivacyCategorySessionCoordinator::lockAllCategories()
     for (const QString& categoryUuid : std::as_const(categoryUuids))
     {
         results << lockCategory(categoryUuid);
+    }
+
+    {
+        QMutexLocker locker(&d->lock);
+        d->lockAllInProgress = false;
+        d->operationChanged.wakeAll();
     }
 
     return results;

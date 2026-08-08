@@ -49,6 +49,7 @@ enum class PrivacyCategorySessionStatus
     StoreFailure,
     PublicationFailedRecoveryRequired,
     StrongRecoveryRequired,
+    Canceled,
     LockFailed
 };
 
