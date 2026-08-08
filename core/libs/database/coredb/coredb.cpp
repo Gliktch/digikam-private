@@ -514,6 +514,85 @@ bool CoreDB::insertPrivacyStorageRoot(const PrivacyStorageRoot& root) const
                                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
 }
 
+bool CoreDB::ensurePrivacyAlbumRoot(const PrivacyStorageRoot& candidate,
+                                    PrivacyStorageRoot* const persisted,
+                                    bool* const created) const
+{
+    if (!persisted || !created || !candidate.isValid() ||
+        (candidate.kind != PrivacyStorageRootKind::AlbumRoot) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QList<PrivacyStorageRoot> roots;
+
+    if (!getPrivacyStorageRoots(&roots))
+    {
+        return abort();
+    }
+
+    PrivacyStorageRoot existing;
+    int albumRootMatches = 0;
+
+    for (const PrivacyStorageRoot& root : std::as_const(roots))
+    {
+        if ((root.kind == PrivacyStorageRootKind::AlbumRoot) &&
+            (root.albumRootId == candidate.albumRootId))
+        {
+            existing = root;
+            ++albumRootMatches;
+        }
+
+        if ((root.uuid == candidate.uuid) &&
+            ((root.kind != PrivacyStorageRootKind::AlbumRoot) ||
+             (root.albumRootId != candidate.albumRootId)))
+        {
+            return abort();
+        }
+    }
+
+    if (albumRootMatches > 1)
+    {
+        return abort();
+    }
+
+    if (albumRootMatches == 1)
+    {
+        if (d->db->commitTransaction() != BdEngineBackend::NoErrors)
+        {
+            return false;
+        }
+
+        *persisted = existing;
+        *created   = false;
+
+        return true;
+    }
+
+    if (!insertPrivacyStorageRoot(candidate))
+    {
+        return abort();
+    }
+
+    if (d->db->commitTransaction() != BdEngineBackend::NoErrors)
+    {
+        return false;
+    }
+
+    *persisted = candidate;
+    *created   = true;
+
+    return true;
+}
+
 bool CoreDB::getPrivacyStorageRoots(QList<PrivacyStorageRoot>* roots) const
 {
     if (!roots)
@@ -1468,6 +1547,17 @@ bool CoreDB::publishPrivacyCategoryCreation(
         return false;
     };
 
+    const QVariantList expectedBindings = {
+        category.uuid,
+        static_cast<int>(PrivacyCategoryLifecycleState::Creating),
+        store.uuid,
+        category.uuid,
+        static_cast<int>(PrivacyStoreLifecycleState::Creating),
+        transaction.uuid,
+        category.uuid,
+        static_cast<int>(PrivacyTransactionType::CreateCategory),
+        static_cast<int>(PrivacyTransactionState::Created)
+    };
     QVariantList expected;
     d->db->execSql(QString::fromUtf8(
         "SELECT "
@@ -1477,11 +1567,7 @@ bool CoreDB::publishPrivacyCategoryCreation(
         "AND lifecycleState=? AND configGeneration IS NULL), "
         "EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? AND categoryUuid=? "
         "AND type=? AND state=? AND generation=0);"),
-        category.uuid, static_cast<int>(PrivacyCategoryLifecycleState::Creating),
-        store.uuid, category.uuid, static_cast<int>(PrivacyStoreLifecycleState::Creating),
-        transaction.uuid, category.uuid,
-        static_cast<int>(PrivacyTransactionType::CreateCategory),
-        static_cast<int>(PrivacyTransactionState::Created), &expected);
+        expectedBindings, &expected);
 
     if ((expected.size() != 3) || !expected.at(0).toBool() ||
         !expected.at(1).toBool() || !expected.at(2).toBool() ||

@@ -18,6 +18,29 @@
 namespace Digikam
 {
 
+enum class PrivacyAlbumRootRegistrationStatus
+{
+    Created,
+    Existing,
+    Offline,
+    IdentityMismatch,
+    Conflict,
+    StorageFailure
+};
+
+class DIGIKAM_DATABASE_EXPORT PrivacyAlbumRootRegistrationResult
+{
+public:
+
+    bool succeeded() const;
+
+public:
+
+    PrivacyAlbumRootRegistrationStatus status =
+        PrivacyAlbumRootRegistrationStatus::StorageFailure;
+    PrivacyStorageRoot root;
+};
+
 class DIGIKAM_DATABASE_EXPORT PrivacyRepository
 {
 public:
@@ -32,6 +55,10 @@ public:
 
     bool addCredential(const PrivacyCredential& credential) const;
     bool addStorageRoot(const PrivacyStorageRoot& root) const;
+    PrivacyAlbumRootRegistrationResult ensureAlbumRoot(
+        int albumRootId,
+        const QString& configuredPath,
+        const QString& collectionIdentifier) const;
     bool addStore(const PrivacyStore& store) const;
     bool addStoreBinding(const PrivacyStoreBinding& binding) const;
 

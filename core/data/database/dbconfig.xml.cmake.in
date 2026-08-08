@@ -299,6 +299,7 @@
                     markerUuid TEXT,
                     schemaVersion INTEGER NOT NULL,
                     createdAt DATETIME NOT NULL,
+                    UNIQUE(albumRootId),
                     FOREIGN KEY (albumRootId) REFERENCES AlbumRoots (id) ON DELETE RESTRICT ON UPDATE CASCADE);
                 </statement>
                 <statement mode="plain">CREATE TABLE PrivacyStores
@@ -1481,6 +1482,7 @@
                     markerUuid TEXT,
                     schemaVersion INTEGER NOT NULL,
                     createdAt DATETIME NOT NULL,
+                    UNIQUE(albumRootId),
                     FOREIGN KEY (albumRootId) REFERENCES AlbumRoots (id) ON DELETE RESTRICT ON UPDATE CASCADE);
                 </statement>
                 <statement mode="plain">CREATE TABLE PrivacyStores
@@ -2078,7 +2080,7 @@
                     markerUuid VARCHAR(36),
                     schemaVersion INTEGER NOT NULL,
                     createdAt DATETIME NOT NULL,
-                    INDEX PrivacyStorageRoots_AlbumRoot (albumRootId),
+                    UNIQUE INDEX PrivacyStorageRoots_AlbumRoot (albumRootId),
                     CONSTRAINT PrivacyStorageRoots_AlbumRoots FOREIGN KEY (albumRootId) REFERENCES AlbumRoots (id) ON DELETE RESTRICT ON UPDATE CASCADE)
                     ENGINE InnoDB;
                 </statement>
@@ -3868,7 +3870,7 @@
                     markerUuid VARCHAR(36),
                     schemaVersion INTEGER NOT NULL,
                     createdAt DATETIME NOT NULL,
-                    INDEX PrivacyStorageRoots_AlbumRoot (albumRootId),
+                    UNIQUE INDEX PrivacyStorageRoots_AlbumRoot (albumRootId),
                     CONSTRAINT PrivacyStorageRoots_AlbumRoots FOREIGN KEY (albumRootId) REFERENCES AlbumRoots (id) ON DELETE RESTRICT ON UPDATE CASCADE)
                     ENGINE InnoDB;
                 </statement>

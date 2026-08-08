@@ -325,6 +325,7 @@ private Q_SLOTS:
     void testManualTagVisibilityProvider();
     void testAnalysisProvider();
     void testMixedRootAndConflictingMappings();
+    void testDynamicAlbumRootRegistration();
     void testRootEpochTransition();
     void testTransactionStates();
 };
@@ -926,6 +927,61 @@ void PrivacyRuntimeTest::testMixedRootAndConflictingMappings()
     QVERIFY(!runtime.currentState(
                 QLatin1String("20000000-0000-0000-0000-000000000099"),
                 &firstLeaseState));
+}
+
+void PrivacyRuntimeTest::testDynamicAlbumRootRegistration()
+{
+    const QString registeredUuid =
+        QLatin1String("30000000-0000-0000-0000-000000000010");
+    const QString offlineUuid =
+        QLatin1String("30000000-0000-0000-0000-000000000011");
+    const QString mismatchUuid =
+        QLatin1String("30000000-0000-0000-0000-000000000012");
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+    verifier->states.insert(registeredUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+    verifier->states.insert(offlineUuid, PrivacyRootRuntimeState::Offline);
+    verifier->states.insert(mismatchUuid, PrivacyRootRuntimeState::IdentityMismatch);
+    const QSharedPointer<FakeIntegrityInspector> integrity(new FakeIntegrityInspector);
+    PrivacyRuntimeCoordinator runtime;
+    QCOMPARE(runtime.initialize(makeSnapshot(), verifier, {}, integrity).state,
+             PrivacyStartupState::Ready);
+    QVERIFY(runtime.setCategoryUnlocked(categoryUuid, true));
+
+    const PrivacyStorageRoot registered = makeRoot(registeredUuid, 10);
+    QCOMPARE(runtime.registerAlbumRoot(registered),
+             PrivacyRootRecoveryResult::PublishedVerified);
+    QCOMPARE(runtime.rootUuidForAlbumRootId(10), registeredUuid);
+    QCOMPARE(runtime.rootState(registeredUuid),
+             PrivacyRootRuntimeState::VerifiedAvailable);
+    QVERIFY(!runtime.rootContainsProtectedItems(10));
+    const quint64 firstEpoch = runtime.rootEpoch(registeredUuid);
+    QVERIFY(firstEpoch > 0);
+
+    PrivacyActionItemState itemState;
+    QVERIFY(runtime.stateForItem(42, &itemState));
+    QCOMPARE(itemState.access, PrivacyItemAccess::Unlocked);
+
+    QCOMPARE(runtime.registerAlbumRoot(registered),
+             PrivacyRootRecoveryResult::PublishedVerified);
+    QVERIFY(runtime.rootEpoch(registeredUuid) > firstEpoch);
+    QVERIFY(runtime.stateForItem(42, &itemState));
+    QCOMPARE(itemState.access, PrivacyItemAccess::Unlocked);
+
+    QCOMPARE(runtime.registerAlbumRoot(makeRoot(
+                 QLatin1String("30000000-0000-0000-0000-000000000099"), 10)),
+             PrivacyRootRecoveryResult::Deferred);
+    QCOMPARE(runtime.registerAlbumRoot(makeRoot(registeredUuid, 99)),
+             PrivacyRootRecoveryResult::Deferred);
+    QCOMPARE(runtime.rootUuidForAlbumRootId(10), registeredUuid);
+
+    QCOMPARE(runtime.registerAlbumRoot(makeRoot(offlineUuid, 11)),
+             PrivacyRootRecoveryResult::PublishedOffline);
+    QCOMPARE(runtime.rootState(offlineUuid), PrivacyRootRuntimeState::Offline);
+    QCOMPARE(runtime.registerAlbumRoot(makeRoot(mismatchUuid, 12)),
+             PrivacyRootRecoveryResult::PublishedIdentityMismatch);
+    QCOMPARE(runtime.rootState(mismatchUuid),
+             PrivacyRootRuntimeState::IdentityMismatch);
 }
 
 void PrivacyRuntimeTest::testRootEpochTransition()

@@ -257,6 +257,29 @@ bool executeSqliteSchemaScenario(const QDomElement& database, bool update, QStri
         }
 
         if (success &&
+            query.exec(QLatin1String("INSERT INTO PrivacyStorageRoots "
+                                     "(uuid, kind, albumRootId, configuredPath, identityVersion, identityData, "
+                                     "schemaVersion, createdAt) VALUES "
+                                     "('30000000-0000-0000-0000-000000000003', 1, 1, '/other', 1, X'03', 1, "
+                                     "'2026-08-08T00:00:00');")))
+        {
+            *errorMessage = QLatin1String("Duplicate privacy album-root mapping unexpectedly succeeded");
+            success       = false;
+        }
+
+        if (success &&
+            !query.exec(QLatin1String("INSERT INTO PrivacyStorageRoots "
+                                      "(uuid, kind, albumRootId, configuredPath, identityVersion, identityData, "
+                                      "markerUuid, schemaVersion, createdAt) VALUES "
+                                      "('30000000-0000-0000-0000-000000000004', 2, NULL, '/vault-two', 1, X'04', "
+                                      "'40000000-0000-0000-0000-000000000004', 1, "
+                                      "'2026-08-08T00:00:00');")))
+        {
+            *errorMessage = QLatin1String("A second nullable managed-root mapping was rejected");
+            success       = false;
+        }
+
+        if (success &&
             !query.exec(QLatin1String("INSERT INTO PrivacyStores "
                                       "(uuid, categoryUuid, rootUuid, format, formatVersion, cipherRelativePath, "
                                       "configRelativePath, configGeneration, lifecycleState, schemaVersion, createdAt) "
@@ -505,6 +528,10 @@ void PrivacyFoundationTest::testSchemaActions()
         QVERIFY(actionText(database, QLatin1String("Migrate_Write_PrivacyCategories"))
                     .contains(QLatin1String(":tagVisibilityMode")));
         QVERIFY(createText.contains(QLatin1String("ON DELETE RESTRICT")));
+        QVERIFY(createText.contains(QLatin1String("UNIQUE(albumRootId)")) ||
+                createText.contains(QLatin1String("UNIQUE INDEX PrivacyStorageRoots_AlbumRoot")));
+        QVERIFY(updateText.contains(QLatin1String("UNIQUE(albumRootId)")) ||
+                updateText.contains(QLatin1String("UNIQUE INDEX PrivacyStorageRoots_AlbumRoot")));
         QVERIFY(!createText.contains(QLatin1String("protectedObjectPath")));
         QVERIFY(!createText.contains(QLatin1String("journalPath")));
         QVERIFY(!createText.contains(QLatin1String("online"), Qt::CaseInsensitive));

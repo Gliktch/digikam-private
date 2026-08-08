@@ -1669,6 +1669,72 @@ bool PrivacyRuntimeCoordinator::currentState(
     return state->isValid();
 }
 
+PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::registerAlbumRoot(
+    const PrivacyStorageRoot& root)
+{
+    if (!root.isValid() || (root.kind != PrivacyStorageRootKind::AlbumRoot))
+    {
+        return PrivacyRootRecoveryResult::UnknownRoot;
+    }
+
+    QString recoveryUuid;
+
+    {
+        QWriteLocker locker(&d->lock);
+
+        if (!d->initialized)
+        {
+            return PrivacyRootRecoveryResult::UnknownRoot;
+        }
+
+        const PrivacyStorageRoot* existingByUuid = nullptr;
+        const PrivacyStorageRoot* existingByAlbumRoot = nullptr;
+
+        for (const PrivacyStorageRoot& existing : std::as_const(d->snapshot.storageRoots))
+        {
+            if (existing.uuid == root.uuid)
+            {
+                existingByUuid = &existing;
+            }
+
+            if ((existing.kind == PrivacyStorageRootKind::AlbumRoot) &&
+                (existing.albumRootId == root.albumRootId))
+            {
+                existingByAlbumRoot = &existing;
+            }
+        }
+
+        if (existingByUuid || existingByAlbumRoot)
+        {
+            if (!existingByUuid || !existingByAlbumRoot ||
+                (existingByUuid != existingByAlbumRoot) ||
+                (existingByUuid->identityVersion != root.identityVersion) ||
+                (existingByUuid->identityData != root.identityData))
+            {
+                return PrivacyRootRecoveryResult::Deferred;
+            }
+
+            recoveryUuid = existingByUuid->uuid;
+        }
+        else
+        {
+            d->snapshot.storageRoots << root;
+            d->albumRootUuids.insert(root.albumRootId, root.uuid);
+            d->setRootState(root.uuid, PrivacyRootRuntimeState::Recovering);
+
+            PrivacyRootIntegritySummary summary;
+            summary.rootUuid = root.uuid;
+            summary.state    = PrivacyRootRuntimeState::Recovering;
+            d->rootSummaries.insert(root.uuid, summary);
+            d->proxyIssueItemsByRoot.insert(root.uuid, QSet<QString>());
+            d->originalIssueItemsByRoot.insert(root.uuid, QSet<QString>());
+            recoveryUuid = root.uuid;
+        }
+    }
+
+    return recoverRoot(recoveryUuid);
+}
+
 bool PrivacyRuntimeCoordinator::beginRootRecovery(const QString& rootUuid)
 {
     if (!isCanonicalUuid(rootUuid))

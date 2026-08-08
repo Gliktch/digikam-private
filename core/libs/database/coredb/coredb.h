@@ -128,6 +128,9 @@ public:
     bool insertPrivacyCredential(const PrivacyCredential& credential)                                              const;
     bool getPrivacyCredentials(QList<PrivacyCredential>* credentials)                                              const;
     bool insertPrivacyStorageRoot(const PrivacyStorageRoot& root)                                                  const;
+    bool ensurePrivacyAlbumRoot(const PrivacyStorageRoot& candidate,
+                                PrivacyStorageRoot* persisted,
+                                bool* created)                                                                     const;
     bool getPrivacyStorageRoots(QList<PrivacyStorageRoot>* roots)                                                  const;
     bool insertPrivacyStore(const PrivacyStore& store)                                                             const;
     bool getPrivacyStores(QList<PrivacyStore>* stores)                                                             const;

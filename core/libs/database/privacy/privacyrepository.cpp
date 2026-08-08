@@ -12,6 +12,8 @@
 
 // Qt includes
 
+#include <QDir>
+#include <QFileInfo>
 #include <QUuid>
 #include <QHash>
 #include <QSet>
@@ -24,6 +26,7 @@
 
 #include "coredb.h"
 #include "coredbaccess.h"
+#include "privacycontracts.h"
 
 namespace Digikam
 {
@@ -58,6 +61,12 @@ QString generationKey(const QString& categoryUuid, qlonglong generation)
 }
 
 } // namespace
+
+bool PrivacyAlbumRootRegistrationResult::succeeded() const
+{
+    return ((status == PrivacyAlbumRootRegistrationStatus::Created) ||
+            (status == PrivacyAlbumRootRegistrationStatus::Existing));
+}
 
 bool PrivacyRepository::createCategory(const PrivacyCategory& category) const
 {
@@ -146,6 +155,129 @@ bool PrivacyRepository::addStorageRoot(const PrivacyStorageRoot& root) const
     CoreDbAccess access;
 
     return normalized.isValid() && access.db()->insertPrivacyStorageRoot(normalized);
+}
+
+PrivacyAlbumRootRegistrationResult PrivacyRepository::ensureAlbumRoot(
+    int albumRootId,
+    const QString& configuredPath,
+    const QString& collectionIdentifier) const
+{
+    PrivacyAlbumRootRegistrationResult result;
+    const QString cleanPath = QDir::cleanPath(configuredPath);
+    const QFileInfo pathInfo(cleanPath);
+
+    if ((albumRootId <= 0) || collectionIdentifier.isEmpty() ||
+        collectionIdentifier.contains(QChar::Null) ||
+        !QDir::isAbsolutePath(cleanPath) || (cleanPath == QLatin1String("/")) ||
+        !pathInfo.isDir() || (pathInfo.canonicalFilePath() != cleanPath))
+    {
+        result.status = PrivacyAlbumRootRegistrationStatus::Offline;
+        return result;
+    }
+
+    CoreDbAccess access;
+    QList<PrivacyStorageRoot> roots;
+
+    if (!access.db()->getPrivacyStorageRoots(&roots))
+    {
+        return result;
+    }
+
+    const auto classifyExisting = [albumRootId, &collectionIdentifier, &result]
+                                  (const QList<PrivacyStorageRoot>& records)
+    {
+        int matches = 0;
+
+        for (const PrivacyStorageRoot& root : records)
+        {
+            if ((root.kind != PrivacyStorageRootKind::AlbumRoot) ||
+                (root.albumRootId != albumRootId))
+            {
+                continue;
+            }
+
+            ++matches;
+            result.root = root;
+        }
+
+        if (matches > 1)
+        {
+            result.status = PrivacyAlbumRootRegistrationStatus::Conflict;
+            return true;
+        }
+
+        if (matches == 1)
+        {
+            if (!result.root.isValid())
+            {
+                result.status = PrivacyAlbumRootRegistrationStatus::Conflict;
+                return true;
+            }
+
+            result.status = (result.root.identityVersion == 1) &&
+                            PrivacyRootIdentityCodec::matchesAlbumRootV1(
+                                result.root.identityData, albumRootId,
+                                collectionIdentifier)
+                          ? PrivacyAlbumRootRegistrationStatus::Existing
+                          : PrivacyAlbumRootRegistrationStatus::IdentityMismatch;
+            return true;
+        }
+
+        return false;
+    };
+
+    if (classifyExisting(roots))
+    {
+        return result;
+    }
+
+    PrivacyStorageRoot candidate;
+    candidate.uuid            = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    candidate.kind            = PrivacyStorageRootKind::AlbumRoot;
+    candidate.albumRootId     = albumRootId;
+    candidate.configuredPath  = cleanPath;
+    candidate.identityVersion = 1;
+    candidate.identityData    = PrivacyRootIdentityCodec::encodeAlbumRootV1(
+                                    albumRootId, collectionIdentifier);
+    candidate.createdAt       = QDateTime::currentDateTimeUtc();
+    bool created = false;
+
+    if (candidate.isValid() &&
+        access.db()->ensurePrivacyAlbumRoot(candidate, &result.root, &created))
+    {
+        if (!result.root.isValid())
+        {
+            result.status = PrivacyAlbumRootRegistrationStatus::Conflict;
+        }
+        else if ((result.root.identityVersion != 1) ||
+                 !PrivacyRootIdentityCodec::matchesAlbumRootV1(
+                result.root.identityData, albumRootId, collectionIdentifier))
+        {
+            result.status = PrivacyAlbumRootRegistrationStatus::IdentityMismatch;
+        }
+        else
+        {
+            result.status = created ? PrivacyAlbumRootRegistrationStatus::Created
+                                    : PrivacyAlbumRootRegistrationStatus::Existing;
+        }
+
+        return result;
+    }
+
+    // A concurrent process may have won the unique album-root insertion.
+    // Re-read once and converge on its durable UUID when the identity agrees.
+
+    roots.clear();
+
+    if (access.db()->getPrivacyStorageRoots(&roots) && classifyExisting(roots))
+    {
+        return result;
+    }
+
+    result.root = PrivacyStorageRoot();
+    result.status = PrivacyAlbumRootRegistrationStatus::StorageFailure;
+
+    return result;
 }
 
 bool PrivacyRepository::addStore(const PrivacyStore& store) const

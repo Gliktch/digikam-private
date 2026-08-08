@@ -199,6 +199,7 @@ public:
                                      qlonglong expectedGeneration,
                                      qlonglong newGeneration);
 
+    PrivacyRootRecoveryResult registerAlbumRoot(const PrivacyStorageRoot& root);
     bool beginRootRecovery(const QString& rootUuid);
     bool publishRootState(const QString& rootUuid, PrivacyRootRuntimeState state);
     bool publishRootStateIfEpoch(const QString& rootUuid,
