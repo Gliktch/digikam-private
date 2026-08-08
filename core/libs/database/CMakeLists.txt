@@ -113,6 +113,7 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyscangate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyruntime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyservice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacystillitemtransaction.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacypassword.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacyprocessrunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacygocryptfsadapter.cpp

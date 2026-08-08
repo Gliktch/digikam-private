@@ -242,6 +242,24 @@ ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyproxygenerator_utest.cpp
 
 #------------------------------------------------------------------------
 
+ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacystillitemtransaction_utest.cpp
+
+              NAME_PREFIX
+
+              "digikam-"
+
+              LINK_LIBRARIES
+
+              digikamcore
+              digikamdatabase
+              libzip::zip
+              Qt${QT_VERSION_MAJOR}::Gui
+
+              ${COMMON_TEST_LINK}
+)
+
+#------------------------------------------------------------------------
+
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyruntime_utest.cpp
 
               NAME_PREFIX
