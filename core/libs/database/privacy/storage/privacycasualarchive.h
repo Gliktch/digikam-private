@@ -181,6 +181,19 @@ public:
         const CancellationCheck& isCancelled = {},
         PrivacyCasualArchiveError* error = nullptr) const;
 
+    /**
+     * Publishes an exact stage whose encrypted contents were fully verified
+     * before the caller durably committed its Prepared size/SHA-256 facts.
+     * This method rechecks only those opaque byte facts and never decrypts.
+     * It must not be used to begin a new archive transaction.
+     */
+    bool publishExactPreparedStage(
+        const QString& stagingPath,
+        const QString& finalArchivePath,
+        qlonglong expectedArchiveSize,
+        const QByteArray& expectedArchiveSha256,
+        PrivacyCasualArchiveError* error = nullptr) const;
+
     /** Fully verifies the archive and its encrypted manifest before streaming
      * one exact member into an already-open caller-owned destination. */
     bool restoreMember(

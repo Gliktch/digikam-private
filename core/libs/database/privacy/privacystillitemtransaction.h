@@ -40,6 +40,7 @@ enum class PrivacyStillItemTransactionStatus
     AcknowledgementRequired,
     AssociatedAssetSetUnsupported,
     CategoryUnavailable,
+    AuthenticationRequired,
     RootUnavailable,
     SourceChanged,
     ArchiveFailure,
@@ -185,6 +186,7 @@ enum class PrivacyStillItemFaultPoint
 {
     AfterDatabaseBegin,
     AfterFilesystemJournal,
+    AfterReplacementStageCreated,
     AfterStagesPrepared,
     AfterArchivePublished,
     AfterProtectedCopyJournal,
@@ -218,6 +220,15 @@ public:
     PrivacyStillItemTransactionResult unprotect(
         const PrivacyStillUnprotectRequest& request,
         const PrivacyPassword& password);
+
+    /**
+     * Resumes one exact durable transaction without a retained password.
+     * Secret-dependent phases return AuthenticationRequired without mutation;
+     * fresh transactions can never enter through this recovery boundary.
+     */
+    PrivacyStillItemTransactionResult recover(
+        const PrivacyStorageRoot& publicRoot,
+        const QString& transactionUuid);
 
 private:
 

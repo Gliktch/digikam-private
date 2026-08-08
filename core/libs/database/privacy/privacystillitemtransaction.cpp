@@ -55,6 +55,32 @@ namespace
 
 constexpr qsizetype IoChunkBytes = 1024 * 1024;
 
+class ScopedBooleanValue
+{
+public:
+
+    ScopedBooleanValue(bool& target, bool value)
+        : m_target(target),
+          m_previous(target)
+    {
+        m_target = value;
+    }
+
+    ~ScopedBooleanValue()
+    {
+        m_target = m_previous;
+    }
+
+private:
+
+    bool& m_target;
+    bool  m_previous = false;
+
+private:
+
+    Q_DISABLE_COPY(ScopedBooleanValue)
+};
+
 QString normalizedUuid(const QString& value)
 {
     const QUuid uuid(value);
@@ -257,6 +283,29 @@ const PrivacyItem* itemForImage(const PrivacyRepositorySnapshot& snapshot,
                                      return (item.imageId == imageId);
                                  });
     return (it == snapshot.items.cend()) ? nullptr : &*it;
+}
+
+const PrivacyItem* itemForUuid(const PrivacyRepositorySnapshot& snapshot,
+                               const QString& itemUuid)
+{
+    const auto it = std::find_if(snapshot.items.cbegin(), snapshot.items.cend(),
+                                 [&itemUuid](const PrivacyItem& item)
+                                 {
+                                     return (item.uuid == itemUuid);
+                                 });
+    return (it == snapshot.items.cend()) ? nullptr : &*it;
+}
+
+const PrivacyStorageRoot* storageRootFor(
+    const PrivacyRepositorySnapshot& snapshot, const QString& rootUuid)
+{
+    const auto it = std::find_if(
+        snapshot.storageRoots.cbegin(), snapshot.storageRoots.cend(),
+        [&rootUuid](const PrivacyStorageRoot& root)
+        {
+            return (root.uuid == rootUuid);
+        });
+    return (it == snapshot.storageRoots.cend()) ? nullptr : &*it;
 }
 
 QList<PrivacyAsset> assetsForItem(const PrivacyRepositorySnapshot& snapshot,
@@ -1100,6 +1149,7 @@ public:
     PrivacyStillProxyGenerator proxy;
     PrivacyPublicTransitionEngine transition;
     FaultHook faultHook;
+    bool durableReplay = false;
 };
 
 PrivacyStillItemTransactionEngine::PrivacyStillItemTransactionEngine(
@@ -1131,7 +1181,8 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     if ((request.imageId <= 0) || !canonicalUuid(request.categoryUuid) ||
         !canonicalUuid(request.itemUuid) || !canonicalUuid(request.containerUuid) ||
-        !canonicalUuid(request.transactionUuid) || !password.isValid() ||
+        !canonicalUuid(request.transactionUuid) ||
+        (!password.isValid() && !d->durableReplay) ||
         !request.publicRoot.isValid() ||
         !sameRootExpectation(request.publicRoot, request.rootExpectation) ||
         (request.rootExpectation.markerUuid != request.publicRoot.markerUuid))
@@ -1191,7 +1242,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     if (!category || (category->backend != PrivacyBackend::Casual) ||
         (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
-        !d->runtime.isCategoryUnlocked(category->uuid))
+        (!d->durableReplay && !d->runtime.isCategoryUnlocked(category->uuid)))
     {
         return fail(PrivacyStillItemTransactionStatus::CategoryUnavailable,
                     QStringLiteral("Casual category is not active and unlocked"));
@@ -1361,6 +1412,13 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     {
         return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                     QStringLiteral("Protect payload cannot be reconstructed"));
+    }
+
+    if (d->durableReplay &&
+        (existingTransaction->state == PrivacyTransactionState::Created))
+    {
+        return fail(PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                    QStringLiteral("Created Protect requires category authentication"));
     }
 
     if (existingTransaction->state == PrivacyTransactionState::Created)
@@ -1586,6 +1644,12 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
             }
         }
 
+        if (d->fault(PrivacyStillItemFaultPoint::AfterReplacementStageCreated))
+        {
+            return fail(PrivacyStillItemTransactionStatus::FaultInjected,
+                        QStringLiteral("fault after exact proxy stage creation"));
+        }
+
         if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
                                prepared, staged, &journalHash, &detail))
         {
@@ -1603,11 +1667,33 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     if (!stableFileFact(archivePath, nullptr, &finalArchiveFact))
     {
-        PrivacyCasualArchiveStage archiveStage = d->archive.resumeStagedArchive(
-            archiveStagePath, archivePath, prepared.assets.constFirst().container.size,
-            prepared.assets.constFirst().container.sha256, password);
+        bool published = false;
 
-        if (!archiveStage.isValid() || !d->archive.publishNew(&archiveStage))
+        if (d->durableReplay)
+        {
+            if (!QFileInfo::exists(archiveStagePath))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                    QStringLiteral("Prepared Protect archive stage must be recreated"));
+            }
+
+            published = d->archive.publishExactPreparedStage(
+                archiveStagePath, archivePath,
+                prepared.assets.constFirst().container.size,
+                prepared.assets.constFirst().container.sha256);
+        }
+        else
+        {
+            PrivacyCasualArchiveStage archiveStage = d->archive.resumeStagedArchive(
+                archiveStagePath, archivePath,
+                prepared.assets.constFirst().container.size,
+                prepared.assets.constFirst().container.sha256, password);
+            published = archiveStage.isValid() &&
+                        d->archive.publishNew(&archiveStage);
+        }
+
+        if (!published)
         {
             return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
                         QStringLiteral("cannot publish verified archive"));
@@ -1616,7 +1702,8 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     if (!stableFileFact(archivePath, nullptr, &finalArchiveFact) ||
         !sameFact(finalArchiveFact, prepared.assets.constFirst().container) ||
-        !verifyArchiveMember(d->archive, prepared, archivePath, password))
+        (!d->durableReplay &&
+         !verifyArchiveMember(d->archive, prepared, archivePath, password)))
     {
         return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
                     QStringLiteral("published archive fails exact verification"));
@@ -1891,8 +1978,10 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     };
 
     if ((request.imageId <= 0) || !canonicalUuid(request.categoryUuid) ||
-        !canonicalUuid(request.transactionUuid) || !password.isValid() ||
-        !request.freshAuthenticationConfirmed || !request.publicRoot.isValid() ||
+        !canonicalUuid(request.transactionUuid) ||
+        ((!password.isValid() || !request.freshAuthenticationConfirmed) &&
+         !d->durableReplay) ||
+        !request.publicRoot.isValid() ||
         !sameRootExpectation(request.publicRoot, request.rootExpectation) ||
         (request.rootExpectation.markerUuid != request.publicRoot.markerUuid))
     {
@@ -1912,7 +2001,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
 
     if (!category || (category->backend != PrivacyBackend::Casual) ||
         (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
-        !d->runtime.isCategoryUnlocked(category->uuid))
+        (!d->durableReplay && !d->runtime.isCategoryUnlocked(category->uuid)))
     {
         return fail(PrivacyStillItemTransactionStatus::CategoryUnavailable, {},
                     QStringLiteral("Casual category is not active and unlocked"));
@@ -2041,6 +2130,15 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         result.transactionUuid = transactionUuid;
         result.itemUuid = itemUuid;
         return result;
+    }
+
+    if (d->durableReplay && transaction &&
+        (transaction->state == PrivacyTransactionState::Created))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::AuthenticationRequired,
+            transaction->itemUuid,
+            QStringLiteral("Created Unprotect requires fresh authentication"));
     }
 
     const PrivacyItem* itemPointer = itemForImage(snapshot, request.imageId);
@@ -2478,71 +2576,97 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         stageRequest.itemUuid = itemUuid;
         stageRequest.role = asset.role;
         stageRequest.ordinal = asset.ordinal;
-        PrivacyCasualArchiveRestoreRequest restore;
-        restore.archivePath = archivePath;
-        restore.categoryUuid = request.categoryUuid;
-        restore.containerUuid = container.uuid;
-        restore.itemUuid = itemUuid;
-        restore.protectedRelativePath = asset.protectedRelativePath;
-        restore.originalName = asset.originalName;
-        restore.role = asset.role;
-        restore.ordinal = asset.ordinal;
-        restore.expectedArchiveSize = archiveFact.size;
-        restore.expectedArchiveSha256 = archiveFact.sha256;
-        restore.expectedMemberSize = asset.originalSize;
-        restore.expectedMemberSha256 = QByteArray::fromHex(
-            asset.originalHash.toLatin1());
-        const PrivacyPublicReplacementStageResult stageResult =
-            d->transition.stageReplacement(
-                stageRequest,
-                [&](int descriptor, QString* producerDetail)
-                {
-                    QFile destination;
+        const QString stagedOriginalPath = absolutePath(
+            request.publicRoot, replacementRelativePath);
+        PrivacyJournalObjectFact replayFact;
 
-                    if (!destination.open(descriptor, QIODevice::WriteOnly,
-                                          QFileDevice::DontCloseHandle))
+        if (d->durableReplay)
+        {
+            if (!QFileInfo::exists(stagedOriginalPath))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                    itemUuid,
+                    QStringLiteral("Prepared Unprotect original stage must be restored"));
+            }
+
+            if (!stableFileFact(stagedOriginalPath, nullptr, &replayFact) ||
+                !sameFact(replayFact, prepared.assets.constFirst().original))
+            {
+                return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                            itemUuid,
+                            QStringLiteral("Prepared Unprotect original stage is not exact"));
+            }
+        }
+        else
+        {
+            PrivacyCasualArchiveRestoreRequest restore;
+            restore.archivePath = archivePath;
+            restore.categoryUuid = request.categoryUuid;
+            restore.containerUuid = container.uuid;
+            restore.itemUuid = itemUuid;
+            restore.protectedRelativePath = asset.protectedRelativePath;
+            restore.originalName = asset.originalName;
+            restore.role = asset.role;
+            restore.ordinal = asset.ordinal;
+            restore.expectedArchiveSize = archiveFact.size;
+            restore.expectedArchiveSha256 = archiveFact.sha256;
+            restore.expectedMemberSize = asset.originalSize;
+            restore.expectedMemberSha256 = QByteArray::fromHex(
+                asset.originalHash.toLatin1());
+            const PrivacyPublicReplacementStageResult stageResult =
+                d->transition.stageReplacement(
+                    stageRequest,
+                    [&](int descriptor, QString* producerDetail)
                     {
-                        if (producerDetail)
+                        QFile destination;
+
+                        if (!destination.open(descriptor, QIODevice::WriteOnly,
+                                              QFileDevice::DontCloseHandle))
                         {
-                            *producerDetail = QStringLiteral(
-                                "cannot attach archive restore destination");
+                            if (producerDetail)
+                            {
+                                *producerDetail = QStringLiteral(
+                                    "cannot attach archive restore destination");
+                            }
+
+                            return false;
                         }
 
-                        return false;
-                    }
+                        const bool restored = d->archive.restoreMember(
+                            restore, password, &destination);
+                        destination.close();
 
-                    const bool restored = d->archive.restoreMember(
-                        restore, password, &destination);
-                    destination.close();
+                        if (!restored)
+                        {
+                            return false;
+                        }
 
-                    if (!restored)
-                    {
-                        return false;
-                    }
+                        const qint64 milliseconds =
+                            asset.originalModificationDate.toMSecsSinceEpoch();
+                        struct timespec times[2] = {};
+                        times[0].tv_nsec = UTIME_OMIT;
+                        times[1].tv_sec = milliseconds / 1000;
+                        times[1].tv_nsec = (milliseconds % 1000) * 1000000;
+                        return (::futimens(descriptor, times) == 0);
+                    });
 
-                    const qint64 milliseconds =
-                        asset.originalModificationDate.toMSecsSinceEpoch();
-                    struct timespec times[2] = {};
-                    times[0].tv_nsec = UTIME_OMIT;
-                    times[1].tv_sec = milliseconds / 1000;
-                    times[1].tv_nsec = (milliseconds % 1000) * 1000000;
-                    return (::futimens(descriptor, times) == 0);
-                });
-
-        if (!stageResult.succeeded())
-        {
-            PrivacyJournalObjectFact replayFact;
-
-            if ((stageResult.error !=
-                 PrivacyPublicTransitionError::UnexpectedExistingFile) ||
-                !stableFileFact(absolutePath(request.publicRoot,
-                                             replacementRelativePath),
-                                nullptr, &replayFact) ||
-                !sameFact(replayFact, prepared.assets.constFirst().original))
+            if (!stageResult.succeeded() &&
+                ((stageResult.error !=
+                  PrivacyPublicTransitionError::UnexpectedExistingFile) ||
+                 !stableFileFact(stagedOriginalPath, nullptr, &replayFact) ||
+                 !sameFact(replayFact, prepared.assets.constFirst().original)))
             {
                 return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
                             itemUuid, stageResult.detail);
             }
+        }
+
+        if (d->fault(PrivacyStillItemFaultPoint::AfterReplacementStageCreated))
+        {
+            return fail(PrivacyStillItemTransactionStatus::FaultInjected,
+                        itemUuid,
+                        QStringLiteral("fault after exact original stage creation"));
         }
 
         if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
@@ -2794,6 +2918,244 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     result.transactionUuid = transactionUuid;
     result.itemUuid = itemUuid;
     return result;
+}
+
+PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::recover(
+    const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText)
+{
+    const QString transactionUuid = normalizedUuid(transactionUuidText);
+    const auto fail = [&](PrivacyStillItemTransactionStatus status,
+                          const QString& itemUuid, const QString& detail)
+    {
+        return failure(status, transactionUuid, itemUuid, detail);
+    };
+
+    if (!canonicalUuid(transactionUuidText) || !publicRoot.isValid() ||
+        (publicRoot.kind != PrivacyStorageRootKind::AlbumRoot) ||
+        d->durableReplay)
+    {
+        return fail(PrivacyStillItemTransactionStatus::InvalidRequest, {},
+                    QStringLiteral("durable recovery request is invalid"));
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->load(&snapshot))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure, {},
+                    QStringLiteral("cannot load durable recovery snapshot"));
+    }
+
+    const PrivacyTransaction* const transaction = transactionFor(snapshot,
+                                                                  transactionUuid);
+
+    if (!transaction || !transaction->isValid() ||
+        (transaction->payloadFormatVersion != 1) ||
+        ((transaction->type != PrivacyTransactionType::ProtectItem) &&
+         (transaction->type != PrivacyTransactionType::UnprotectItem)))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired, {},
+                    QStringLiteral("recoverable still transaction is missing"));
+    }
+
+    PrivacyJournalRecord record;
+    QString payloadPath;
+    QDateTime originalModificationDate;
+    QByteArray metadata;
+
+    if (!decodePreparedPayload(transaction->payloadData, &record, &payloadPath,
+                               &originalModificationDate, &metadata) ||
+        (record.transactionUuid != transactionUuid) ||
+        (record.categoryUuid != transaction->categoryUuid) ||
+        (record.rootUuid != publicRoot.uuid) ||
+        (record.transactionType != transaction->type) ||
+        (record.assets.size() != 1) ||
+        (record.assets.constFirst().role != PrivacyAsset::PrimaryMediaRole) ||
+        (record.assets.constFirst().ordinal != 0) ||
+        (transaction->fromCredentialGeneration !=
+         record.fromCredentialGeneration) ||
+        (transaction->toCredentialGeneration != record.toCredentialGeneration))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    transaction->itemUuid,
+                    QStringLiteral("durable still payload identity is not exact"));
+    }
+
+    const PrivacyStorageRoot* const storedRoot = storageRootFor(snapshot,
+                                                                record.rootUuid);
+
+    if (!storedRoot || (storedRoot->kind != publicRoot.kind) ||
+        (storedRoot->albumRootId != publicRoot.albumRootId) ||
+        (QDir::cleanPath(storedRoot->configuredPath) !=
+         QDir::cleanPath(publicRoot.configuredPath)) ||
+        (storedRoot->identityVersion != publicRoot.identityVersion) ||
+        (storedRoot->identityData != publicRoot.identityData) ||
+        (storedRoot->markerUuid != publicRoot.markerUuid))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RootUnavailable,
+                    transaction->itemUuid,
+                    QStringLiteral("registered durable root is not exact"));
+    }
+
+    const bool created = (transaction->state == PrivacyTransactionState::Created) &&
+                         (transaction->generation == 0) &&
+                         (record.stage == PrivacyJournalStage::Created);
+    const bool resumable =
+        (record.stage == PrivacyJournalStage::Prepared) &&
+        (((transaction->state == PrivacyTransactionState::Prepared) &&
+          (transaction->generation == 1)) ||
+         ((transaction->type == PrivacyTransactionType::ProtectItem) &&
+          (transaction->state == PrivacyTransactionState::Complete) &&
+          (transaction->generation == 2)) ||
+         ((transaction->type == PrivacyTransactionType::UnprotectItem) &&
+          (transaction->state == PrivacyTransactionState::Applying) &&
+          (transaction->generation == 2)));
+
+    if (!created && !resumable)
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    transaction->itemUuid,
+                    QStringLiteral("durable still state/generation is not resumable"));
+    }
+
+    PrivacyJournalRootExpectation rootExpectation;
+    rootExpectation.rootUuid = record.rootUuid;
+    rootExpectation.markerUuid = publicRoot.markerUuid;
+    rootExpectation.identitySha256 = record.rootIdentitySha256;
+    rootExpectation.device = record.rootDevice;
+    rootExpectation.inode = record.rootInode;
+
+    if (!sameRootExpectation(publicRoot, rootExpectation))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RootUnavailable,
+                    transaction->itemUuid,
+                    QStringLiteral("durable still root identity is not exact"));
+    }
+
+    const PrivacyJournalAsset& journalAsset = record.assets.constFirst();
+    const PrivacyItem* item = itemForUuid(snapshot, journalAsset.itemUuid);
+    qlonglong imageId = item ? item->imageId : -1;
+    PrivacyItem teardownItem;
+
+    if (!item && (transaction->type == PrivacyTransactionType::UnprotectItem) &&
+        (transaction->state == PrivacyTransactionState::Applying))
+    {
+        PrivacyContainer teardownContainer;
+        PrivacyAsset teardownAsset;
+        QString priorProtectTransactionUuid;
+
+        if (!decodeTeardownSnapshot(metadata, &teardownItem, &teardownContainer,
+                                    &teardownAsset,
+                                    &priorProtectTransactionUuid) ||
+            (teardownItem.uuid != journalAsset.itemUuid) ||
+            (teardownItem.categoryUuid != transaction->categoryUuid) ||
+            (teardownAsset.publicRootUuid != publicRoot.uuid))
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        journalAsset.itemUuid,
+                        QStringLiteral("detached durable teardown is not exact"));
+        }
+
+        imageId = teardownItem.imageId;
+    }
+
+    if ((imageId <= 0) ||
+        (!transaction->itemUuid.isEmpty() &&
+         (transaction->itemUuid != journalAsset.itemUuid)))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    journalAsset.itemUuid,
+                    QStringLiteral("durable still item mapping is not exact"));
+    }
+
+    if (created)
+    {
+        return fail(PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                    journalAsset.itemUuid,
+                    (transaction->type == PrivacyTransactionType::ProtectItem)
+                        ? QStringLiteral("Created Protect requires category authentication")
+                        : QStringLiteral("Created Unprotect requires fresh authentication"));
+    }
+
+    ScopedBooleanValue replayScope(d->durableReplay, true);
+    const PrivacyPassword noPassword = PrivacyPassword::fromUnicode(QString());
+
+    if (transaction->type == PrivacyTransactionType::ProtectItem)
+    {
+        const QString publicPath = absolutePath(publicRoot,
+                                                journalAsset.publicRelativePath);
+        quint64 publicDevice = 0;
+        quint64 publicInode = 0;
+        quint64 publicLinkCount = 0;
+        qlonglong publicSize = -1;
+
+#if defined(Q_OS_UNIX)
+        struct stat status = {};
+        const QByteArray encodedPath = QFile::encodeName(publicPath);
+
+        if (publicPath.isEmpty() ||
+            (::lstat(encodedPath.constData(), &status) != 0) ||
+            !S_ISREG(status.st_mode) || S_ISLNK(status.st_mode) ||
+            (status.st_nlink < 1))
+        {
+            return fail(PrivacyStillItemTransactionStatus::SourceChanged,
+                        journalAsset.itemUuid,
+                        QStringLiteral("durable Protect public file is not regular"));
+        }
+
+        publicDevice = static_cast<quint64>(status.st_dev);
+        publicInode = static_cast<quint64>(status.st_ino);
+        publicLinkCount = static_cast<quint64>(status.st_nlink);
+        publicSize = static_cast<qlonglong>(status.st_size);
+#else
+        return fail(PrivacyStillItemTransactionStatus::RootUnavailable,
+                    journalAsset.itemUuid,
+                    QStringLiteral("durable still recovery is unsupported"));
+#endif
+
+        PrivacyInventoryAsset inventoryAsset;
+        inventoryAsset.role = PrivacyInventoryAssetRole::PrimaryMedia;
+        inventoryAsset.ordinal = 0;
+        inventoryAsset.location.root.uuid = publicRoot.uuid;
+        inventoryAsset.location.root.absolutePath = publicRoot.configuredPath;
+        inventoryAsset.location.relativePath = journalAsset.publicRelativePath;
+        inventoryAsset.evidence.type = PrivacyInventoryFileType::Regular;
+        inventoryAsset.evidence.identityComplete = true;
+        inventoryAsset.evidence.deviceId = publicDevice;
+        inventoryAsset.evidence.inode = publicInode;
+        inventoryAsset.evidence.linkCount = publicLinkCount;
+        inventoryAsset.evidence.byteSize = publicSize;
+        PrivacyAssetInventoryBridgeItemResult bridgeItem;
+        bridgeItem.imageId = imageId;
+        bridgeItem.inventory.status = PrivacyInventoryStatus::Ready;
+        bridgeItem.inventory.requiredAssets << inventoryAsset;
+        PrivacyStillProtectRequest request;
+        request.imageId = imageId;
+        request.categoryUuid = transaction->categoryUuid;
+        request.itemUuid = journalAsset.itemUuid;
+        request.containerUuid = journalAsset.containerUuid;
+        request.transactionUuid = transactionUuid;
+        request.preflight.bridge.status = PrivacyInventoryStatus::Ready;
+        request.preflight.bridge.items << bridgeItem;
+        request.associatedAssetsAcknowledged = true;
+        request.publicRoot = publicRoot;
+        request.rootExpectation = rootExpectation;
+        request.originalPixelSize = QSize(item->originalWidth,
+                                          item->originalHeight);
+        request.originalCreationDate = item->originalCreationDate;
+
+        return protect(request, noPassword);
+    }
+
+    PrivacyStillUnprotectRequest request;
+    request.imageId = imageId;
+    request.categoryUuid = transaction->categoryUuid;
+    request.transactionUuid = transactionUuid;
+    request.publicRoot = publicRoot;
+    request.rootExpectation = rootExpectation;
+    request.freshAuthenticationConfirmed = false;
+
+    return unprotect(request, noPassword);
 }
 
 } // namespace Digikam

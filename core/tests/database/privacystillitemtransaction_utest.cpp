@@ -397,6 +397,7 @@ void PrivacyStillItemTransactionTest::protectFaultReplay_data()
     const QList<PrivacyStillItemFaultPoint> points = {
         PrivacyStillItemFaultPoint::AfterDatabaseBegin,
         PrivacyStillItemFaultPoint::AfterFilesystemJournal,
+        PrivacyStillItemFaultPoint::AfterReplacementStageCreated,
         PrivacyStillItemFaultPoint::AfterStagesPrepared,
         PrivacyStillItemFaultPoint::AfterArchivePublished,
         PrivacyStillItemFaultPoint::AfterProtectedCopyJournal,
@@ -506,12 +507,23 @@ void PrivacyStillItemTransactionTest::protectFaultReplay()
 
     PrivacyRuntimeCoordinator restartedRuntime;
     restartedRuntime.initialize(persistence.snapshot, verifier, {}, inspector);
-    QVERIFY(restartedRuntime.setCategoryUnlocked(CategoryUuid, true));
     FakeCache coldCache;
     PrivacyStillItemTransactionEngine restarted(
         persistence, restartedRuntime, coldCache);
-    const PrivacyStillItemTransactionResult replayResult = restarted.protect(
-        protect, password);
+    PrivacyStillItemTransactionResult replayResult = restarted.recover(
+        root, ProtectUuid);
+
+    if ((faultPoint == static_cast<int>(
+             PrivacyStillItemFaultPoint::AfterDatabaseBegin)) ||
+        (faultPoint == static_cast<int>(
+             PrivacyStillItemFaultPoint::AfterFilesystemJournal)))
+    {
+        QCOMPARE(replayResult.status,
+                 PrivacyStillItemTransactionStatus::AuthenticationRequired);
+        QVERIFY(restartedRuntime.setCategoryUnlocked(CategoryUuid, true));
+        replayResult = restarted.protect(protect, password);
+    }
+
     QVERIFY2(replayResult.status == PrivacyStillItemTransactionStatus::Protected,
              qPrintable(replayResult.detail));
     QCOMPARE(persistence.snapshot.items.size(), 1);
@@ -533,6 +545,7 @@ void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup_data
     const QList<PrivacyStillItemFaultPoint> points = {
         PrivacyStillItemFaultPoint::AfterDatabaseBegin,
         PrivacyStillItemFaultPoint::AfterFilesystemJournal,
+        PrivacyStillItemFaultPoint::AfterReplacementStageCreated,
         PrivacyStillItemFaultPoint::AfterStagesPrepared,
         PrivacyStillItemFaultPoint::AfterProtectedCopyJournal,
         PrivacyStillItemFaultPoint::AfterPublicTransition,
@@ -673,14 +686,25 @@ void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup()
 
     PrivacyRuntimeCoordinator restartedRuntime;
     restartedRuntime.initialize(persistence.snapshot, verifier, {}, inspector);
-    QVERIFY(restartedRuntime.setCategoryUnlocked(CategoryUuid, true));
     FakeCache coldCache;
     PrivacyStillItemTransactionEngine restarted(
         persistence, restartedRuntime, coldCache);
     const PrivacyPassword replayPassword = PrivacyPassword::fromUnicode(
         QLatin1String("synthetic passphrase"));
-    const PrivacyStillItemTransactionResult replayResult = restarted.unprotect(
-        unprotect, replayPassword);
+    PrivacyStillItemTransactionResult replayResult = restarted.recover(
+        root, UnprotectUuid);
+
+    if ((faultPoint == static_cast<int>(
+             PrivacyStillItemFaultPoint::AfterDatabaseBegin)) ||
+        (faultPoint == static_cast<int>(
+             PrivacyStillItemFaultPoint::AfterFilesystemJournal)))
+    {
+        QCOMPARE(replayResult.status,
+                 PrivacyStillItemTransactionStatus::AuthenticationRequired);
+        QVERIFY(restartedRuntime.setCategoryUnlocked(CategoryUuid, true));
+        replayResult = restarted.unprotect(unprotect, replayPassword);
+    }
+
     QVERIFY2(replayResult.status ==
              PrivacyStillItemTransactionStatus::Unprotected,
              qPrintable(replayResult.detail));
@@ -890,6 +914,109 @@ void PrivacyStillItemTransactionTest::rejectsUnsafeReplayInputs()
             persistence, restartedRuntime, coldCache);
         QCOMPARE(restarted.protect(protect, password).status,
                  PrivacyStillItemTransactionStatus::JournalFailure);
+    }
+
+    {
+        QTemporaryDir directory;
+        QString sourcePath;
+        PrivacyStorageRoot root;
+        PrivacyJournalRootExpectation expectation;
+        PrivacyStillProtectRequest protect;
+        QVERIFY(prepareSyntheticStill(directory, &sourcePath, &root,
+                                      &expectation, &protect));
+        QFile original(sourcePath);
+        QVERIFY(original.open(QIODevice::ReadOnly));
+        const QByteArray originalBytes = original.readAll();
+        original.close();
+        FakePersistence persistence;
+        persistence.snapshot.categories << category();
+        persistence.snapshot.storageRoots << root;
+        PrivacyRuntimeCoordinator runtime;
+        runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+        FakeCache cache;
+        PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+        QCOMPARE(engine.recover(root, UnprotectUuid).status,
+                 PrivacyStillItemTransactionStatus::RecoveryRequired);
+        QVERIFY(original.open(QIODevice::ReadOnly));
+        QCOMPARE(original.readAll(), originalBytes);
+    }
+
+    {
+        QTemporaryDir directory;
+        QString sourcePath;
+        PrivacyStorageRoot root;
+        PrivacyJournalRootExpectation expectation;
+        PrivacyStillProtectRequest protect;
+        QVERIFY(prepareSyntheticStill(directory, &sourcePath, &root,
+                                      &expectation, &protect));
+        FakePersistence persistence;
+        persistence.snapshot.categories << category();
+        persistence.snapshot.storageRoots << root;
+        PrivacyRuntimeCoordinator runtime;
+        runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+        QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+        FakeCache cache;
+        PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+        engine.setFaultHook([](PrivacyStillItemFaultPoint point)
+        {
+            return (point == PrivacyStillItemFaultPoint::AfterFilesystemJournal);
+        });
+        QCOMPARE(engine.protect(protect, password).status,
+                 PrivacyStillItemTransactionStatus::FaultInjected);
+
+        PrivacyStorageRoot wrongRoot = root;
+        wrongRoot.configuredPath = directory.filePath(QLatin1String("other-root"));
+        QVERIFY(QDir().mkpath(wrongRoot.configuredPath));
+        PrivacyRuntimeCoordinator restartedRuntime;
+        restartedRuntime.initialize(persistence.snapshot, verifier, {}, inspector);
+        FakeCache coldCache;
+        PrivacyStillItemTransactionEngine restarted(
+            persistence, restartedRuntime, coldCache);
+        QCOMPARE(restarted.recover(wrongRoot, ProtectUuid).status,
+                 PrivacyStillItemTransactionStatus::RootUnavailable);
+        QVERIFY(QFileInfo::exists(sourcePath));
+        QVERIFY(!QFileInfo::exists(
+            sourcePath + QLatin1String(".digikam-private.zip")));
+    }
+
+    {
+        QTemporaryDir directory;
+        QString sourcePath;
+        PrivacyStorageRoot root;
+        PrivacyJournalRootExpectation expectation;
+        PrivacyStillProtectRequest protect;
+        QVERIFY(prepareSyntheticStill(directory, &sourcePath, &root,
+                                      &expectation, &protect));
+        FakePersistence persistence;
+        persistence.snapshot.categories << category();
+        persistence.snapshot.storageRoots << root;
+        PrivacyRuntimeCoordinator runtime;
+        runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+        QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+        FakeCache cache;
+        PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+        engine.setFaultHook([](PrivacyStillItemFaultPoint point)
+        {
+            return (point == PrivacyStillItemFaultPoint::AfterFilesystemJournal);
+        });
+        QCOMPARE(engine.protect(protect, password).status,
+                 PrivacyStillItemTransactionStatus::FaultInjected);
+        QCOMPARE(persistence.snapshot.transactions.size(), 1);
+        QVERIFY(!persistence.snapshot.transactions[0].payloadData.isEmpty());
+        persistence.snapshot.transactions[0].payloadData[0] =
+            static_cast<char>(persistence.snapshot.transactions[0].payloadData[0] ^
+                              0x01);
+
+        PrivacyRuntimeCoordinator restartedRuntime;
+        restartedRuntime.initialize(persistence.snapshot, verifier, {}, inspector);
+        FakeCache coldCache;
+        PrivacyStillItemTransactionEngine restarted(
+            persistence, restartedRuntime, coldCache);
+        QCOMPARE(restarted.recover(root, ProtectUuid).status,
+                 PrivacyStillItemTransactionStatus::RecoveryRequired);
+        QVERIFY(QFileInfo::exists(sourcePath));
+        QVERIFY(!QFileInfo::exists(
+            sourcePath + QLatin1String(".digikam-private.zip")));
     }
 }
 

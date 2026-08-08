@@ -1838,6 +1838,59 @@ bool PrivacyCasualArchiveEngine::verifyStagedArchive(
                          password, isCancelled, error);
 }
 
+bool PrivacyCasualArchiveEngine::publishExactPreparedStage(
+    const QString& stagingPath, const QString& finalArchivePath,
+    qlonglong expectedArchiveSize, const QByteArray& expectedArchiveSha256,
+    PrivacyCasualArchiveError* const error) const
+{
+    setError(error, PrivacyCasualArchiveError::None);
+
+    if ((expectedArchiveSize < 0) || (expectedArchiveSha256.size() != 32) ||
+        !safeDestination(finalArchivePath) ||
+        !safeStagingPath(stagingPath, finalArchivePath, true))
+    {
+        setError(error, PrivacyCasualArchiveError::InvalidRequest);
+        return false;
+    }
+
+    QByteArray currentHash;
+    qlonglong currentSize = -1;
+
+    if (!hashFile(stagingPath, &currentHash, &currentSize, {}) ||
+        (currentHash != expectedArchiveSha256) ||
+        (currentSize != expectedArchiveSize))
+    {
+        setError(error, PrivacyCasualArchiveError::HashMismatch);
+        return false;
+    }
+
+    const PublishResult result = publishWithoutReplacement(stagingPath,
+                                                            finalArchivePath);
+
+    if ((result != PublishResult::Success) &&
+        (result != PublishResult::SuccessWithStagingRemaining))
+    {
+        setError(error, (result == PublishResult::Conflict)
+                        ? PrivacyCasualArchiveError::PublicationConflict
+                        : PrivacyCasualArchiveError::PublicationFailed);
+        return false;
+    }
+
+    if (result == PublishResult::SuccessWithStagingRemaining)
+    {
+        setError(error, PrivacyCasualArchiveError::DurabilityUncertain);
+        return false;
+    }
+
+    if (!syncDirectory(QFileInfo(finalArchivePath).absolutePath()))
+    {
+        setError(error, PrivacyCasualArchiveError::DurabilityUncertain);
+        return false;
+    }
+
+    return true;
+}
+
 bool PrivacyCasualArchiveEngine::restoreMember(
     const PrivacyCasualArchiveRestoreRequest& request,
     const PrivacyPassword& password, QIODevice* const destination,
