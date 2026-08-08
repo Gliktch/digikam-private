@@ -433,10 +433,18 @@ public:
                           PrivacyGocryptfsError* error) override
     {
         ++validateCalls;
+
+        if (blockValidate)
+        {
+            validateEntered.release();
+            validateContinue.acquire();
+        }
+
         bool matches = false;
         password.withStdinLine([&matches](const QByteArray& line)
         {
-            matches = (line == QByteArray("secret\n"));
+            matches = (line == QByteArray("secret\n")) ||
+                      (line == QByteArray("fresh secret\n"));
             return true;
         });
 
@@ -509,10 +517,13 @@ public:
     bool failCreate = false;
     bool failLock = false;
     bool blockCreate = false;
+    bool blockValidate = false;
     bool blockUnlock = false;
     bool blockLock = false;
     QSemaphore createEntered;
     QSemaphore createContinue;
+    QSemaphore validateEntered;
+    QSemaphore validateContinue;
     QSemaphore unlockEntered;
     QSemaphore unlockContinue;
     QSemaphore lockEntered;
@@ -579,6 +590,10 @@ private Q_SLOTS:
     void testLockCancelsInflightUnlock();
     void testLockAllCancelsInflightUnlock();
     void testItemOperationBorrowsSecretAndSerializesLock();
+    void testFreshAuthenticationRequiresUnlockedCategory();
+    void testFreshAuthenticationDoesNotReplaceRetainedSecret();
+    void testFreshAuthenticationRejectsWrongPasswordAndRecoversFromException();
+    void testFreshAuthenticationSerializesLock();
     void testCallbacksAndBlockingTeardownAreOutOfLock();
     void testDestructorForcesFailedLockTeardown();
 };
@@ -1116,6 +1131,191 @@ void PrivacyCategorySessionTest::testItemOperationBorrowsSecretAndSerializesLock
     lockThread.join();
 
     QCOMPARE(operationStatus, PrivacyCategoryOperationStatus::Completed);
+    QCOMPARE(lockResult.status, PrivacyCategorySessionStatus::Locked);
+    QVERIFY(lockFinished.load());
+    QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+}
+
+void PrivacyCategorySessionTest::testFreshAuthenticationRequiresUnlockedCategory()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+    bool callbackCalled = false;
+
+    const PrivacyCategorySessionResult result =
+        coordinator.runWithFreshlyAuthenticatedSecret(
+            CategoryUuid, QLatin1String("secret"),
+            [&](const PrivacyPassword&)
+            {
+                callbackCalled = true;
+            });
+
+    QCOMPARE(result.status, PrivacyCategorySessionStatus::CategoryLocked);
+    QVERIFY(!result.succeeded());
+    QVERIFY(!callbackCalled);
+    QCOMPARE(backend.validateCalls.load(), 0);
+}
+
+void PrivacyCategorySessionTest::testFreshAuthenticationDoesNotReplaceRetainedSecret()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+
+    QCOMPARE(coordinator.unlockCategory(CategoryUuid,
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Unlocked);
+    bool freshSecretMatched = false;
+    PrivacyCategorySessionStatus reentrantLockStatus =
+        PrivacyCategorySessionStatus::InvalidRequest;
+    const PrivacyCategorySessionResult result =
+        coordinator.runWithFreshlyAuthenticatedSecret(
+            CategoryUuid, QLatin1String("fresh secret"),
+            [&](const PrivacyPassword& password)
+            {
+                password.withStdinLine([&](const QByteArray& line)
+                {
+                    freshSecretMatched = (line == QByteArray("fresh secret\n"));
+                    return true;
+                });
+                reentrantLockStatus = coordinator.lockCategory(CategoryUuid).status;
+            });
+
+    QCOMPARE(result.status,
+             PrivacyCategorySessionStatus::FreshAuthenticationVerified);
+    QVERIFY(result.succeeded());
+    QVERIFY(freshSecretMatched);
+    QCOMPARE(reentrantLockStatus,
+             PrivacyCategorySessionStatus::TransactionBlocked);
+    QVERIFY(coordinator.ownsSecret(CategoryUuid));
+
+    bool retainedSecretMatched = false;
+    QCOMPARE(coordinator.runWithUnlockedSecret(
+                 CategoryUuid,
+                 [&](const PrivacyPassword& password)
+                 {
+                     password.withStdinLine([&](const QByteArray& line)
+                     {
+                         retainedSecretMatched = (line == QByteArray("secret\n"));
+                         return true;
+                     });
+                 }),
+             PrivacyCategoryOperationStatus::Completed);
+    QVERIFY(retainedSecretMatched);
+}
+
+void PrivacyCategorySessionTest::testFreshAuthenticationRejectsWrongPasswordAndRecoversFromException()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+
+    QCOMPARE(coordinator.unlockCategory(CategoryUuid,
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Unlocked);
+    bool callbackCalled = false;
+    const PrivacyCategorySessionResult wrong =
+        coordinator.runWithFreshlyAuthenticatedSecret(
+            CategoryUuid, QLatin1String("wrong"),
+            [&](const PrivacyPassword&)
+            {
+                callbackCalled = true;
+            });
+    QCOMPARE(wrong.status, PrivacyCategorySessionStatus::AuthenticationFailed);
+    QVERIFY(!callbackCalled);
+    QVERIFY(coordinator.ownsSecret(CategoryUuid));
+
+    bool exceptionObserved = false;
+
+    try
+    {
+        coordinator.runWithFreshlyAuthenticatedSecret(
+            CategoryUuid, QLatin1String("secret"),
+            [](const PrivacyPassword&)
+            {
+                throw std::runtime_error("synthetic fresh-auth callback failure");
+            });
+    }
+    catch (const std::runtime_error&)
+    {
+        exceptionObserved = true;
+    }
+
+    QVERIFY(exceptionObserved);
+    QCOMPARE(coordinator.runWithFreshlyAuthenticatedSecret(
+                 CategoryUuid, QLatin1String("secret"),
+                 [](const PrivacyPassword&) {}).status,
+             PrivacyCategorySessionStatus::FreshAuthenticationVerified);
+    QVERIFY(coordinator.ownsSecret(CategoryUuid));
+}
+
+void PrivacyCategorySessionTest::testFreshAuthenticationSerializesLock()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+
+    QCOMPARE(coordinator.unlockCategory(CategoryUuid,
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Unlocked);
+    backend.blockValidate = true;
+    PrivacyCategorySessionResult authenticationResult;
+    PrivacyCategorySessionResult lockResult;
+    std::atomic<bool> lockFinished { false };
+
+    std::thread authenticationThread([&]()
+    {
+        authenticationResult = coordinator.runWithFreshlyAuthenticatedSecret(
+            CategoryUuid, QLatin1String("secret"),
+            [](const PrivacyPassword&) {});
+    });
+    const bool validationEntered = backend.validateEntered.tryAcquire(1, 2000);
+
+    if (!validationEntered)
+    {
+        backend.validateContinue.release();
+        authenticationThread.join();
+        QVERIFY(validationEntered);
+    }
+
+    QCOMPARE(coordinator.runWhileUnlocked(CategoryUuid, [] {}),
+             PrivacyCategoryOperationStatus::TransactionBlocked);
+
+    std::thread lockThread([&]()
+    {
+        lockResult = coordinator.lockCategory(CategoryUuid);
+        lockFinished.store(true);
+    });
+    QTest::qWait(30);
+    const bool escapedBarrier = lockFinished.load();
+    backend.validateContinue.release();
+    authenticationThread.join();
+    lockThread.join();
+
+    QVERIFY(!escapedBarrier);
+    QCOMPARE(authenticationResult.status,
+             PrivacyCategorySessionStatus::FreshAuthenticationVerified);
     QCOMPARE(lockResult.status, PrivacyCategorySessionStatus::Locked);
     QVERIFY(lockFinished.load());
     QVERIFY(!coordinator.ownsSecret(CategoryUuid));

@@ -52,7 +52,9 @@ enum class PrivacyCategorySessionStatus
     PublicationFailedRecoveryRequired,
     StrongRecoveryRequired,
     Canceled,
-    LockFailed
+    LockFailed,
+    FreshAuthenticationVerified,
+    CategoryLocked
 };
 
 enum class PrivacyCategoryOperationStatus
@@ -264,6 +266,21 @@ public:
      */
     PrivacyCategoryOperationStatus runWithUnlockedSecret(
         const QString& categoryUuid,
+        const std::function<void(const PrivacyPassword&)>& operation);
+
+    /**
+     * Runs one synchronous protected-item operation with a newly entered,
+     * independently verified category password. The category must already be
+     * unlocked. The temporary normalized secret is lent to the callback only;
+     * it never replaces or escapes through the retained category session.
+     *
+     * Category lock and lock-all wait until authentication, the callback and
+     * temporary-secret destruction have completed. Callback exceptions are
+     * propagated after releasing the operation barrier safely.
+     */
+    PrivacyCategorySessionResult runWithFreshlyAuthenticatedSecret(
+        const QString& categoryUuid,
+        const QString& passwordText,
         const std::function<void(const PrivacyPassword&)>& operation);
 
     bool ownsSecret(const QString& categoryUuid) const;

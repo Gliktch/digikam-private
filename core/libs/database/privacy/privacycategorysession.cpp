@@ -522,7 +522,8 @@ bool PrivacyCategorySessionResult::succeeded() const
             (status == PrivacyCategorySessionStatus::UnlockedStoreOffline) ||
             (status == PrivacyCategorySessionStatus::Locked) ||
             (status == PrivacyCategorySessionStatus::AlreadyUnlocked) ||
-            (status == PrivacyCategorySessionStatus::AlreadyLocked));
+            (status == PrivacyCategorySessionStatus::AlreadyLocked) ||
+            (status == PrivacyCategorySessionStatus::FreshAuthenticationVerified));
 }
 
 bool PrivacyCategorySessionResult::recoveryRequired() const
@@ -1786,6 +1787,95 @@ PrivacyCategorySessionCoordinator::runWithUnlockedSecret(
     operation(*session->password);
 
     return PrivacyCategoryOperationStatus::Completed;
+}
+
+PrivacyCategorySessionResult
+PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
+    const QString& categoryUuidText, const QString& passwordText,
+    const std::function<void(const PrivacyPassword&)>& operation)
+{
+    PrivacyCategorySessionResult result;
+    const QString categoryUuid = normalizedUuid(categoryUuidText);
+
+    if (categoryUuid.isEmpty() || !operation)
+    {
+        result.status = PrivacyCategorySessionStatus::InvalidRequest;
+        return result;
+    }
+
+    quint64 operationToken = 0;
+    std::shared_ptr<Private::Session> session;
+
+    {
+        QMutexLocker locker(&d->lock);
+        const auto sessionIt = d->sessions.constFind(categoryUuid);
+
+        if (sessionIt == d->sessions.constEnd())
+        {
+            result.status = PrivacyCategorySessionStatus::CategoryLocked;
+            return result;
+        }
+
+        operationToken = d->beginOperation(categoryUuid,
+                                           Private::OperationKind::ItemTransaction);
+
+        if (operationToken == 0)
+        {
+            result.status = PrivacyCategorySessionStatus::TransactionBlocked;
+            return result;
+        }
+
+        session = sessionIt.value();
+    }
+
+    const ScopeExit finishOperation([this, categoryUuid, operationToken]()
+    {
+        QMutexLocker locker(&d->lock);
+        d->finishOperation(categoryUuid, operationToken);
+    });
+
+    PrivacyPassword password = PrivacyPassword::fromUnicode(passwordText,
+                                                             &result.passwordError);
+
+    if (!password.isValid())
+    {
+        result.status = PrivacyCategorySessionStatus::InvalidPassword;
+        return result;
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+    CategoryBundle bundle;
+
+    if (!d->repository.loadSnapshot(&snapshot) ||
+        !loadActiveBundle(snapshot, categoryUuid, &bundle, &result.status))
+    {
+        return result;
+    }
+
+    if ((bundle.credential.envelopeHashAlgorithm != QLatin1String("sha256")) ||
+        (sha256(bundle.credential.envelopeBlob) != bundle.credential.envelopeHash))
+    {
+        result.status = PrivacyCategorySessionStatus::AuthenticationFailed;
+        return result;
+    }
+
+    const PrivacyGocryptfsEnvelope envelope =
+        PrivacyGocryptfsEnvelope::fromOpaqueConfig(bundle.credential.envelopeFormat,
+                                                   bundle.credential.envelopeBlob,
+                                                   &result.storeError);
+
+    if (!envelope.isValid() ||
+        !d->storeBackend.validateEnvelope(envelope, password, &result.storeError))
+    {
+        result.status = PrivacyCategorySessionStatus::AuthenticationFailed;
+        return result;
+    }
+
+    operation(password);
+    Q_UNUSED(session); // Retain the existing session and lease for the callback.
+
+    result.status = PrivacyCategorySessionStatus::FreshAuthenticationVerified;
+    return result;
 }
 
 bool PrivacyCategorySessionCoordinator::ownsSecret(const QString& categoryUuid) const
