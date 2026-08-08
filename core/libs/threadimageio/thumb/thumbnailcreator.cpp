@@ -34,8 +34,16 @@ QString privacyThumbnailIdentifier(const ThumbnailIdentifier& identifier)
         return QString();
     }
 
-    QString identity = identifier.id ? (QLatin1String("id:") + QString::number(identifier.id))
-                                     : (QLatin1String("path:") + identifier.filePath);
+    QString identity;
+
+    if (identifier.id)
+    {
+        identity = QLatin1String("id:") + QString::number(identifier.id);
+    }
+    else
+    {
+        identity = QLatin1String("path:") + identifier.filePath;
+    }
     const QString digest = PrivacySourceResolver::cacheNamespaceDigest(
                                identity + QLatin1Char('\0') + identifier.cacheNamespace +
                                QLatin1Char('\0') +
