@@ -119,8 +119,6 @@ install(FILES
               ${CMAKE_SOURCE_DIR}/core/libs/threadimageio/preview/previewsettings.h
               ${CMAKE_SOURCE_DIR}/core/libs/threadimageio/preview/previewloadthread.h
               ${CMAKE_SOURCE_DIR}/core/libs/threadimageio/fileio/loadingdescription.h
-              ${CMAKE_SOURCE_DIR}/core/libs/threadimageio/fileio/privacycachetransition.h
-              ${CMAKE_SOURCE_DIR}/core/libs/threadimageio/fileio/privacysourceresolver.h
               ${CMAKE_SOURCE_DIR}/core/libs/threadimageio/fileio/loadsavethread.h
               ${CMAKE_SOURCE_DIR}/core/libs/threadimageio/thumb/thumbnailinfo.h
               ${CMAKE_SOURCE_DIR}/core/libs/threadimageio/thumb/thumbnailloadthread.h
@@ -142,19 +140,6 @@ install(FILES
               ${CMAKE_SOURCE_DIR}/core/libs/database/coredb/coredbalbuminfo.h
               ${CMAKE_SOURCE_DIR}/core/libs/database/coredb/coredbaccess.h
               ${CMAKE_SOURCE_DIR}/core/libs/database/coredb/coredburl.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyanalysisgate.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyassetinventory.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyposixfilesystemadapter.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyactionpolicy.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacycontracts.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyleaseregistry.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyproxygenerator.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyscangate.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyruntime.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacyservice.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/privacytypes.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/storage/privacytransactionjournal.h
-              ${CMAKE_SOURCE_DIR}/core/libs/database/privacy/storage/privacypublictransition.h
               ${CMAKE_SOURCE_DIR}/core/libs/database/engine/dbengineparameters.h
               ${CMAKE_SOURCE_DIR}/core/libs/database/engine/dbengineaction.h
               ${CMAKE_SOURCE_DIR}/core/libs/database/engine/dbengineconfig.h

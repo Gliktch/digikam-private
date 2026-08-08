@@ -1,6 +1,13 @@
 # Ignore external repository dirs
 doc
 test-data
+local-docs/
+
+# Keep local planning records out of the publishable source repository.
+/*.md
+!/README.md
+!/CODE_OF_CONDUCT.md
+!/CONTRIBUTING.md
 
 # Ignore unit-test files
 Testing/
@@ -50,4 +57,3 @@ GPATH
 GRTAGS
 GSYMS
 BROWSE
-
