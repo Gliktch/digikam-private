@@ -24,6 +24,7 @@
 // Local includes
 
 #include "privacycontracts.h"
+#include "privacycategorysessionowner.h"
 #include "privacyruntime.h"
 #include "privacyscangate.h"
 
@@ -347,6 +348,7 @@ private Q_SLOTS:
     void testRootIntegritySummary();
     void testRecoveryEpochCompareAndPublish();
     void testProductionStateProviders();
+    void testCategorySessionOwnerShutdown();
     void testManualTagVisibilityProvider();
     void testAnalysisProvider();
     void testMixedRootAndConflictingMappings();
@@ -802,6 +804,35 @@ void PrivacyRuntimeTest::testProductionStateProviders()
     runtime->reset();
     QCOMPARE(registry.validate(beforeRuntimeReset), PrivacyLeaseValidation::StateChanged);
     QVERIFY(!runtime->stateForItem(42, &actionState));
+}
+
+void PrivacyRuntimeTest::testCategorySessionOwnerShutdown()
+{
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+    const QSharedPointer<FakeIntegrityInspector> integrity(new FakeIntegrityInspector);
+    const QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
+    QCOMPARE(runtime->initialize(makeSnapshot(), verifier, {}, integrity).state,
+             PrivacyStartupState::Ready);
+
+    QVERIFY(!PrivacyCategorySessionOwner::create({}, verifier));
+    QVERIFY(!PrivacyCategorySessionOwner::create(runtime, {}));
+
+    const QSharedPointer<PrivacyCategorySessionOwner> owner =
+        PrivacyCategorySessionOwner::create(runtime, verifier);
+    QVERIFY(owner);
+    QCOMPARE(owner->runWhileUnlocked(categoryUuid, [] {}),
+             PrivacyCategoryOperationStatus::CategoryLocked);
+
+    owner->shutdown();
+    QCOMPARE(owner->runWhileUnlocked(categoryUuid, [] {}),
+             PrivacyCategoryOperationStatus::TransactionBlocked);
+    QCOMPARE(owner->unlockCategory(categoryUuid, QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::TransactionBlocked);
+    QCOMPARE(owner->lockAllCategories().constFirst().status,
+             PrivacyCategorySessionStatus::TransactionBlocked);
+    QVERIFY(!owner->ownsSecret(categoryUuid));
+    owner->shutdown();
 }
 
 void PrivacyRuntimeTest::testManualTagVisibilityProvider()

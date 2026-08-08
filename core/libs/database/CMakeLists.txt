@@ -105,6 +105,7 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyposixfilesystemadapter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyactionpolicy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycategorysession.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycategorysessionowner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycontracts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyleaseregistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyprotectpreflight.cpp

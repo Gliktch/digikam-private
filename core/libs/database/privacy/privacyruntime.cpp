@@ -38,6 +38,7 @@
 
 #include "collectionlocation.h"
 #include "collectionmanager.h"
+#include "privacycategorysessionowner.h"
 #include "privacyrepository.h"
 
 namespace Digikam
@@ -853,6 +854,7 @@ public:
 
     QReadWriteLock                             lock;
     QSharedPointer<PrivacyRuntimeCoordinator>  coordinator;
+    QSharedPointer<PrivacyCategorySessionOwner> categorySessions;
     PrivacyStartupReport                      report;
 };
 
@@ -3578,6 +3580,7 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
     PrivacyRepositorySnapshot snapshot;
     PrivacyRepository repository;
     QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
+    QSharedPointer<PrivacyCategorySessionOwner> categorySessions;
     PrivacyStartupReport result;
     const bool unusedRootsPruned = repository.pruneUnreferencedAlbumRoots();
 
@@ -3590,6 +3593,14 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
         result = runtime->initialize(snapshot, verifier,
                                      QSharedPointer<const PrivacyTransactionRecovery>(),
                                      integrity);
+        categorySessions = PrivacyCategorySessionOwner::create(runtime, verifier);
+
+        if (!categorySessions)
+        {
+            result.state = PrivacyStartupState::Degraded;
+            result.diagnostics << QLatin1String(
+                "Privacy category-session owner could not be initialized");
+        }
     }
     else
     {
@@ -3608,12 +3619,20 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
     PrivacyAnalysisGate::setProvider(runtime);
 
     QSharedPointer<PrivacyRuntimeCoordinator> previousRuntime;
+    QSharedPointer<PrivacyCategorySessionOwner> previousCategorySessions;
 
     {
         QWriteLocker locker(&startupData->lock);
         previousRuntime = startupData->coordinator;
+        previousCategorySessions = startupData->categorySessions;
         startupData->coordinator = runtime;
+        startupData->categorySessions = categorySessions;
         startupData->report      = result;
+    }
+
+    if (previousCategorySessions && (previousCategorySessions != categorySessions))
+    {
+        previousCategorySessions->shutdown();
     }
 
     if (previousRuntime && (previousRuntime != runtime))
@@ -3631,12 +3650,20 @@ void PrivacyStartupRecovery::reset()
     PrivacyAnalysisGate::setProvider(runtime);
 
     QSharedPointer<PrivacyRuntimeCoordinator> previousRuntime;
+    QSharedPointer<PrivacyCategorySessionOwner> previousCategorySessions;
 
     {
         QWriteLocker locker(&startupData->lock);
         previousRuntime = startupData->coordinator;
+        previousCategorySessions = startupData->categorySessions;
         startupData->coordinator = runtime;
+        startupData->categorySessions.clear();
         startupData->report      = PrivacyStartupReport();
+    }
+
+    if (previousCategorySessions)
+    {
+        previousCategorySessions->shutdown();
     }
 
     if (previousRuntime && (previousRuntime != runtime))
@@ -3657,6 +3684,13 @@ QSharedPointer<PrivacyRuntimeCoordinator> PrivacyStartupRecovery::coordinator()
     QReadLocker locker(&startupData->lock);
 
     return startupData->coordinator;
+}
+
+QSharedPointer<PrivacyCategorySessionOwner> PrivacyStartupRecovery::categorySessions()
+{
+    QReadLocker locker(&startupData->lock);
+
+    return startupData->categorySessions;
 }
 
 QSharedPointer<const PrivacyActionStateProvider>

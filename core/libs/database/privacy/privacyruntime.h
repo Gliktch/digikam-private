@@ -32,6 +32,8 @@
 namespace Digikam
 {
 
+class PrivacyCategorySessionOwner;
+
 enum class PrivacyRecoveryDisposition
 {
     Recovered = 1,
@@ -280,6 +282,7 @@ public:
     static void reset();
     static PrivacyStartupReport report();
     static QSharedPointer<PrivacyRuntimeCoordinator> coordinator();
+    static QSharedPointer<PrivacyCategorySessionOwner> categorySessions();
     static QSharedPointer<const PrivacyActionStateProvider> actionStateProvider();
     static QSharedPointer<const PrivacyLeaseStateProvider> leaseStateProvider();
     static QSharedPointer<const PrivacyManualTagVisibilityProvider>
