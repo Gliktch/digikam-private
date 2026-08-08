@@ -18,6 +18,10 @@
 
 #include "haariface_p.h"
 
+// Local includes
+
+#include "privacyanalysisgate.h"
+
 #define ENABLE_DEBUG_DUPLICATES 0
 
 #if ENABLE_DEBUG_DUPLICATES
@@ -63,6 +67,13 @@ int HaarIface::preferredSize()
 
 bool HaarIface::indexImage(const QString& filename)
 {
+    const ItemInfo info = ItemInfo::fromLocalFile(filename);
+
+    if (info.isNull() || !PrivacyAnalysisGate::mayAnalyze(info.id()))
+    {
+        return false;
+    }
+
     QImage image = loadQImage(filename);
 
     if (image.isNull())
@@ -99,7 +110,7 @@ bool HaarIface::indexImage(const QString& filename, const DImg& image)
 
 bool HaarIface::indexImage(qlonglong imageid, const QImage& image)
 {
-    if (image.isNull())
+    if (image.isNull() || !PrivacyAnalysisGate::mayAnalyze(imageid))
     {
         return false;
     }
@@ -111,7 +122,7 @@ bool HaarIface::indexImage(qlonglong imageid, const QImage& image)
 
 bool HaarIface::indexImage(qlonglong imageid, const DImg& image)
 {
-    if (image.isNull())
+    if (image.isNull() || !PrivacyAnalysisGate::mayAnalyze(imageid))
     {
         return false;
     }
@@ -125,6 +136,11 @@ bool HaarIface::indexImage(qlonglong imageid, const DImg& image)
 
 bool HaarIface::indexImage(qlonglong imageid)
 {
+    if (!PrivacyAnalysisGate::mayAnalyze(imageid))
+    {
+        return false;
+    }
+
     Haar::Calculator haar;
     haar.transform(d->imageData());
 
@@ -143,7 +159,8 @@ bool HaarIface::indexImage(qlonglong imageid)
         qCDebug(DIGIKAM_MAINTENANCE_LOG) << "Write item id" << info.id() << info.isNull() << info.isVisible();
     }
 
-    if (!info.isNull() && info.isVisible())
+    if (!info.isNull() && info.isVisible() &&
+        PrivacyAnalysisGate::mayAnalyze(imageid))
     {
         QDateTime modDateTime = SimilarityDbAccess().backend()->asDBDateTime(info.modDateTime());
 

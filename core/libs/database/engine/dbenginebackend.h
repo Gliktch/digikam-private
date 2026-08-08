@@ -472,6 +472,9 @@ public:
      */
     void rollbackTransaction();
 
+    /** Roll back the outermost transaction and release its transaction scope. */
+    QueryState rollbackTransactionAndFinish();
+
     /**
      * Returns if the database is in a different thread in a transaction.
      * Note that a transaction does not require holding CoreDbAccess.

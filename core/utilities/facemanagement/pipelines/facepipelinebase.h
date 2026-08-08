@@ -99,13 +99,15 @@ protected:
     bool commonFaceThumbnailLoader(const QString& pipelineName,
                                    QThread::Priority stagePriority,
                                    MLPipelineFoundation::MLPipelineStage thisStage,
-                                   MLPipelineFoundation::MLPipelineStage nextStage);
+                                   MLPipelineFoundation::MLPipelineStage nextStage,
+                                   bool requireAnalysisPermission = true);
 
     bool commonFaceThumbnailExtractor(const QString& pipelineName,
                                       QThread::Priority stagePriority,
                                       MLPipelineFoundation::MLPipelineStage thisStage,
                                       MLPipelineFoundation::MLPipelineStage nextStage,
-                                      bool trainingQualityCheck = false);
+                                      bool trainingQualityCheck = false,
+                                      bool requireAnalysisPermission = true);
 
     // queue helper functions
 

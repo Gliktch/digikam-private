@@ -53,6 +53,7 @@
 #include "tagscache.h"
 #include "localizeselector.h"
 #include "qtopencvimg.h"
+#include "privacyanalysisgate.h"
 
 namespace Digikam
 {
@@ -218,7 +219,8 @@ bool AutotagsPipelineObject::finder()
 
                 // filter out duplicate image IDs
 
-                if (!filter.contains(imageId))
+                if (!filter.contains(imageId) &&
+                    PrivacyAnalysisGate::mayAnalyze(imageId))
                 {
                     ++totalItemCount;
                     filter << imageId;
@@ -267,7 +269,8 @@ bool AutotagsPipelineObject::loader()
 
         bool sendNotification = true;
 
-        if (DatabaseItem::Category::Image == package->info.category())
+        if (PrivacyAnalysisGate::mayAnalyze(package->info.id()) &&
+            (DatabaseItem::Category::Image == package->info.category()))
         {
             // load image for detection
 
@@ -351,6 +354,20 @@ bool AutotagsPipelineObject::extractor()
      */
 
     {
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   package->thumbnailIcon);
+
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
         // preprocess the image
 
         // copy the image to a cv::Mat
@@ -443,6 +460,7 @@ bool AutotagsPipelineObject::extractor()
         enqueue(nextQueue, package);
 
         package = nullptr;
+        }
     }
 
     /* =========================================================================================
@@ -486,14 +504,29 @@ bool AutotagsPipelineObject::classifier()
      */
 
     {
-        package->labelList = autotagsClassifier->predictMulti(package->featuresList);
-        package->tagList   = autotagsClassifier->getClassStrings(package->labelList);
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   package->thumbnailIcon);
 
-        // send the package to the next stage
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
+            package->labelList = autotagsClassifier->predictMulti(package->featuresList);
+            package->tagList   = autotagsClassifier->getClassStrings(package->labelList);
 
-        enqueue(nextQueue, package);
+            // send the package to the next stage
 
-        package = nullptr;
+            enqueue(nextQueue, package);
+
+            package = nullptr;
+        }
     }
 
     /* =========================================================================================
@@ -541,10 +574,24 @@ bool AutotagsPipelineObject::writer()
      */
 
     {
-        bool        tagsChanged = false;
-        QStringList tagsPath;
-        QStringList displayTags;
-        QSet<int>   newIds;
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   package->thumbnailIcon);
+
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
+            bool        tagsChanged = false;
+            QStringList tagsPath;
+            QStringList displayTags;
+            QSet<int>   newIds;
 
         // in BQM mode we don't want to touch the source image tags
 
@@ -685,9 +732,10 @@ bool AutotagsPipelineObject::writer()
 
         // delete the package
 
-        delete package;
+            delete package;
 
-        package = nullptr;
+            package = nullptr;
+        }
     }
 
     /* =========================================================================================

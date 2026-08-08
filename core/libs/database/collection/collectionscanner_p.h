@@ -57,6 +57,7 @@
 #include "iteminfo.h"
 #include "itemscanner.h"
 #include "metaenginesettings.h"
+#include "privacyscangate.h"
 #include "tagscache.h"
 #include "thumbsdbaccess.h"
 #include "thumbsdb.h"

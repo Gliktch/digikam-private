@@ -1986,6 +1986,24 @@ void BdEngineBackend::rollbackTransaction()
     }
 }
 
+BdEngineBackend::QueryState BdEngineBackend::rollbackTransactionAndFinish()
+{
+    Q_D(BdEngineBackend);
+
+    if (!d->isInTransaction || !d->decrementTransactionCount())
+    {
+        return BdEngineBackend::QueryState(BdEngineBackend::SQLError);
+    }
+
+    QSqlDatabase db = d->databaseForThread();
+    const bool rolledBack = db.rollback();
+    d->isInTransaction = false;
+    d->transactionFinished();
+
+    return BdEngineBackend::QueryState(rolledBack ? BdEngineBackend::NoErrors
+                                                  : BdEngineBackend::SQLError);
+}
+
 QStringList BdEngineBackend::tables()
 {
     Q_D(BdEngineBackend);

@@ -36,6 +36,7 @@
 #include "coredbfields.h"
 #include "coredbaccess.h"
 #include "coredbconstants.h"
+#include "privacytypes.h"
 #include "album.h"
 
 namespace Digikam
@@ -111,6 +112,53 @@ public:
      * For MySQL like UTF8MB4.
      */
     QString getDatabaseEncoding()                                                                                   const;
+
+    // ----------- Privacy operations -----------
+
+    bool insertPrivacyCategory(const PrivacyCategory& category)                                                    const;
+    bool getPrivacyCategories(QList<PrivacyCategory>* categories)                                                  const;
+    PrivacyCategory getPrivacyCategory(const QString& uuid)                                                        const;
+    bool updatePrivacyCategoryTagVisibilityMode(const QString& uuid,
+                                                PrivacyTagVisibilityMode mode)                                     const;
+
+    bool insertPrivacyItem(const PrivacyItem& item)                                                                const;
+    bool getPrivacyItems(QList<PrivacyItem>* items)                                                                const;
+    PrivacyItem getPrivacyItem(qlonglong imageId)                                                                  const;
+
+    bool insertPrivacyCredential(const PrivacyCredential& credential)                                              const;
+    bool getPrivacyCredentials(QList<PrivacyCredential>* credentials)                                              const;
+    bool insertPrivacyStorageRoot(const PrivacyStorageRoot& root)                                                  const;
+    bool getPrivacyStorageRoots(QList<PrivacyStorageRoot>* roots)                                                  const;
+    bool insertPrivacyStore(const PrivacyStore& store)                                                             const;
+    bool getPrivacyStores(QList<PrivacyStore>* stores)                                                             const;
+    bool insertPrivacyStoreBinding(const PrivacyStoreBinding& binding)                                             const;
+    bool getPrivacyStoreBindings(QList<PrivacyStoreBinding>* bindings)                                             const;
+    bool insertPrivacyContainer(const PrivacyContainer& container)                                                 const;
+    bool getPrivacyContainers(QList<PrivacyContainer>* containers)                                                 const;
+    bool insertPrivacyAsset(const PrivacyAsset& asset)                                                             const;
+    bool getPrivacyAssets(QList<PrivacyAsset>* assets)                                                             const;
+    bool insertPrivacyDerivative(const PrivacyDerivative& derivative)                                              const;
+    bool getPrivacyDerivatives(QList<PrivacyDerivative>* derivatives)                                              const;
+    bool insertPrivacyTransaction(const PrivacyTransaction& transaction)                                           const;
+    bool getPrivacyTransactions(QList<PrivacyTransaction>* transactions)                                           const;
+    bool getActivePrivacyTransactions(QList<PrivacyTransaction>* transactions)                                     const;
+    bool compareAndUpdatePrivacyTransaction(const PrivacyTransaction& transaction,
+                                            PrivacyTransactionState expectedState,
+                                            qlonglong expectedGeneration)                                           const;
+    bool insertPrivacyTransactionJournal(const PrivacyTransactionJournal& journal)                                 const;
+    bool getPrivacyTransactionJournals(QList<PrivacyTransactionJournal>* journals)                                 const;
+    bool compareAndUpdatePrivacyTransactionJournal(const PrivacyTransactionJournal& journal,
+                                                   int expectedStage)                                               const;
+    bool beginPrivacyCategoryCreation(const PrivacyCategory& category,
+                                      const PrivacyStorageRoot& root,
+                                      const PrivacyStore& store,
+                                      const PrivacyTransaction& transaction,
+                                      const PrivacyTransactionJournal& journal)                                    const;
+    bool publishPrivacyCategoryCreation(const PrivacyCategory& category,
+                                        const PrivacyCredential& credential,
+                                        const PrivacyStore& store,
+                                        const QList<PrivacyStoreBinding>& bindings,
+                                        const PrivacyTransaction& transaction)                                    const;
 
     /**
      * Returns the version used for the unique hash in this database.

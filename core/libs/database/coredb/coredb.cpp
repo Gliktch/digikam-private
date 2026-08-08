@@ -23,6 +23,10 @@
 #include <ksharedconfig.h>
 #include <kconfiggroup.h>
 
+// Qt includes
+
+#include <QSqlQuery>
+
 // Local includes
 
 #include "digikam_debug.h"
@@ -135,6 +139,1394 @@ CoreDB::~CoreDB()
 {
     writeSettings();
     delete d;
+}
+
+bool CoreDB::insertPrivacyCategory(const PrivacyCategory& category) const
+{
+    if (!category.isValid())
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << category.uuid
+           << category.name
+           << static_cast<int>(category.backend)
+           << static_cast<int>(category.presentationMode)
+           << static_cast<int>(category.unlockedThumbnailMode)
+           << static_cast<int>(category.tagVisibilityMode)
+           << static_cast<int>(category.lifecycleState)
+           << category.currentCredentialGeneration
+           << category.schemaVersion
+           << d->db->asDBDateTime(category.createdAt);
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyCategories "
+                                             "(uuid, name, backend, presentationMode, "
+                                             "unlockedThumbnailMode, tagVisibilityMode, lifecycleState, "
+                                             "currentCredentialGeneration, schemaVersion, createdAt) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyCategories(QList<PrivacyCategory>* categories) const
+{
+    if (!categories)
+    {
+        return false;
+    }
+
+    categories->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT uuid, name, backend, presentationMode, "
+                                         "unlockedThumbnailMode, tagVisibilityMode, lifecycleState, "
+                                         "currentCredentialGeneration, schemaVersion, createdAt "
+                                         "FROM PrivacyCategories ORDER BY name, uuid;"), &values))
+    {
+        return false;
+    }
+
+    if ((values.size() % 10) != 0)
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyCategory category;
+
+        category.uuid             = (*it++).toString();
+        category.name             = (*it++).toString();
+        category.backend          = static_cast<PrivacyBackend>((*it++).toInt());
+        category.presentationMode = static_cast<PrivacyPresentationMode>((*it++).toInt());
+        category.unlockedThumbnailMode = static_cast<PrivacyUnlockedThumbnailMode>((*it++).toInt());
+        category.tagVisibilityMode = static_cast<PrivacyTagVisibilityMode>((*it++).toInt());
+        category.lifecycleState   = static_cast<PrivacyCategoryLifecycleState>((*it++).toInt());
+        category.currentCredentialGeneration = (*it++).toLongLong();
+        category.schemaVersion    = (*it++).toInt();
+        category.createdAt        = (*it++).toDateTime();
+
+        categories->append(category);
+    }
+
+    return true;
+}
+
+PrivacyCategory CoreDB::getPrivacyCategory(const QString& uuid) const
+{
+    QVariantList values;
+
+    d->db->execSql(QString::fromUtf8("SELECT uuid, name, backend, presentationMode, "
+                                     "unlockedThumbnailMode, tagVisibilityMode, lifecycleState, "
+                                     "currentCredentialGeneration, schemaVersion, createdAt "
+                                     "FROM PrivacyCategories WHERE uuid=?;"), uuid, &values);
+
+    if (values.size() != 10)
+    {
+        return PrivacyCategory();
+    }
+
+    PrivacyCategory category;
+    auto it = values.constBegin();
+
+    category.uuid             = (*it++).toString();
+    category.name             = (*it++).toString();
+    category.backend          = static_cast<PrivacyBackend>((*it++).toInt());
+    category.presentationMode = static_cast<PrivacyPresentationMode>((*it++).toInt());
+    category.unlockedThumbnailMode = static_cast<PrivacyUnlockedThumbnailMode>((*it++).toInt());
+    category.tagVisibilityMode = static_cast<PrivacyTagVisibilityMode>((*it++).toInt());
+    category.lifecycleState   = static_cast<PrivacyCategoryLifecycleState>((*it++).toInt());
+    category.currentCredentialGeneration = (*it++).toLongLong();
+    category.schemaVersion    = (*it++).toInt();
+    category.createdAt        = (*it++).toDateTime();
+
+    return category;
+}
+
+bool CoreDB::updatePrivacyCategoryTagVisibilityMode(
+    const QString& uuid,
+    PrivacyTagVisibilityMode mode) const
+{
+    if ((mode != PrivacyTagVisibilityMode::UnlockedOnly) &&
+        (mode != PrivacyTagVisibilityMode::AlwaysVisible))
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << static_cast<int>(mode) << uuid;
+
+    const QSqlQuery query = d->db->execQuery(
+        QString::fromUtf8("UPDATE PrivacyCategories SET tagVisibilityMode=? WHERE uuid=?;"),
+        values);
+
+    return (query.isActive() && (query.numRowsAffected() == 1));
+}
+
+bool CoreDB::insertPrivacyItem(const PrivacyItem& item) const
+{
+    if (!item.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+    d->db->execSql(QString::fromUtf8("SELECT "
+                                     "EXISTS(SELECT 1 FROM Images WHERE id=?), "
+                                     "EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=?);"),
+                   item.imageId, item.categoryUuid, &parentValues);
+
+    if ((parentValues.size() != 2) ||
+        !parentValues.at(0).toBool() ||
+        !parentValues.at(1).toBool())
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << item.imageId
+           << item.uuid
+           << item.categoryUuid
+           << item.originalHash
+           << item.originalSize
+           << item.originalWidth
+           << item.originalHeight
+           << d->db->asDBDateTime(item.originalCreationDate)
+           << item.expectedProxyHash
+           << item.expectedProxySize
+           << item.presentationVersion
+           << item.generation
+           << item.transactionState;
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyItems "
+                                             "(imageId, uuid, categoryUuid, originalHash, originalSize, "
+                                             "originalWidth, originalHeight, originalCreationDate, "
+                                             "expectedProxyHash, expectedProxySize, presentationVersion, "
+                                             "generation, transactionState) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyItems(QList<PrivacyItem>* items) const
+{
+    if (!items)
+    {
+        return false;
+    }
+
+    items->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT imageId, uuid, categoryUuid, originalHash, originalSize, "
+                                         "originalWidth, originalHeight, originalCreationDate, expectedProxyHash, "
+                                         "expectedProxySize, presentationVersion, generation, transactionState "
+                                         "FROM PrivacyItems ORDER BY imageId;"), &values))
+    {
+        return false;
+    }
+
+    if ((values.size() % 13) != 0)
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyItem item;
+
+        item.imageId              = (*it++).toLongLong();
+        item.uuid                 = (*it++).toString();
+        item.categoryUuid         = (*it++).toString();
+        item.originalHash         = (*it++).toString();
+        item.originalSize         = (*it++).toLongLong();
+        item.originalWidth        = (*it++).toInt();
+        item.originalHeight       = (*it++).toInt();
+        item.originalCreationDate = (*it++).toDateTime();
+        item.expectedProxyHash    = (*it++).toString();
+        item.expectedProxySize    = (*it++).toLongLong();
+        item.presentationVersion  = (*it++).toInt();
+        item.generation           = (*it++).toLongLong();
+        item.transactionState     = (*it++).toInt();
+
+        items->append(item);
+    }
+
+    return true;
+}
+
+PrivacyItem CoreDB::getPrivacyItem(qlonglong imageId) const
+{
+    QVariantList values;
+
+    d->db->execSql(QString::fromUtf8("SELECT imageId, uuid, categoryUuid, originalHash, originalSize, "
+                                     "originalWidth, originalHeight, originalCreationDate, expectedProxyHash, "
+                                     "expectedProxySize, presentationVersion, generation, transactionState "
+                                     "FROM PrivacyItems WHERE imageId=?;"), imageId, &values);
+
+    if (values.size() != 13)
+    {
+        return PrivacyItem();
+    }
+
+    PrivacyItem item;
+    auto it = values.constBegin();
+
+    item.imageId              = (*it++).toLongLong();
+    item.uuid                 = (*it++).toString();
+    item.categoryUuid         = (*it++).toString();
+    item.originalHash         = (*it++).toString();
+    item.originalSize         = (*it++).toLongLong();
+    item.originalWidth        = (*it++).toInt();
+    item.originalHeight       = (*it++).toInt();
+    item.originalCreationDate = (*it++).toDateTime();
+    item.expectedProxyHash    = (*it++).toString();
+    item.expectedProxySize    = (*it++).toLongLong();
+    item.presentationVersion  = (*it++).toInt();
+    item.generation           = (*it++).toLongLong();
+    item.transactionState     = (*it++).toInt();
+
+    return item;
+}
+
+bool CoreDB::insertPrivacyCredential(const PrivacyCredential& credential) const
+{
+    if (!credential.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+    d->db->execSql(QString::fromUtf8("SELECT EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=?);"),
+                   credential.categoryUuid, &parentValues);
+
+    if ((parentValues.size() != 1) || !parentValues.constFirst().toBool())
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << credential.categoryUuid
+           << credential.generation
+           << credential.encodingVersion
+           << credential.envelopeFormat
+           << credential.envelopeBlob
+           << credential.envelopeHashAlgorithm
+           << credential.envelopeHash
+           << credential.recoveryMode
+           << credential.recoveryState
+           << credential.recoveryRecordVersion
+           << (credential.recoveryDocumentUuid.isEmpty() ? QVariant() : credential.recoveryDocumentUuid)
+           << (credential.recoveryAcknowledgedAt.isValid()
+               ? d->db->asDBDateTime(credential.recoveryAcknowledgedAt) : QVariant())
+           << (credential.recoveryVerifiedAt.isValid()
+               ? d->db->asDBDateTime(credential.recoveryVerifiedAt) : QVariant())
+           << d->db->asDBDateTime(credential.createdAt);
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyCredentials "
+                                             "(categoryUuid, generation, encodingVersion, envelopeFormat, "
+                                             "envelopeBlob, envelopeHashAlgorithm, envelopeHash, recoveryMode, "
+                                             "recoveryState, recoveryRecordVersion, recoveryDocumentUuid, "
+                                             "recoveryAcknowledgedAt, recoveryVerifiedAt, createdAt) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyCredentials(QList<PrivacyCredential>* credentials) const
+{
+    if (!credentials)
+    {
+        return false;
+    }
+
+    credentials->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT categoryUuid, generation, encodingVersion, envelopeFormat, "
+                                         "envelopeBlob, envelopeHashAlgorithm, envelopeHash, recoveryMode, "
+                                         "recoveryState, recoveryRecordVersion, recoveryDocumentUuid, "
+                                         "recoveryAcknowledgedAt, recoveryVerifiedAt, createdAt "
+                                         "FROM PrivacyCredentials ORDER BY categoryUuid, generation;"), &values) ||
+        ((values.size() % 14) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyCredential credential;
+        credential.categoryUuid           = (*it++).toString();
+        credential.generation             = (*it++).toLongLong();
+        credential.encodingVersion        = (*it++).toString();
+        credential.envelopeFormat         = (*it++).toString();
+        credential.envelopeBlob           = (*it++).toByteArray();
+        credential.envelopeHashAlgorithm  = (*it++).toString();
+        credential.envelopeHash           = (*it++).toString();
+        credential.recoveryMode           = (*it++).toInt();
+        credential.recoveryState          = (*it++).toInt();
+        credential.recoveryRecordVersion  = (*it++).toInt();
+        credential.recoveryDocumentUuid   = (*it++).toString();
+        credential.recoveryAcknowledgedAt = (*it++).toDateTime();
+        credential.recoveryVerifiedAt     = (*it++).toDateTime();
+        credential.createdAt              = (*it++).toDateTime();
+        credentials->append(credential);
+    }
+
+    return true;
+}
+
+bool CoreDB::insertPrivacyStorageRoot(const PrivacyStorageRoot& root) const
+{
+    if (!root.isValid())
+    {
+        return false;
+    }
+
+    if (root.kind == PrivacyStorageRootKind::AlbumRoot)
+    {
+        QVariantList parentValues;
+        d->db->execSql(QString::fromUtf8("SELECT EXISTS(SELECT 1 FROM AlbumRoots WHERE id=?);"),
+                       root.albumRootId, &parentValues);
+
+        if ((parentValues.size() != 1) || !parentValues.constFirst().toBool())
+        {
+            return false;
+        }
+    }
+
+    QVariantList values;
+    values << root.uuid
+           << static_cast<int>(root.kind)
+           << ((root.albumRootId > 0) ? QVariant(root.albumRootId) : QVariant())
+           << root.configuredPath
+           << root.identityVersion
+           << root.identityData
+           << (root.markerUuid.isEmpty() ? QVariant() : root.markerUuid)
+           << root.schemaVersion
+           << d->db->asDBDateTime(root.createdAt);
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyStorageRoots "
+                                             "(uuid, kind, albumRootId, configuredPath, identityVersion, "
+                                             "identityData, markerUuid, schemaVersion, createdAt) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyStorageRoots(QList<PrivacyStorageRoot>* roots) const
+{
+    if (!roots)
+    {
+        return false;
+    }
+
+    roots->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT uuid, kind, albumRootId, configuredPath, identityVersion, "
+                                         "identityData, markerUuid, schemaVersion, createdAt "
+                                         "FROM PrivacyStorageRoots ORDER BY uuid;"), &values) ||
+        ((values.size() % 9) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyStorageRoot root;
+        root.uuid           = (*it++).toString();
+        root.kind           = static_cast<PrivacyStorageRootKind>((*it++).toInt());
+        const QVariant albumRootId = *it++;
+        root.albumRootId    = albumRootId.isNull() ? -1 : albumRootId.toInt();
+        root.configuredPath = (*it++).toString();
+        root.identityVersion = (*it++).toInt();
+        root.identityData   = (*it++).toByteArray();
+        root.markerUuid     = (*it++).toString();
+        root.schemaVersion  = (*it++).toInt();
+        root.createdAt      = (*it++).toDateTime();
+        roots->append(root);
+    }
+
+    return true;
+}
+
+bool CoreDB::insertPrivacyStore(const PrivacyStore& store) const
+{
+    if (!store.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+    d->db->execSql(QString::fromUtf8("SELECT "
+                                     "EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=?), "
+                                     "EXISTS(SELECT 1 FROM PrivacyStorageRoots WHERE uuid=?), "
+                                     "EXISTS(SELECT 1 FROM PrivacyCredentials "
+                                     "WHERE categoryUuid=? AND generation=?);"),
+                   store.categoryUuid, store.rootUuid,
+                   store.categoryUuid, store.configGeneration, &parentValues);
+
+    const bool credentialValid = ((store.configGeneration < 0) ||
+                                  ((parentValues.size() == 3) && parentValues.at(2).toBool()));
+
+    if ((parentValues.size() != 3) || !parentValues.at(0).toBool() ||
+        !parentValues.at(1).toBool() || !credentialValid)
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << store.uuid
+           << store.categoryUuid
+           << store.rootUuid
+           << store.format
+           << store.formatVersion
+           << store.cipherRelativePath
+           << store.configRelativePath
+           << ((store.configGeneration >= 0) ? QVariant(store.configGeneration) : QVariant())
+           << static_cast<int>(store.lifecycleState)
+           << store.schemaVersion
+           << d->db->asDBDateTime(store.createdAt);
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyStores "
+                                             "(uuid, categoryUuid, rootUuid, format, formatVersion, "
+                                             "cipherRelativePath, configRelativePath, configGeneration, "
+                                             "lifecycleState, schemaVersion, createdAt) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyStores(QList<PrivacyStore>* stores) const
+{
+    if (!stores)
+    {
+        return false;
+    }
+
+    stores->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT uuid, categoryUuid, rootUuid, format, formatVersion, "
+                                         "cipherRelativePath, configRelativePath, configGeneration, "
+                                         "lifecycleState, schemaVersion, createdAt "
+                                         "FROM PrivacyStores ORDER BY uuid;"), &values) ||
+        ((values.size() % 11) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyStore store;
+        store.uuid               = (*it++).toString();
+        store.categoryUuid       = (*it++).toString();
+        store.rootUuid           = (*it++).toString();
+        store.format             = (*it++).toString();
+        store.formatVersion      = (*it++).toInt();
+        store.cipherRelativePath = (*it++).toString();
+        store.configRelativePath = (*it++).toString();
+        const QVariant configGeneration = *it++;
+        store.configGeneration   = configGeneration.isNull() ? -1 : configGeneration.toLongLong();
+        store.lifecycleState     = static_cast<PrivacyStoreLifecycleState>((*it++).toInt());
+        store.schemaVersion      = (*it++).toInt();
+        store.createdAt          = (*it++).toDateTime();
+        stores->append(store);
+    }
+
+    return true;
+}
+
+bool CoreDB::insertPrivacyStoreBinding(const PrivacyStoreBinding& binding) const
+{
+    if (!binding.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+    QVariantList parentBindings;
+    parentBindings << binding.categoryUuid
+                   << binding.storeUuid
+                   << binding.categoryUuid
+                   << binding.categoryUuid
+                   << binding.storeUuid;
+    d->db->execSql(QString::fromUtf8("SELECT "
+                                     "EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=?), "
+                                     "EXISTS(SELECT 1 FROM PrivacyStores WHERE uuid=? AND categoryUuid=?), "
+                                     "NOT EXISTS(SELECT 1 FROM PrivacyStoreBindings "
+                                     "WHERE categoryUuid=? AND storeUuid<>?);"),
+                   parentBindings, &parentValues);
+
+    if ((parentValues.size() != 3) || !parentValues.at(0).toBool() ||
+        !parentValues.at(1).toBool() || !parentValues.at(2).toBool())
+    {
+        return false;
+    }
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyStoreBindings "
+                                             "(categoryUuid, role, storeUuid, schemaVersion) "
+                                             "VALUES (?, ?, ?, ?);"),
+                           binding.categoryUuid, static_cast<int>(binding.role),
+                           binding.storeUuid, binding.schemaVersion));
+}
+
+bool CoreDB::getPrivacyStoreBindings(QList<PrivacyStoreBinding>* bindings) const
+{
+    if (!bindings)
+    {
+        return false;
+    }
+
+    bindings->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT categoryUuid, role, storeUuid, schemaVersion "
+                                         "FROM PrivacyStoreBindings ORDER BY categoryUuid, role;"), &values) ||
+        ((values.size() % 4) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyStoreBinding binding;
+        binding.categoryUuid = (*it++).toString();
+        binding.role         = static_cast<PrivacyStoreRole>((*it++).toInt());
+        binding.storeUuid    = (*it++).toString();
+        binding.schemaVersion = (*it++).toInt();
+        bindings->append(binding);
+    }
+
+    return true;
+}
+
+bool CoreDB::insertPrivacyContainer(const PrivacyContainer& container) const
+{
+    if (!container.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+
+    if (container.kind == PrivacyContainerKind::CasualArchive)
+    {
+        QVariantList parentBindings;
+        parentBindings << container.rootUuid
+                       << static_cast<int>(PrivacyStorageRootKind::AlbumRoot)
+                       << container.credentialGeneration
+                       << container.itemUuid
+                       << static_cast<int>(PrivacyBackend::Casual);
+        d->db->execSql(QString::fromUtf8("SELECT EXISTS("
+                                         "SELECT 1 FROM PrivacyItems "
+                                         "INNER JOIN PrivacyCategories "
+                                         "ON PrivacyCategories.uuid=PrivacyItems.categoryUuid "
+                                         "INNER JOIN PrivacyStorageRoots "
+                                         "ON PrivacyStorageRoots.uuid=? AND PrivacyStorageRoots.kind=? "
+                                         "INNER JOIN PrivacyCredentials "
+                                         "ON PrivacyCredentials.categoryUuid=PrivacyItems.categoryUuid "
+                                         "AND PrivacyCredentials.generation=? "
+                                         "WHERE PrivacyItems.uuid=? AND PrivacyCategories.backend=?);"),
+                       parentBindings, &parentValues);
+    }
+    else
+    {
+        QVariantList parentBindings;
+        parentBindings << static_cast<int>(PrivacyStoreRole::Originals)
+                       << container.credentialGeneration
+                       << container.itemUuid
+                       << static_cast<int>(PrivacyBackend::Strong)
+                       << container.storeUuid;
+        d->db->execSql(QString::fromUtf8("SELECT EXISTS("
+                                         "SELECT 1 FROM PrivacyItems "
+                                         "INNER JOIN PrivacyCategories "
+                                         "ON PrivacyCategories.uuid=PrivacyItems.categoryUuid "
+                                         "INNER JOIN PrivacyStoreBindings "
+                                         "ON PrivacyStoreBindings.categoryUuid=PrivacyItems.categoryUuid "
+                                         "AND PrivacyStoreBindings.role=? "
+                                         "INNER JOIN PrivacyStores "
+                                         "ON PrivacyStores.uuid=PrivacyStoreBindings.storeUuid "
+                                         "INNER JOIN PrivacyCredentials "
+                                         "ON PrivacyCredentials.categoryUuid=PrivacyItems.categoryUuid "
+                                         "AND PrivacyCredentials.generation=? "
+                                         "WHERE PrivacyItems.uuid=? AND PrivacyCategories.backend=? "
+                                         "AND PrivacyStores.uuid=?);"),
+                       parentBindings, &parentValues);
+    }
+
+    if ((parentValues.size() != 1) || !parentValues.constFirst().toBool())
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << container.uuid
+           << container.itemUuid
+           << static_cast<int>(container.kind)
+           << (container.rootUuid.isEmpty() ? QVariant() : container.rootUuid)
+           << (container.storeUuid.isEmpty() ? QVariant() : container.storeUuid)
+           << container.objectRelativePath
+           << container.protectedSize
+           << container.protectedHashAlgorithm
+           << container.protectedHash
+           << container.formatVersion
+           << container.credentialGeneration
+           << static_cast<int>(container.state)
+           << d->db->asDBDateTime(container.createdAt)
+           << d->db->asDBDateTime(container.updatedAt);
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyContainers "
+                                             "(uuid, itemUuid, kind, rootUuid, storeUuid, objectRelativePath, "
+                                             "protectedSize, protectedHashAlgorithm, protectedHash, formatVersion, "
+                                             "credentialGeneration, state, createdAt, updatedAt) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyContainers(QList<PrivacyContainer>* containers) const
+{
+    if (!containers)
+    {
+        return false;
+    }
+
+    containers->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT uuid, itemUuid, kind, rootUuid, storeUuid, objectRelativePath, "
+                                         "protectedSize, protectedHashAlgorithm, protectedHash, formatVersion, "
+                                         "credentialGeneration, state, createdAt, updatedAt "
+                                         "FROM PrivacyContainers ORDER BY itemUuid, uuid;"), &values) ||
+        ((values.size() % 14) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyContainer container;
+        container.uuid                    = (*it++).toString();
+        container.itemUuid                = (*it++).toString();
+        container.kind                    = static_cast<PrivacyContainerKind>((*it++).toInt());
+        container.rootUuid                = (*it++).toString();
+        container.storeUuid               = (*it++).toString();
+        container.objectRelativePath      = (*it++).toString();
+        container.protectedSize           = (*it++).toLongLong();
+        container.protectedHashAlgorithm  = (*it++).toString();
+        container.protectedHash           = (*it++).toString();
+        container.formatVersion           = (*it++).toInt();
+        container.credentialGeneration    = (*it++).toLongLong();
+        container.state                   = static_cast<PrivacyContainerState>((*it++).toInt());
+        container.createdAt               = (*it++).toDateTime();
+        container.updatedAt               = (*it++).toDateTime();
+        containers->append(container);
+    }
+
+    return true;
+}
+
+bool CoreDB::insertPrivacyAsset(const PrivacyAsset& asset) const
+{
+    if (!asset.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+    QVariantList parentBindings;
+    parentBindings << asset.itemUuid
+                   << asset.publicRootUuid
+                   << static_cast<int>(PrivacyStorageRootKind::AlbumRoot)
+                   << asset.containerUuid
+                   << asset.itemUuid;
+    d->db->execSql(QString::fromUtf8("SELECT "
+                                     "EXISTS(SELECT 1 FROM PrivacyItems WHERE uuid=?), "
+                                     "EXISTS(SELECT 1 FROM PrivacyStorageRoots WHERE uuid=? AND kind=?), "
+                                     "EXISTS(SELECT 1 FROM PrivacyContainers WHERE uuid=? AND itemUuid=?);"),
+                   parentBindings, &parentValues);
+
+    if ((parentValues.size() != 3) || !parentValues.at(0).toBool() ||
+        !parentValues.at(1).toBool() || !parentValues.at(2).toBool())
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << asset.itemUuid
+           << asset.role
+           << asset.ordinal
+           << asset.originalName
+           << asset.publicRootUuid
+           << asset.publicRelativePath
+           << asset.containerUuid
+           << asset.protectedRelativePath
+           << asset.hashAlgorithm
+           << asset.originalHash
+           << asset.originalSize
+           << (asset.originalCreationDate.isValid()
+               ? d->db->asDBDateTime(asset.originalCreationDate) : QVariant())
+           << (asset.originalModificationDate.isValid()
+               ? d->db->asDBDateTime(asset.originalModificationDate) : QVariant())
+           << (asset.portableAttributes.isEmpty() ? QVariant() : asset.portableAttributes)
+           << (asset.proxyHashAlgorithm.isEmpty() ? QVariant() : asset.proxyHashAlgorithm)
+           << (asset.proxyHash.isEmpty() ? QVariant() : asset.proxyHash)
+           << ((asset.proxySize >= 0) ? QVariant(asset.proxySize) : QVariant())
+           << ((asset.proxyPresentationVersion > 0) ? QVariant(asset.proxyPresentationVersion) : QVariant())
+           << ((asset.proxyGeneration >= 0) ? QVariant(asset.proxyGeneration) : QVariant());
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyAssets "
+                                             "(itemUuid, role, ordinal, originalName, publicRootUuid, "
+                                             "publicRelativePath, containerUuid, protectedRelativePath, "
+                                             "hashAlgorithm, originalHash, originalSize, originalCreationDate, "
+                                             "originalModificationDate, portableAttributes, proxyHashAlgorithm, "
+                                             "proxyHash, proxySize, proxyPresentationVersion, proxyGeneration) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"),
+                           values));
+}
+
+bool CoreDB::getPrivacyAssets(QList<PrivacyAsset>* assets) const
+{
+    if (!assets)
+    {
+        return false;
+    }
+
+    assets->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT itemUuid, role, ordinal, originalName, publicRootUuid, "
+                                         "publicRelativePath, containerUuid, protectedRelativePath, hashAlgorithm, "
+                                         "originalHash, originalSize, originalCreationDate, originalModificationDate, "
+                                         "portableAttributes, proxyHashAlgorithm, proxyHash, proxySize, "
+                                         "proxyPresentationVersion, proxyGeneration "
+                                         "FROM PrivacyAssets ORDER BY itemUuid, role, ordinal;"), &values) ||
+        ((values.size() % 19) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyAsset asset;
+        asset.itemUuid                  = (*it++).toString();
+        asset.role                      = (*it++).toInt();
+        asset.ordinal                   = (*it++).toInt();
+        asset.originalName              = (*it++).toString();
+        asset.publicRootUuid            = (*it++).toString();
+        asset.publicRelativePath        = (*it++).toString();
+        asset.containerUuid             = (*it++).toString();
+        asset.protectedRelativePath     = (*it++).toString();
+        asset.hashAlgorithm             = (*it++).toString();
+        asset.originalHash              = (*it++).toString();
+        asset.originalSize              = (*it++).toLongLong();
+        asset.originalCreationDate      = (*it++).toDateTime();
+        asset.originalModificationDate  = (*it++).toDateTime();
+        asset.portableAttributes        = (*it++).toByteArray();
+        asset.proxyHashAlgorithm        = (*it++).toString();
+        asset.proxyHash                 = (*it++).toString();
+        const QVariant proxySize = *it++;
+        asset.proxySize                 = proxySize.isNull() ? -1 : proxySize.toLongLong();
+        const QVariant presentationVersion = *it++;
+        asset.proxyPresentationVersion  = presentationVersion.isNull() ? 0 : presentationVersion.toInt();
+        const QVariant proxyGeneration = *it++;
+        asset.proxyGeneration           = proxyGeneration.isNull() ? -1 : proxyGeneration.toLongLong();
+        assets->append(asset);
+    }
+
+    return true;
+}
+
+bool CoreDB::insertPrivacyDerivative(const PrivacyDerivative& derivative) const
+{
+    if (!derivative.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+    d->db->execSql(QString::fromUtf8("SELECT EXISTS(SELECT 1 FROM PrivacyStores "
+                                     "INNER JOIN PrivacyItems "
+                                     "ON PrivacyItems.categoryUuid=PrivacyStores.categoryUuid "
+                                     "INNER JOIN PrivacyStoreBindings "
+                                     "ON PrivacyStoreBindings.categoryUuid=PrivacyItems.categoryUuid "
+                                     "AND PrivacyStoreBindings.storeUuid=PrivacyStores.uuid "
+                                     "AND PrivacyStoreBindings.role=? "
+                                     "WHERE PrivacyStores.uuid=? AND PrivacyItems.uuid=?);"),
+                   static_cast<int>(PrivacyStoreRole::Derivatives),
+                   derivative.storeUuid, derivative.itemUuid, &parentValues);
+
+    if ((parentValues.size() != 1) || !parentValues.constFirst().toBool())
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << derivative.itemUuid
+           << static_cast<int>(derivative.kind)
+           << derivative.ordinal
+           << derivative.storeUuid
+           << derivative.protectedRelativePath
+           << derivative.sourceHashAlgorithm
+           << derivative.sourceOriginalHash
+           << derivative.derivativeFormat
+           << derivative.derivativeHashAlgorithm
+           << derivative.derivativeHash
+           << derivative.derivativeSize
+           << derivative.presentationVersion
+           << derivative.generation
+           << d->db->asDBDateTime(derivative.createdAt);
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyDerivatives "
+                                             "(itemUuid, kind, ordinal, storeUuid, protectedRelativePath, "
+                                             "sourceHashAlgorithm, sourceOriginalHash, derivativeFormat, "
+                                             "derivativeHashAlgorithm, derivativeHash, derivativeSize, "
+                                             "presentationVersion, generation, createdAt) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyDerivatives(QList<PrivacyDerivative>* derivatives) const
+{
+    if (!derivatives)
+    {
+        return false;
+    }
+
+    derivatives->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT itemUuid, kind, ordinal, storeUuid, protectedRelativePath, "
+                                         "sourceHashAlgorithm, sourceOriginalHash, derivativeFormat, "
+                                         "derivativeHashAlgorithm, derivativeHash, derivativeSize, "
+                                         "presentationVersion, generation, createdAt "
+                                         "FROM PrivacyDerivatives ORDER BY itemUuid, kind, ordinal;"), &values) ||
+        ((values.size() % 14) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyDerivative derivative;
+        derivative.itemUuid                = (*it++).toString();
+        derivative.kind                    = static_cast<PrivacyDerivativeKind>((*it++).toInt());
+        derivative.ordinal                 = (*it++).toInt();
+        derivative.storeUuid               = (*it++).toString();
+        derivative.protectedRelativePath   = (*it++).toString();
+        derivative.sourceHashAlgorithm     = (*it++).toString();
+        derivative.sourceOriginalHash      = (*it++).toString();
+        derivative.derivativeFormat        = (*it++).toString();
+        derivative.derivativeHashAlgorithm = (*it++).toString();
+        derivative.derivativeHash          = (*it++).toString();
+        derivative.derivativeSize          = (*it++).toLongLong();
+        derivative.presentationVersion     = (*it++).toInt();
+        derivative.generation              = (*it++).toLongLong();
+        derivative.createdAt               = (*it++).toDateTime();
+        derivatives->append(derivative);
+    }
+
+    return true;
+}
+
+bool CoreDB::insertPrivacyTransaction(const PrivacyTransaction& transaction) const
+{
+    if (!transaction.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+
+    if (transaction.itemUuid.isEmpty())
+    {
+        d->db->execSql(QString::fromUtf8("SELECT EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=?);"),
+                       transaction.categoryUuid, &parentValues);
+    }
+    else
+    {
+        d->db->execSql(QString::fromUtf8("SELECT "
+                                         "EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=?), "
+                                         "EXISTS(SELECT 1 FROM PrivacyItems WHERE uuid=? AND categoryUuid=?);"),
+                       transaction.categoryUuid, transaction.itemUuid,
+                       transaction.categoryUuid, &parentValues);
+    }
+
+    if (parentValues.isEmpty())
+    {
+        return false;
+    }
+
+    for (const QVariant& value : std::as_const(parentValues))
+    {
+        if (!value.toBool())
+        {
+            return false;
+        }
+    }
+
+    QVariantList credentialValues;
+    QVariantList credentialBindings;
+    credentialBindings << transaction.fromCredentialGeneration
+                       << transaction.categoryUuid
+                       << transaction.fromCredentialGeneration
+                       << transaction.toCredentialGeneration
+                       << transaction.categoryUuid
+                       << transaction.toCredentialGeneration;
+    d->db->execSql(QString::fromUtf8("SELECT "
+                                     "(? < 0 OR EXISTS(SELECT 1 FROM PrivacyCredentials "
+                                     "WHERE categoryUuid=? AND generation=?)), "
+                                     "(? < 0 OR EXISTS(SELECT 1 FROM PrivacyCredentials "
+                                     "WHERE categoryUuid=? AND generation=?));"),
+                   credentialBindings, &credentialValues);
+
+    if ((credentialValues.size() != 2) || !credentialValues.at(0).toBool() ||
+        !credentialValues.at(1).toBool())
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << transaction.uuid
+           << transaction.categoryUuid
+           << (transaction.itemUuid.isEmpty() ? QVariant() : transaction.itemUuid)
+           << static_cast<int>(transaction.type)
+           << static_cast<int>(transaction.state)
+           << transaction.generation
+           << ((transaction.fromCredentialGeneration >= 0)
+               ? QVariant(transaction.fromCredentialGeneration) : QVariant())
+           << ((transaction.toCredentialGeneration >= 0)
+               ? QVariant(transaction.toCredentialGeneration) : QVariant())
+           << transaction.payloadFormatVersion
+           << (transaction.payloadData.isEmpty() ? QVariant() : transaction.payloadData)
+           << d->db->asDBDateTime(transaction.createdAt)
+           << d->db->asDBDateTime(transaction.updatedAt);
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyTransactions "
+                                             "(uuid, categoryUuid, itemUuid, type, state, generation, "
+                                             "fromCredentialGeneration, toCredentialGeneration, "
+                                             "payloadFormatVersion, payloadData, createdAt, updatedAt) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyTransactions(QList<PrivacyTransaction>* transactions) const
+{
+    if (!transactions)
+    {
+        return false;
+    }
+
+    transactions->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT uuid, categoryUuid, itemUuid, type, state, generation, "
+                                         "fromCredentialGeneration, toCredentialGeneration, "
+                                         "payloadFormatVersion, payloadData, createdAt, updatedAt "
+                                         "FROM PrivacyTransactions ORDER BY createdAt, uuid;"), &values) ||
+        ((values.size() % 12) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyTransaction transaction;
+        transaction.uuid                     = (*it++).toString();
+        transaction.categoryUuid             = (*it++).toString();
+        transaction.itemUuid                 = (*it++).toString();
+        transaction.type                     = static_cast<PrivacyTransactionType>((*it++).toInt());
+        transaction.state                    = static_cast<PrivacyTransactionState>((*it++).toInt());
+        transaction.generation               = (*it++).toLongLong();
+        const QVariant fromGeneration = *it++;
+        transaction.fromCredentialGeneration = fromGeneration.isNull() ? -1 : fromGeneration.toLongLong();
+        const QVariant toGeneration = *it++;
+        transaction.toCredentialGeneration   = toGeneration.isNull() ? -1 : toGeneration.toLongLong();
+        transaction.payloadFormatVersion     = (*it++).toInt();
+        transaction.payloadData              = (*it++).toByteArray();
+        transaction.createdAt                = (*it++).toDateTime();
+        transaction.updatedAt                = (*it++).toDateTime();
+        transactions->append(transaction);
+    }
+
+    return true;
+}
+
+bool CoreDB::getActivePrivacyTransactions(QList<PrivacyTransaction>* transactions) const
+{
+    if (!transactions)
+    {
+        return false;
+    }
+
+    transactions->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT uuid, categoryUuid, itemUuid, type, state, generation, "
+                                         "fromCredentialGeneration, toCredentialGeneration, "
+                                         "payloadFormatVersion, payloadData, createdAt, updatedAt "
+                                         "FROM PrivacyTransactions WHERE state<>? "
+                                         "ORDER BY createdAt, uuid;"),
+                       static_cast<int>(PrivacyTransactionState::Complete), &values) ||
+        ((values.size() % 12) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyTransaction transaction;
+        transaction.uuid                     = (*it++).toString();
+        transaction.categoryUuid             = (*it++).toString();
+        transaction.itemUuid                 = (*it++).toString();
+        transaction.type                     = static_cast<PrivacyTransactionType>((*it++).toInt());
+        transaction.state                    = static_cast<PrivacyTransactionState>((*it++).toInt());
+        transaction.generation               = (*it++).toLongLong();
+        const QVariant fromGeneration = *it++;
+        transaction.fromCredentialGeneration = fromGeneration.isNull() ? -1 : fromGeneration.toLongLong();
+        const QVariant toGeneration = *it++;
+        transaction.toCredentialGeneration   = toGeneration.isNull() ? -1 : toGeneration.toLongLong();
+        transaction.payloadFormatVersion     = (*it++).toInt();
+        transaction.payloadData              = (*it++).toByteArray();
+        transaction.createdAt                = (*it++).toDateTime();
+        transaction.updatedAt                = (*it++).toDateTime();
+        transactions->append(transaction);
+    }
+
+    return true;
+}
+
+bool CoreDB::compareAndUpdatePrivacyTransaction(const PrivacyTransaction& transaction,
+                                                PrivacyTransactionState expectedState,
+                                                qlonglong expectedGeneration) const
+{
+    if (!transaction.isValid() || (expectedGeneration < 0) ||
+        (transaction.generation <= expectedGeneration))
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << static_cast<int>(transaction.state)
+           << transaction.generation
+           << ((transaction.fromCredentialGeneration >= 0)
+               ? QVariant(transaction.fromCredentialGeneration) : QVariant())
+           << ((transaction.toCredentialGeneration >= 0)
+               ? QVariant(transaction.toCredentialGeneration) : QVariant())
+           << transaction.payloadFormatVersion
+           << (transaction.payloadData.isEmpty() ? QVariant() : transaction.payloadData)
+           << d->db->asDBDateTime(transaction.updatedAt)
+           << transaction.uuid
+           << static_cast<int>(expectedState)
+           << expectedGeneration
+           << transaction.categoryUuid
+           << static_cast<int>(transaction.type)
+           << (transaction.itemUuid.isEmpty() ? QVariant() : transaction.itemUuid)
+           << (transaction.itemUuid.isEmpty() ? QVariant() : transaction.itemUuid)
+           << transaction.fromCredentialGeneration
+           << transaction.categoryUuid
+           << transaction.fromCredentialGeneration
+           << transaction.toCredentialGeneration
+           << transaction.categoryUuid
+           << transaction.toCredentialGeneration;
+
+    QSqlQuery query = d->db->execQuery(
+        QString::fromUtf8("UPDATE PrivacyTransactions SET state=?, generation=?, "
+                          "fromCredentialGeneration=?, toCredentialGeneration=?, "
+                          "payloadFormatVersion=?, payloadData=?, updatedAt=? "
+                          "WHERE uuid=? AND state=? AND generation=? AND categoryUuid=? AND type=? "
+                          "AND ((itemUuid IS NULL AND ? IS NULL) OR itemUuid=?) "
+                          "AND (? < 0 OR EXISTS(SELECT 1 FROM PrivacyCredentials "
+                          "WHERE categoryUuid=? AND generation=?)) "
+                          "AND (? < 0 OR EXISTS(SELECT 1 FROM PrivacyCredentials "
+                          "WHERE categoryUuid=? AND generation=?));"), values);
+
+    return (query.isActive() && (query.numRowsAffected() == 1));
+}
+
+bool CoreDB::insertPrivacyTransactionJournal(const PrivacyTransactionJournal& journal) const
+{
+    if (!journal.isValid())
+    {
+        return false;
+    }
+
+    QVariantList parentValues;
+    d->db->execSql(QString::fromUtf8("SELECT "
+                                     "EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
+                                     "EXISTS(SELECT 1 FROM PrivacyStorageRoots WHERE uuid=?);"),
+                   journal.transactionUuid, journal.rootUuid, &parentValues);
+
+    if ((parentValues.size() != 2) || !parentValues.at(0).toBool() || !parentValues.at(1).toBool())
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << journal.transactionUuid
+           << journal.rootUuid
+           << journal.journalRelativePath
+           << journal.journalFormatVersion
+           << journal.stage
+           << (journal.expectedHashAlgorithm.isEmpty() ? QVariant() : journal.expectedHashAlgorithm)
+           << (journal.expectedJournalHash.isEmpty() ? QVariant() : journal.expectedJournalHash)
+           << d->db->asDBDateTime(journal.updatedAt);
+
+    return (BdEngineBackend::NoErrors ==
+            d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyTransactionJournals "
+                                             "(transactionUuid, rootUuid, journalRelativePath, "
+                                             "journalFormatVersion, stage, expectedHashAlgorithm, "
+                                             "expectedJournalHash, updatedAt) "
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?);"), values));
+}
+
+bool CoreDB::getPrivacyTransactionJournals(QList<PrivacyTransactionJournal>* journals) const
+{
+    if (!journals)
+    {
+        return false;
+    }
+
+    journals->clear();
+    QVariantList values;
+
+    if (BdEngineBackend::NoErrors !=
+        d->db->execSql(QString::fromUtf8("SELECT transactionUuid, rootUuid, journalRelativePath, "
+                                         "journalFormatVersion, stage, expectedHashAlgorithm, "
+                                         "expectedJournalHash, updatedAt "
+                                         "FROM PrivacyTransactionJournals ORDER BY transactionUuid, rootUuid;"),
+                       &values) || ((values.size() % 8) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyTransactionJournal journal;
+        journal.transactionUuid       = (*it++).toString();
+        journal.rootUuid              = (*it++).toString();
+        journal.journalRelativePath   = (*it++).toString();
+        journal.journalFormatVersion  = (*it++).toInt();
+        journal.stage                 = (*it++).toInt();
+        journal.expectedHashAlgorithm = (*it++).toString();
+        journal.expectedJournalHash   = (*it++).toString();
+        journal.updatedAt             = (*it++).toDateTime();
+        journals->append(journal);
+    }
+
+    return true;
+}
+
+bool CoreDB::compareAndUpdatePrivacyTransactionJournal(const PrivacyTransactionJournal& journal,
+                                                       int expectedStage) const
+{
+    if (!journal.isValid() || (expectedStage < 0) || (journal.stage < expectedStage))
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << journal.stage
+           << (journal.expectedHashAlgorithm.isEmpty() ? QVariant() : journal.expectedHashAlgorithm)
+           << (journal.expectedJournalHash.isEmpty() ? QVariant() : journal.expectedJournalHash)
+           << d->db->asDBDateTime(journal.updatedAt)
+           << journal.transactionUuid
+           << journal.rootUuid
+           << journal.journalRelativePath
+           << journal.journalFormatVersion
+           << expectedStage;
+
+    QSqlQuery query = d->db->execQuery(
+        QString::fromUtf8("UPDATE PrivacyTransactionJournals SET stage=?, expectedHashAlgorithm=?, "
+                          "expectedJournalHash=?, updatedAt=? WHERE transactionUuid=? AND rootUuid=? "
+                          "AND journalRelativePath=? AND journalFormatVersion=? AND stage=?;"), values);
+
+    return (query.isActive() && (query.numRowsAffected() == 1));
+}
+
+bool CoreDB::beginPrivacyCategoryCreation(
+    const PrivacyCategory& category,
+    const PrivacyStorageRoot& root,
+    const PrivacyStore& store,
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    if (!category.isValid() || !root.isValid() || !store.isValid() ||
+        !transaction.isValid() || !journal.isValid() ||
+        (category.lifecycleState != PrivacyCategoryLifecycleState::Creating) ||
+        (category.currentCredentialGeneration != 0) ||
+        (root.kind != PrivacyStorageRootKind::ManagedStoreRoot) ||
+        (store.categoryUuid != category.uuid) || (store.rootUuid != root.uuid) ||
+        (store.lifecycleState != PrivacyStoreLifecycleState::Creating) ||
+        (store.configGeneration != -1) ||
+        (transaction.categoryUuid != category.uuid) ||
+        (transaction.type != PrivacyTransactionType::CreateCategory) ||
+        (transaction.state != PrivacyTransactionState::Created) ||
+        (transaction.generation != 0) ||
+        (journal.transactionUuid != transaction.uuid) ||
+        (journal.rootUuid != root.uuid) || d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList conflicts;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=? OR LOWER(name)=LOWER(?)), "
+        "EXISTS(SELECT 1 FROM PrivacyStores WHERE uuid=?), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?);"),
+        category.uuid, category.name, store.uuid, transaction.uuid, &conflicts);
+
+    if ((conflicts.size() != 3) || conflicts.at(0).toBool() ||
+        conflicts.at(1).toBool() || conflicts.at(2).toBool())
+    {
+        return abort();
+    }
+
+    QList<PrivacyStorageRoot> roots;
+
+    if (!getPrivacyStorageRoots(&roots))
+    {
+        return abort();
+    }
+
+    bool rootAlreadyPresent = false;
+
+    for (const PrivacyStorageRoot& existing : std::as_const(roots))
+    {
+        if (existing.uuid != root.uuid)
+        {
+            continue;
+        }
+
+        rootAlreadyPresent = true;
+
+        if ((existing.kind != root.kind) ||
+            (existing.configuredPath != root.configuredPath) ||
+            (existing.identityVersion != root.identityVersion) ||
+            (existing.identityData != root.identityData) ||
+            (existing.markerUuid != root.markerUuid))
+        {
+            return abort();
+        }
+    }
+
+    if (!insertPrivacyCategory(category) ||
+        (!rootAlreadyPresent && !insertPrivacyStorageRoot(root)) ||
+        !insertPrivacyStore(store) || !insertPrivacyTransaction(transaction) ||
+        !insertPrivacyTransactionJournal(journal))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::publishPrivacyCategoryCreation(
+    const PrivacyCategory& category,
+    const PrivacyCredential& credential,
+    const PrivacyStore& store,
+    const QList<PrivacyStoreBinding>& bindings,
+    const PrivacyTransaction& transaction) const
+{
+    if (!category.isValid() || !credential.isValid() || !store.isValid() ||
+        !transaction.isValid() || bindings.isEmpty() ||
+        (category.lifecycleState != PrivacyCategoryLifecycleState::Active) ||
+        (category.currentCredentialGeneration != credential.generation) ||
+        (credential.categoryUuid != category.uuid) ||
+        (store.categoryUuid != category.uuid) ||
+        (store.lifecycleState != PrivacyStoreLifecycleState::Active) ||
+        (store.configGeneration != credential.generation) ||
+        (transaction.categoryUuid != category.uuid) ||
+        (transaction.type != PrivacyTransactionType::CreateCategory) ||
+        (transaction.state != PrivacyTransactionState::Complete) ||
+        (transaction.generation != 1) || d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList expected;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT "
+        "EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=? AND lifecycleState=? "
+        "AND currentCredentialGeneration=0), "
+        "EXISTS(SELECT 1 FROM PrivacyStores WHERE uuid=? AND categoryUuid=? "
+        "AND lifecycleState=? AND configGeneration IS NULL), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? AND categoryUuid=? "
+        "AND type=? AND state=? AND generation=0);"),
+        category.uuid, static_cast<int>(PrivacyCategoryLifecycleState::Creating),
+        store.uuid, category.uuid, static_cast<int>(PrivacyStoreLifecycleState::Creating),
+        transaction.uuid, category.uuid,
+        static_cast<int>(PrivacyTransactionType::CreateCategory),
+        static_cast<int>(PrivacyTransactionState::Created), &expected);
+
+    if ((expected.size() != 3) || !expected.at(0).toBool() ||
+        !expected.at(1).toBool() || !expected.at(2).toBool() ||
+        !insertPrivacyCredential(credential))
+    {
+        return abort();
+    }
+
+    for (const PrivacyStoreBinding& binding : bindings)
+    {
+        if ((binding.categoryUuid != category.uuid) ||
+            (binding.storeUuid != store.uuid) || !insertPrivacyStoreBinding(binding))
+        {
+            return abort();
+        }
+    }
+
+    QVariantList storeValues;
+    storeValues << store.configGeneration
+                << static_cast<int>(store.lifecycleState)
+                << store.uuid << category.uuid
+                << static_cast<int>(PrivacyStoreLifecycleState::Creating);
+    const QSqlQuery storeQuery = d->db->execQuery(QString::fromUtf8(
+        "UPDATE PrivacyStores SET configGeneration=?, lifecycleState=? "
+        "WHERE uuid=? AND categoryUuid=? AND lifecycleState=? AND configGeneration IS NULL;"),
+        storeValues);
+
+    QVariantList categoryValues;
+    categoryValues << static_cast<int>(category.lifecycleState)
+                   << category.currentCredentialGeneration << category.uuid
+                   << static_cast<int>(PrivacyCategoryLifecycleState::Creating);
+    const QSqlQuery categoryQuery = d->db->execQuery(QString::fromUtf8(
+        "UPDATE PrivacyCategories SET lifecycleState=?, currentCredentialGeneration=? "
+        "WHERE uuid=? AND lifecycleState=? AND currentCredentialGeneration=0;"),
+        categoryValues);
+
+    if (!storeQuery.isActive() || (storeQuery.numRowsAffected() != 1) ||
+        !categoryQuery.isActive() || (categoryQuery.numRowsAffected() != 1) ||
+        !compareAndUpdatePrivacyTransaction(transaction,
+                                            PrivacyTransactionState::Created, 0))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
 }
 
 QList<AlbumRootInfo> CoreDB::getAlbumRoots() const

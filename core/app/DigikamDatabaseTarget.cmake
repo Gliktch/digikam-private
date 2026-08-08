@@ -50,6 +50,8 @@ target_link_libraries(digikamdatabase
 
                       digikamcore
 
+                      libzip::zip
+
                       opencv_core
                       opencv_objdetect
                       opencv_imgproc

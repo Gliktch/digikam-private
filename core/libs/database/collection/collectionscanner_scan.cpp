@@ -19,6 +19,42 @@
 namespace Digikam
 {
 
+namespace
+{
+
+PrivacyScanDisposition privacyScanDisposition(const CollectionLocation& location,
+                                               qlonglong imageId = -1,
+                                               const QFileInfo* const info = nullptr)
+{
+    PrivacyScanRequest request;
+    request.albumRootId = location.id();
+    request.imageId     = imageId;
+
+    if (info)
+    {
+        request.absolutePath = info->absoluteFilePath();
+        request.pathExists   = info->exists();
+        request.byteSize     = info->exists() ? info->size() : -1;
+    }
+
+    return PrivacyScanGate::evaluate(request);
+}
+
+PrivacyScanDisposition privacyScanDisposition(const QFileInfo& info, qlonglong imageId)
+{
+    const CollectionLocation location =
+        CollectionManager::instance()->locationForPath(info.absoluteFilePath());
+
+    return privacyScanDisposition(location, imageId, &info);
+}
+
+bool privacyAllowsOrdinaryScan(PrivacyScanDisposition disposition)
+{
+    return (disposition == PrivacyScanDisposition::Unprotected);
+}
+
+} // namespace
+
 void CollectionScanner::completeScan()
 {
     QElapsedTimer timer;
@@ -37,7 +73,17 @@ void CollectionScanner::completeScan()
 
     // TODO: Implement a mechanism to watch for album root changes while we keep this list
 
-    QList<CollectionLocation> allLocations = CollectionManager::instance()->allAvailableLocations();
+    const QList<CollectionLocation> availableLocations =
+        CollectionManager::instance()->allAvailableLocations();
+    QList<CollectionLocation> allLocations;
+
+    for (const CollectionLocation& location : availableLocations)
+    {
+        if (privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
+        {
+            allLocations << location;
+        }
+    }
 
     // count for progress info and create album date cache
 
@@ -70,7 +116,10 @@ void CollectionScanner::completeScan()
 
     // clean up all stale albums
 
-    CoreDbAccess().db()->deleteStaleAlbums();
+    if (!PrivacyScanGate::hasDeferredRoots())
+    {
+        CoreDbAccess().db()->deleteStaleAlbums();
+    }
 
     if (d->wantSignals)
     {
@@ -119,6 +168,15 @@ void CollectionScanner::completeScan()
     {
         qCDebug(DIGIKAM_DATABASE_LOG) << "Complete scan (file scanning deferred) took:" << timer.elapsed() << "msecs.";
 
+        Q_EMIT finishedCompleteScan();
+
+        return;
+    }
+
+    if (PrivacyScanGate::hasDeferredRoots())
+    {
+        qCWarning(DIGIKAM_DATABASE_LOG)
+            << "Privacy recovery deferred at least one collection root; skipping complete-scan cleanup";
         Q_EMIT finishedCompleteScan();
 
         return;
@@ -189,6 +247,11 @@ void CollectionScanner::finishCompleteScan(const QStringList& albumPaths)
         CollectionLocation location = CollectionManager::instance()->locationForPath(path);
         QString album               = CollectionManager::instance()->album(path);
 
+        if (!privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
+        {
+            continue;
+        }
+
         // cppcheck-suppress useStlAlgorithm
         count += createAlbumDateCache(location, album);
     }
@@ -210,6 +273,11 @@ void CollectionScanner::finishCompleteScan(const QStringList& albumPaths)
         CollectionLocation location = CollectionManager::instance()->locationForPath(path);
         QString album               = CollectionManager::instance()->album(path);
 
+        if (!privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
+        {
+            continue;
+        }
+
         if (album == QLatin1String("/"))
         {
             scanAlbumRoot(location);
@@ -225,6 +293,13 @@ void CollectionScanner::finishCompleteScan(const QStringList& albumPaths)
     if (!d->checkObserver())
     {
         Q_EMIT cancelled();
+
+        return;
+    }
+
+    if (PrivacyScanGate::hasDeferredRoots())
+    {
+        Q_EMIT finishedCompleteScan();
 
         return;
     }
@@ -252,7 +327,13 @@ void CollectionScanner::completeScanCleanupPart()
 
         for (const qlonglong& item : std::as_const(trashedItems))
         {
-            access.db()->setItemStatus(item, DatabaseItem::Status::Obsolete);
+            PrivacyScanRequest request;
+            request.imageId = item;
+
+            if (privacyAllowsOrdinaryScan(PrivacyScanGate::evaluate(request)))
+            {
+                access.db()->setItemStatus(item, DatabaseItem::Status::Obsolete);
+            }
         }
 
         resetDeleteRemovedSettings();
@@ -304,6 +385,13 @@ void CollectionScanner::partialScan(const QString& albumRoot, const QString& alb
         return;
     }
 
+    if (!privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
+    {
+        Q_EMIT partialFilesToScan(0);
+
+        return;
+    }
+
     // count for progress info and create album date cache
 
     int count = createAlbumDateCache(location, album);
@@ -319,7 +407,10 @@ void CollectionScanner::partialScan(const QString& albumRoot, const QString& alb
 
     // clean up all stale albums
 
-    CoreDbAccess().db()->deleteStaleAlbums();
+    if (!PrivacyScanGate::hasDeferredRoots())
+    {
+        CoreDbAccess().db()->deleteStaleAlbums();
+    }
 
     if (!d->checkObserver())
     {
@@ -425,6 +516,11 @@ qlonglong CollectionScanner::scanFile(const QFileInfo& fi, int albumId, qlonglon
 {
     mainEntryPoint(false);
 
+    if (!privacyAllowsOrdinaryScan(privacyScanDisposition(fi, imageId)))
+    {
+        return imageId;
+    }
+
     if (!d->nameFilters.contains(fi.suffix().toLower()))
     {
         return -1;
@@ -490,7 +586,8 @@ void CollectionScanner::scanForStaleAlbums(const CollectionLocation& location, c
 {
     // Only handle albums on available locations
 
-    if (!location.isAvailable())
+    if (!location.isAvailable() ||
+        !privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
     {
         return;
     }
@@ -526,8 +623,32 @@ void CollectionScanner::scanForStaleAlbums(const CollectionLocation& location, c
 
                 QList<int> subAlbums = CoreDbAccess().db()->getAlbumAndSubalbumsForPath((*it).albumRootId,
                                                                                         (*it).relativePath);
-                toBeDeleted      << subAlbums;
-                d->scannedAlbums << subAlbums;
+                bool protectedItemFound = false;
+
+                for (int albumId : std::as_const(subAlbums))
+                {
+                    const QList<qlonglong> ids = CoreDbAccess().db()->getItemIDsInAlbum(albumId);
+
+                    for (qlonglong imageId : ids)
+                    {
+                        if (!privacyAllowsOrdinaryScan(privacyScanDisposition(location, imageId)))
+                        {
+                            protectedItemFound = true;
+                            break;
+                        }
+                    }
+
+                    if (protectedItemFound)
+                    {
+                        break;
+                    }
+                }
+
+                if (!protectedItemFound)
+                {
+                    toBeDeleted      << subAlbums;
+                    d->scannedAlbums << subAlbums;
+                }
             }
         }
     }
@@ -542,12 +663,18 @@ void CollectionScanner::scanForStaleAlbums(const CollectionLocation& location, c
 
 void CollectionScanner::scanAlbumRoot(const CollectionLocation& location)
 {
+    if (!privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
+    {
+        return;
+    }
+
     if (d->wantSignals)
     {
         Q_EMIT startScanningAlbumRoot(location.albumRootPath());
     }
 
-    bool useFastScan = MetaEngineSettings::instance()->settings().useFastScan;
+    bool useFastScan = (MetaEngineSettings::instance()->settings().useFastScan &&
+                        !PrivacyScanGate::rootContainsProtectedItems(location.id()));
 
     if (useFastScan && d->performFastScan)
     {
@@ -610,7 +737,8 @@ void CollectionScanner::scanAlbum(const CollectionLocation& location, const QStr
     // + Adds files if they do not yet exist in the db.
     // + Marks stale files as removed
 
-    if (!d->checkObserver())
+    if (!d->checkObserver() ||
+        !privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
     {
         return;
     }
@@ -679,7 +807,8 @@ void CollectionScanner::scanAlbum(const CollectionLocation& location, const QStr
 
     for (const QFileInfo& info : std::as_const(list))
     {
-        if (!d->checkObserver())
+        if (!d->checkObserver() ||
+            !privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
         {
             return; // return directly, do not go to cleanup code after loop!
         }
@@ -826,6 +955,11 @@ void CollectionScanner::scanAlbum(const CollectionLocation& location, const QStr
         }
     }
 
+    if (!privacyAllowsOrdinaryScan(privacyScanDisposition(location)))
+    {
+        return;
+    }
+
     if (!d->deferredFileScanning && !s_modificationDateEquals(albumDateTime, albumModified))
     {
         CoreDbAccess().db()->setAlbumModificationDate(albumID, albumDateTime);
@@ -865,10 +999,22 @@ void CollectionScanner::scanAlbum(const CollectionLocation& location, const QStr
 
     if (!itemIdSet.isEmpty())
     {
-        QList<qlonglong> ids = itemIdSet.values();
-        CoreDbOperationGroup group;
-        CoreDbAccess().db()->removeItems(ids, QList<int>() << albumID);
-        itemsWereRemoved(ids);
+        QList<qlonglong> removableIds;
+
+        for (qlonglong imageId : std::as_const(itemIdSet))
+        {
+            if (privacyAllowsOrdinaryScan(privacyScanDisposition(location, imageId)))
+            {
+                removableIds << imageId;
+            }
+        }
+
+        if (!removableIds.isEmpty())
+        {
+            CoreDbOperationGroup group;
+            CoreDbAccess().db()->removeItems(removableIds, QList<int>() << albumID);
+            itemsWereRemoved(removableIds);
+        }
     }
 
     // mark album as scanned
@@ -884,6 +1030,11 @@ void CollectionScanner::scanAlbum(const CollectionLocation& location, const QStr
 void CollectionScanner::scanFileNormal(const QFileInfo& fi, const ItemScanInfo& scanInfo,
                                        bool checkSidecar, const QFileInfo* const sidecarInfo)
 {
+    if (!privacyAllowsOrdinaryScan(privacyScanDisposition(fi, scanInfo.id)))
+    {
+        return;
+    }
+
     bool hasMetadataHint       = (d->hints && d->hints->hasMetadataHint(scanInfo.id));
     QDateTime modificationDate = asDateTimeUTC(fi.lastModified());
 

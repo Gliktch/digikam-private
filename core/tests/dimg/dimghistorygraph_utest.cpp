@@ -38,6 +38,8 @@
 #include "iofilesettings.h"
 #include "tagscache.h"
 #include "modeltest.h"
+#include "privacyruntime.h"
+#include "privacyscangate.h"
 
 // clazy:excludeall=missing-typeinfo
 
@@ -52,6 +54,10 @@ DImgHistoryGraphTest::DImgHistoryGraphTest(QObject* const parent)
 
 void DImgHistoryGraphTest::initTestCase()
 {
+    QSharedPointer<PrivacyRuntimeCoordinator> privacyRuntime(new PrivacyRuntimeCoordinator);
+    privacyRuntime->initialize({}, {}, {}, {});
+    PrivacyScanGate::setProvider(privacyRuntime);
+
     initBaseTestCase();
 
     QString name  = tempFileName(QLatin1String("collection"));

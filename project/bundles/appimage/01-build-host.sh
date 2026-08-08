@@ -116,6 +116,8 @@ cmake $ORIG_WD/../3rdparty \
 #cmake --build . --config RelWithDebInfo --target ext_libicu        -- -j$CPU_CORES
 
 cmake --build . --config RelWithDebInfo --target ext_openssl         -- -j$CPU_CORES
+cmake --build . --config RelWithDebInfo --target ext_libzip         -- -j$CPU_CORES
+cmake --build . --config RelWithDebInfo --target ext_gocryptfs      -- -j1
 
 # NOTE: QtWebEngine require 4Gb of RAM by CPU cores to compile in parallel.
 

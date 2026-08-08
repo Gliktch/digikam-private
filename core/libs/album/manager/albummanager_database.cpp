@@ -24,13 +24,111 @@
 #   include <QStringConverter>
 #endif
 
+#include <QFileInfo>
+
 // KDE includes
 
 #include <kconfiggroup.h>
 #include <ksharedconfig.h>
 
+// Local includes
+
+#include "privacyruntime.h"
+#include "privacysourceresolver.h"
+#include "collectionlocation.h"
+#include "collectionmanager.h"
+#include "iteminfo.h"
+
 namespace Digikam
 {
+
+namespace
+{
+
+class StartupPrivacySourceProvider final : public PrivacySourceProvider
+{
+public:
+
+    explicit StartupPrivacySourceProvider(
+        const QSharedPointer<PrivacyRuntimeCoordinator>& runtime)
+        : m_runtime(runtime)
+    {
+    }
+
+    PrivacySourceResult resolve(const PrivacySourceRequest& request) const override
+    {
+        if (!m_runtime)
+        {
+            return PrivacySourceResult::denied(QLatin1String("privacy-runtime-unavailable"));
+        }
+
+        qlonglong imageId = request.itemReference.toLongLong();
+
+        if ((imageId <= 0) && !request.logicalFilePath.isEmpty())
+        {
+            const ItemInfo info = ItemInfo::fromLocalFile(request.logicalFilePath);
+            imageId             = info.id();
+        }
+
+        if (imageId <= 0)
+        {
+            const CollectionLocation location =
+                CollectionManager::instance()->locationForPath(request.logicalFilePath);
+
+            if (!location.isNull() && m_runtime->rootContainsProtectedItems(location.id()))
+            {
+                return PrivacySourceResult::denied(QLatin1String("privacy-item-unresolved"));
+            }
+
+            return PrivacySourceResult::notHandled();
+        }
+
+        const PrivacyPublicSourceDisposition disposition =
+            m_runtime->publicSourceDisposition(imageId);
+
+        if (disposition == PrivacyPublicSourceDisposition::Unprotected)
+        {
+            return PrivacySourceResult::notHandled();
+        }
+
+        const ItemInfo logicalInfo(imageId);
+
+        if (logicalInfo.isNull() ||
+            (QDir::cleanPath(logicalInfo.filePath()) !=
+             QDir::cleanPath(request.logicalFilePath)))
+        {
+            return PrivacySourceResult::denied(QLatin1String("privacy-logical-source-mismatch"));
+        }
+
+        const QString cacheNamespace = m_runtime->publicSourceCacheNamespace(imageId);
+
+        if ((disposition == PrivacyPublicSourceDisposition::LockedProxy) &&
+            !cacheNamespace.isEmpty())
+        {
+            const QFileInfo proxyInfo(request.logicalFilePath);
+
+            if (!proxyInfo.isFile() || proxyInfo.isSymLink() ||
+                (proxyInfo.size() != m_runtime->expectedPublicProxySize(imageId)))
+            {
+                return PrivacySourceResult::denied(cacheNamespace);
+            }
+
+            return PrivacySourceResult::resolved(request.logicalFilePath,
+                                                 cacheNamespace,
+                                                 PrivacySourceResult::Persistent);
+        }
+
+        return PrivacySourceResult::denied(cacheNamespace.isEmpty()
+                                           ? QLatin1String("privacy-source-denied")
+                                           : cacheNamespace);
+    }
+
+private:
+
+    QSharedPointer<PrivacyRuntimeCoordinator> m_runtime;
+};
+
+} // namespace
 
 bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, const QString& suggestedAlbumRoot, bool ignoreDisappearedLocations)
 {
@@ -58,6 +156,8 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
     // Must call restartCollectionScan further down.
 
     ScanController::instance()->cancelAllAndSuspendCollectionScan();
+    PrivacySourceResolver::resetProvider();
+    PrivacyStartupRecovery::reset();
 
     disconnect(CollectionManager::instance(), nullptr, this, nullptr);
     CollectionManager::instance()->setWatchDisabled();
@@ -245,6 +345,23 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
 
             return showDatabaseSetupPage(databaseError, priority, suggestedAlbumRoot);
         }
+    }
+
+    // Privacy recovery must become authoritative before any thumbnail,
+    // similarity, or collection scanner can consume public collection bytes.
+    // The coordinator is GUI-independent; its consolidated report is consumed
+    // only after DigikamApp exists.
+
+    const PrivacyStartupReport privacyReport = PrivacyStartupRecovery::run();
+    PrivacySourceResolver::setProvider(
+        QSharedPointer<const PrivacySourceProvider>(
+            new StartupPrivacySourceProvider(PrivacyStartupRecovery::coordinator())));
+
+    if (privacyReport.state == PrivacyStartupState::Degraded)
+    {
+        qCWarning(DIGIKAM_GENERAL_LOG)
+            << "Privacy startup recovery is degraded; affected roots remain scan-gated"
+            << privacyReport.diagnostics;
     }
 
     // -- Locale Checking ---------------------------------------------------------

@@ -14,6 +14,7 @@
  * ============================================================ */
 
 #include "facepipelinebase.h"
+#include "privacyanalysisgate.h"
 
 // Qt includes
 
@@ -233,7 +234,8 @@ bool FacePipelineBase::useForTraining(const QSize& faceSize, const cv::Mat& cvIm
 bool FacePipelineBase::commonFaceThumbnailLoader(const QString& pipelineName,
                                                  QThread::Priority stagePriority,
                                                  MLPipelineStage thisStage,
-                                                 MLPipelineStage nextStage)
+                                                 MLPipelineStage nextStage,
+                                                 bool requireAnalysisPermission)
 {
     MLPIPELINE_STAGE_START(stagePriority, thisStage, nextStage);
     FacePipelinePackageBase* package              = nullptr;
@@ -269,45 +271,61 @@ bool FacePipelineBase::commonFaceThumbnailLoader(const QString& pipelineName,
      */
 
     {
-        catcher->thread()->find(ItemInfo::thumbnailIdentifier(package->face.imageId()),
-                                                              package->face.region().toRect());
-        catcher->enqueue();
-        QList<QImage> images = catcher->waitForThumbnails();
-
-        if (images.size() && !images[0].isNull())
+        if (requireAnalysisPermission &&
+            !PrivacyAnalysisGate::mayAnalyze(package->info.id()))
         {
-            // store the thumbnail image in the package
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   QIcon::fromTheme(QLatin1String("object-locked")));
 
-            package->thumbnail     = images[0];
-
-            // create a thumbnail icon
-
-            package->thumbnailIcon = QIcon(DImg(package->thumbnail).smoothScale(48,
-                                                                                48,
-                                                                                Qt::KeepAspectRatio).convertToPixmap());
-
-            // send the package to the next stage
-
-            enqueue(nextQueue, package);
-
+            delete package;
             package = nullptr;
         }
         else
         {
-            // send a notification that the file was skipped
+            catcher->thread()->find(ItemInfo::thumbnailIdentifier(package->face.imageId()),
+                                                                  package->face.region().toRect());
+            catcher->enqueue();
+            QList<QImage> images = catcher->waitForThumbnails();
 
-            notify(MLPipelineNotification::notifySkipped,
-                   package->info.name(),
-                   package->info.filePath(),
-                   QString(),
-                   0,
-                   QIcon::fromTheme(QLatin1String("image-missing")));
+            if (images.size() && !images[0].isNull())
+            {
+                // store the thumbnail image in the package
 
-            // delete the package since it is not needed
+                package->thumbnail     = images[0];
 
-            delete package;
+                // create a thumbnail icon
 
-            package = nullptr;
+                package->thumbnailIcon = QIcon(DImg(package->thumbnail).smoothScale(48,
+                                                                                    48,
+                                                                                    Qt::KeepAspectRatio).convertToPixmap());
+
+                // send the package to the next stage
+
+                enqueue(nextQueue, package);
+
+                package = nullptr;
+            }
+            else
+            {
+                // send a notification that the file was skipped
+
+                notify(MLPipelineNotification::notifySkipped,
+                       package->info.name(),
+                       package->info.filePath(),
+                       QString(),
+                       0,
+                       QIcon::fromTheme(QLatin1String("image-missing")));
+
+                // delete the package since it is not needed
+
+                delete package;
+
+                package = nullptr;
+            }
         }
     }
 
@@ -337,7 +355,8 @@ bool FacePipelineBase::commonFaceThumbnailExtractor(const QString& pipelineName,
                                                     QThread::Priority stagePriority,
                                                     MLPipelineStage thisStage,
                                                     MLPipelineStage nextStage,
-                                                    bool trainingQualityCheck)
+                                                    bool trainingQualityCheck,
+                                                    bool requireAnalysisPermission)
 {
     MLPIPELINE_STAGE_START(stagePriority, thisStage, nextStage);
     FacePipelinePackageBase* package = nullptr;
@@ -364,6 +383,21 @@ bool FacePipelineBase::commonFaceThumbnailExtractor(const QString& pipelineName,
      */
 
     {
+        if (requireAnalysisPermission &&
+            !PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   QIcon::fromTheme(QLatin1String("object-locked")));
+
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
         QImage inputImage(package->thumbnail.copy());
 
         // preprocess image to be in the correct format
@@ -487,6 +521,7 @@ bool FacePipelineBase::commonFaceThumbnailExtractor(const QString& pipelineName,
             delete package;
 
             package = nullptr;
+        }
         }
     }
 

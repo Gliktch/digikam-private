@@ -98,6 +98,28 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/coredb/coredbnamefilter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/coredb/coredbdownloadhistory.cpp
 
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacytypes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyanalysisgate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyassetinventory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyassetinventorybridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyposixfilesystemadapter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyactionpolicy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycategorysession.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycontracts.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyleaseregistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyproxygenerator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyrepository.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyscangate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyruntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyservice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacypassword.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacyprocessrunner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacygocryptfsadapter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacygocryptfscategorystore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacycasualarchive.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacytransactionjournal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacypublictransition.cpp
+
     ${CMAKE_CURRENT_SOURCE_DIR}/tags/tagproperties.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tags/tagscache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tags/facetags.cpp
@@ -203,6 +225,11 @@ target_compile_definitions(digikamdatabase_obj
                            digikamdatabase_EXPORTS
 )
 
+target_link_libraries(digikamdatabase_obj
+                      PRIVATE
+                      libzip::zip
+)
+
 # Specific settings with C++20 required by Qt 6.7 and later for history classes based on Boost.
 # TODO: check if new MSVC do not report a compilation error with Boost code.
 
@@ -257,4 +284,3 @@ target_compile_definitions(gui_digikamdatabasemain_obj
                            PRIVATE
                            digikamgui_EXPORTS
 )
-

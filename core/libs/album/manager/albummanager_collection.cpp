@@ -16,6 +16,10 @@
 
 #include "albummanager_p.h"
 
+// Local includes
+
+#include "privacyruntime.h"
+
 namespace Digikam
 {
 
@@ -166,6 +170,30 @@ void AlbumManager::removeAlbumRoot(const CollectionLocation& location)
 
 void AlbumManager::slotCollectionLocationStatusChanged(const CollectionLocation& location, int oldStatus)
 {
+    const QSharedPointer<PrivacyRuntimeCoordinator> privacyRuntime =
+        PrivacyStartupRecovery::coordinator();
+
+    if (privacyRuntime)
+    {
+        const QString privacyRootUuid = privacyRuntime->rootUuidForAlbumRootId(location.id());
+
+        if (!privacyRootUuid.isEmpty())
+        {
+            if (location.status() == CollectionLocation::LocationAvailable)
+            {
+                // Reconnect is fail-closed: verification, reconciliation and
+                // the root-local integrity pass publish readiness together.
+
+                privacyRuntime->recoverRoot(privacyRootUuid);
+            }
+            else
+            {
+                privacyRuntime->publishRootState(privacyRootUuid,
+                                                 PrivacyRootRuntimeState::Offline);
+            }
+        }
+    }
+
     // not before initialization
 
     if (!d->rootPAlbum)

@@ -47,7 +47,7 @@ namespace Digikam
 
 int CoreDbSchemaUpdater::schemaVersion()
 {
-    return 17;
+    return 18;
 }
 
 int CoreDbSchemaUpdater::filterSettingsVersion()
@@ -841,6 +841,14 @@ bool CoreDbSchemaUpdater::updateToVersion(int targetVersion)
             // add index for TagProperties and a timezone column.
 
             return performUpdateToVersion(QLatin1String("UpdateSchemaFromV16ToV17"), 17, 5);
+        }
+
+        case 18:
+        {
+            // Older digiKam versions are not privacy-aware. They must not open
+            // this schema and replace logical-original facts with proxy facts.
+
+            return performUpdateToVersion(QLatin1String("UpdateSchemaFromV17ToV18"), 18, 18);
         }
 
         default:

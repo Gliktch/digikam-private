@@ -49,6 +49,7 @@
 #include "identityprovider.h"
 #include "qtopencvimg.h"
 #include "ocvocldnnsetter.h"
+#include "privacyanalysisgate.h"
 
 namespace Digikam
 {
@@ -181,7 +182,8 @@ bool FacePipelineDetectRecognize::finder()
             {
                 // filter out duplicate image IDs
 
-                if (!filter.contains(imageId))
+                if (!filter.contains(imageId) &&
+                    PrivacyAnalysisGate::mayAnalyze(imageId))
                 {
                     // quick check if we should add threads.
 
@@ -207,7 +209,8 @@ bool FacePipelineDetectRecognize::finder()
 
         qlonglong imageId = info.id();
 
-        if (!filter.contains(imageId))
+        if (!filter.contains(imageId) &&
+            PrivacyAnalysisGate::mayAnalyze(imageId))
         {
             // quick check if we should add threads.
 
@@ -263,7 +266,8 @@ bool FacePipelineDetectRecognize::loader()
 
         bool sendNotification = true;
 
-        if (DatabaseItem::Category::Image == package->info.category())
+        if (PrivacyAnalysisGate::mayAnalyze(package->info.id()) &&
+            (DatabaseItem::Category::Image == package->info.category()))
         {
             PreviewSettings::RawLoading rawLoadingMode = PreviewSettings::RawPreviewAutomatic;
 
@@ -365,6 +369,20 @@ bool FacePipelineDetectRecognize::extractor()
      */
 
     {
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   QIcon::fromTheme(QLatin1String("object-locked")));
+
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
         // preprocess the image
 
         // copy the image to a cv::UMat
@@ -592,6 +610,7 @@ bool FacePipelineDetectRecognize::extractor()
         enqueue(nextQueue, package);
 
         package = nullptr;
+        }
     }
 
     /* =========================================================================================
@@ -638,6 +657,20 @@ bool FacePipelineDetectRecognize::classifier()
      */
 
     {
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   QIcon::fromTheme(QLatin1String("object-locked")));
+
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
         for (int i = 0 ; i < package->featuresList.size() ; ++i)
         {
             // verify the feature mat is not empty
@@ -672,6 +705,7 @@ bool FacePipelineDetectRecognize::classifier()
         enqueue(nextQueue, package);
 
         package = nullptr;
+        }
     }
 
     /* =========================================================================================
@@ -721,6 +755,20 @@ bool FacePipelineDetectRecognize::writer()
      */
 
     {
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   QIcon::fromTheme(QLatin1String("object-locked")));
+
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
         switch (settings.alreadyScannedHandling)
         {
             case FaceScanSettings::Rescan:
@@ -830,9 +878,10 @@ bool FacePipelineDetectRecognize::writer()
 
         // delete the package
 
-        delete package;
+            delete package;
 
-        package = nullptr;
+            package = nullptr;
+        }
     }
 
     /* =========================================================================================

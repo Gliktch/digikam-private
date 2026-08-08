@@ -14,6 +14,7 @@
  * ============================================================ */
 
 #include "facepipelineretrain.h"
+#include "privacyanalysisgate.h"
 
 // Qt includes
 
@@ -126,7 +127,8 @@ bool FacePipelineRetrain::finder()
             {
                 // filter out duplicate image IDs
 
-                if (!filter.contains(imageId))
+                if (!filter.contains(imageId) &&
+                    PrivacyAnalysisGate::mayAnalyze(imageId))
                 {
                     QList<FaceTagsIface> faces = utils.confirmedFaceTagsIfaces(imageId);
 
@@ -157,7 +159,8 @@ bool FacePipelineRetrain::loader()
     return commonFaceThumbnailLoader(QStringLiteral("FacePipelineRetrain"),
                                      QThread::LowPriority,
                                      MLPipelineStage::Loader,
-                                     MLPipelineStage::Extractor);
+                                     MLPipelineStage::Extractor,
+                                     true);
 }
 
 bool FacePipelineRetrain::extractor()
@@ -168,6 +171,7 @@ bool FacePipelineRetrain::extractor()
                                         QThread::LowPriority,
                                         MLPipelineStage::Extractor,
                                         MLPipelineStage::Writer,
+                                        true,
                                         true);
 }
 
@@ -205,7 +209,21 @@ bool FacePipelineRetrain::writer()
      */
 
     {
-        QString displayName;
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   QIcon::fromTheme(QLatin1String("object-locked")));
+
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
+            QString displayName;
 
         if (0 != package->features.rows)
         {
@@ -240,9 +258,10 @@ bool FacePipelineRetrain::writer()
 
         // delete the package
 
-        delete package;
+            delete package;
 
-        package = nullptr;
+            package = nullptr;
+        }
     }
 
     /* =========================================================================================

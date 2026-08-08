@@ -30,6 +30,8 @@
 #include "metaenginesettings.h"
 #include "dtestdatadir.h"
 #include "digikam_debug.h"
+#include "privacyruntime.h"
+#include "privacyscangate.h"
 
 const QString originalImageFolder(DTestDataDir::TestData(QString::fromUtf8("core/tests/timestampupdate"))
                                   .root().path() + QLatin1Char('/'));
@@ -57,6 +59,10 @@ QString TimeStampUpdateTest::tempFilePath(const QString& purpose) const
  */
 void TimeStampUpdateTest::initTestCase()
 {
+    QSharedPointer<PrivacyRuntimeCoordinator> privacyRuntime(new PrivacyRuntimeCoordinator);
+    privacyRuntime->initialize({}, {}, {}, {});
+    PrivacyScanGate::setProvider(privacyRuntime);
+
     // Setup the collection folder
 
     QDir collectionDir = QDir(originalImageFolder);

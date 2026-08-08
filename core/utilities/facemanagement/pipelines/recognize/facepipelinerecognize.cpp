@@ -14,6 +14,7 @@
  * ============================================================ */
 
 #include "facepipelinerecognize.h"
+#include "privacyanalysisgate.h"
 
 // Qt includes
 
@@ -133,7 +134,8 @@ bool FacePipelineRecognize::finder()
             {
                 // filter out duplicate image IDs
 
-                if (!filter.contains(imageId))
+                if (!filter.contains(imageId) &&
+                    PrivacyAnalysisGate::mayAnalyze(imageId))
                 {
                     // quick check if we should add threads.
 
@@ -161,7 +163,8 @@ bool FacePipelineRecognize::finder()
 
         qlonglong imageId = info.id();
 
-        if (!filter.contains(imageId))
+        if (!filter.contains(imageId) &&
+            PrivacyAnalysisGate::mayAnalyze(imageId))
         {
             QList<FaceTagsIface> faces = utils.unconfirmedFaceTagsIfaces(imageId);
 
@@ -190,7 +193,8 @@ bool FacePipelineRecognize::loader()
     return commonFaceThumbnailLoader(QStringLiteral("FacePipelineRecognize"),
                                      settings.workerThreadPriority,
                                      MLPipelineStage::Loader,
-                                     MLPipelineStage::Extractor);
+                                     MLPipelineStage::Extractor,
+                                     true);
 }
 
 bool FacePipelineRecognize::extractor()
@@ -200,7 +204,9 @@ bool FacePipelineRecognize::extractor()
     return commonFaceThumbnailExtractor(QStringLiteral("FacePipelineRecognize"),
                                         settings.workerThreadPriority,
                                         MLPipelineStage::Extractor,
-                                        MLPipelineStage::Classifier);
+                                        MLPipelineStage::Classifier,
+                                        false,
+                                        true);
 }
 
 bool FacePipelineRecognize::classifier()
@@ -229,24 +235,39 @@ bool FacePipelineRecognize::classifier()
      *
      * All code from here to MLPIPELINE_LOOP_END is in a try/catch block and loop.
      * This loop is run once per image.
-     */
+    */
     {
-        // verify the feature mat is the correct size
-
-        if (
-            (2   == package->features.dims) &&
-            (1   == package->features.rows) &&
-            (128 == package->features.cols)
-           )
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
         {
-            // classify the features
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   QIcon::fromTheme(QLatin1String("object-locked")));
 
-            package->label = classifier->predict(package->features, package->exclusionIdentityIds);
+            delete package;
+            package = nullptr;
         }
+        else
+        {
+            // verify the feature mat is the correct size
 
-        enqueue(nextQueue, package);
+            if (
+                (2   == package->features.dims) &&
+                (1   == package->features.rows) &&
+                (128 == package->features.cols)
+               )
+            {
+                // classify the features
 
-        package = nullptr;
+                package->label = classifier->predict(package->features, package->exclusionIdentityIds);
+            }
+
+            enqueue(nextQueue, package);
+
+            package = nullptr;
+        }
     }
     /* =========================================================================================
      * End pipeline stage specific loop
@@ -291,8 +312,22 @@ bool FacePipelineRecognize::writer()
      * This loop is run once per image.
      */
     {
-        QString displayName;
-        int matches = 0;
+        if (!PrivacyAnalysisGate::mayAnalyze(package->info.id()))
+        {
+            notify(MLPipelineNotification::notifySkipped,
+                   package->info.name(),
+                   package->info.relativePath(),
+                   QString(),
+                   0,
+                   QIcon::fromTheme(QLatin1String("object-locked")));
+
+            delete package;
+            package = nullptr;
+        }
+        else
+        {
+            QString displayName;
+            int matches = 0;
 
         if (FaceClassifier::UNKNOWN_LABEL_ID != package->label)
         {
@@ -337,9 +372,10 @@ bool FacePipelineRecognize::writer()
 
         // delete the package
 
-        delete package;
+            delete package;
 
-        package = nullptr;
+            package = nullptr;
+        }
     }
 
     /* =========================================================================================

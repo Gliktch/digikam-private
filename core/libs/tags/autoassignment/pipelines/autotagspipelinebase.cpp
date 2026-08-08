@@ -27,6 +27,7 @@
 #include "autotagspipelinepackagebase.h"
 #include "thumbnailloadthread.h"
 #include "coredb.h"
+#include "privacyanalysisgate.h"
 
 namespace Digikam
 {
@@ -55,6 +56,15 @@ void AutotagsPipelineBase::bqmSendOne(std::unique_ptr<DMetadata>& _bqmMeta,
 {
     if (settings.bqmMode)
     {
+        // BQM can provide an already-decoded image and therefore bypass the
+        // normal finder and loader stages.  Enforce the same central policy at
+        // this entry boundary before any pixels enter an analysis queue.
+
+        if (!PrivacyAnalysisGate::mayAnalyze(info.id()))
+        {
+            return;
+        }
+
         bqmOutputUrl = outputUrl;
         bqmMeta.reset(_bqmMeta.release());
 

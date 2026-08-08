@@ -40,6 +40,7 @@
 #include "collectionmanager.h"
 #include "maintenancethread.h"
 #include "dnotificationwidget.h"
+#include "privacyanalysisgate.h"
 
 namespace Digikam
 {
@@ -184,6 +185,10 @@ void FingerPrintsGenerator::calculateAffectedAlbums()
             }
         }
     }
+
+    const PrivacyAnalysisSelectionResult analysisSelection =
+        PrivacyAnalysisGate::filter(d->allItemIds);
+    d->allItemIds = analysisSelection.allowedImageIds;
 }
 
 void FingerPrintsGenerator::slotAdvance(const ItemInfo& inf, const QImage& img)

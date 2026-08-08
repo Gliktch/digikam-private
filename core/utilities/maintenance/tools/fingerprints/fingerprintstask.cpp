@@ -29,6 +29,7 @@
 #include "maintenancedata.h"
 #include "similaritydb.h"
 #include "similaritydbaccess.h"
+#include "privacyanalysisgate.h"
 
 namespace Digikam
 {
@@ -96,6 +97,13 @@ void FingerprintsTask::run()
 
         ItemInfo info(id);
 
+        if (!PrivacyAnalysisGate::mayAnalyze(id))
+        {
+            Q_EMIT signalFinished(info, d->okImage);
+
+            continue;
+        }
+
         if (
             info.isVisible()                                              &&
             (info.category() == DatabaseItem::Category::Image)            &&
@@ -117,7 +125,7 @@ void FingerprintsTask::run()
                 qCDebug(DIGIKAM_MAINTENANCE_LOG) << "DImg for item id" << info.id() << dimg.isNull();
             }
 
-            if (!dimg.isNull())
+            if (!dimg.isNull() && PrivacyAnalysisGate::mayAnalyze(info.id()))
             {
                 // compute Haar fingerprint and store it to DB
 
@@ -125,9 +133,16 @@ void FingerprintsTask::run()
                 haarIface.indexImage(info.id(), dimg);
             }
 
-            QImage qimg = dimg.smoothScale(48, 48, Qt::KeepAspectRatio).copyQImage();
+            if (PrivacyAnalysisGate::mayAnalyze(info.id()))
+            {
+                QImage qimg = dimg.smoothScale(48, 48, Qt::KeepAspectRatio).copyQImage();
 
-            Q_EMIT signalFinished(info, qimg);
+                Q_EMIT signalFinished(info, qimg);
+            }
+            else
+            {
+                Q_EMIT signalFinished(info, d->okImage);
+            }
         }
         else
         {

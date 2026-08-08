@@ -73,6 +73,17 @@ void CoreDbCopyManager::copyDatabases(const DbEngineParameters& fromDBParameters
         << QLatin1String("AlbumRoots")
         << QLatin1String("Albums")
         << QLatin1String("Images")
+        << QLatin1String("PrivacyCategories")
+        << QLatin1String("PrivacyCredentials")
+        << QLatin1String("PrivacyStorageRoots")
+        << QLatin1String("PrivacyStores")
+        << QLatin1String("PrivacyStoreBindings")
+        << QLatin1String("PrivacyItems")
+        << QLatin1String("PrivacyContainers")
+        << QLatin1String("PrivacyAssets")
+        << QLatin1String("PrivacyDerivatives")
+        << QLatin1String("PrivacyTransactions")
+        << QLatin1String("PrivacyTransactionJournals")
 
         // Virtual table used to allow population of Albums.icon after Images migration
 
@@ -99,6 +110,48 @@ void CoreDbCopyManager::copyDatabases(const DbEngineParameters& fromDBParameters
         << QLatin1String("VideoMetadata")
         << QLatin1String("Settings")
     ;
+
+    const QStringList privacyTables = QStringList()
+        << QLatin1String("PrivacyCategories")
+        << QLatin1String("PrivacyCredentials")
+        << QLatin1String("PrivacyStorageRoots")
+        << QLatin1String("PrivacyStores")
+        << QLatin1String("PrivacyStoreBindings")
+        << QLatin1String("PrivacyItems")
+        << QLatin1String("PrivacyContainers")
+        << QLatin1String("PrivacyAssets")
+        << QLatin1String("PrivacyDerivatives")
+        << QLatin1String("PrivacyTransactions")
+        << QLatin1String("PrivacyTransactionJournals")
+    ;
+
+    const QStringList sourceTables = fromDBbackend.tables();
+    int sourcePrivacyTableCount    = 0;
+
+    for (const QString& table : privacyTables)
+    {
+        if (sourceTables.contains(table, Qt::CaseInsensitive))
+        {
+            ++sourcePrivacyTableCount;
+        }
+    }
+
+    // A schema predating privacy legitimately has none of these tables. A
+    // partial set is damage, and must be reported before the target is changed.
+
+    if ((sourcePrivacyTableCount != 0) &&
+        (sourcePrivacyTableCount != privacyTables.size()))
+    {
+        Q_EMIT finished(CoreDbCopyManager::failed,
+                        i18n("The source database has an incomplete privacy schema."));
+
+        fromDBbackend.close();
+        toDBbackend.close();
+
+        return;
+    }
+
+    const bool copyPrivacyTables = (sourcePrivacyTableCount == privacyTables.size());
 
     const int tablesSize = tables.size();
 
@@ -153,6 +206,11 @@ void CoreDbCopyManager::copyDatabases(const DbEngineParameters& fromDBParameters
 
     for (int i = 0 ; i < tablesSize ; ++i)
     {
+        if (!copyPrivacyTables && privacyTables.contains(tables[i]))
+        {
+            continue;
+        }
+
         Q_EMIT stepStarted(i18n(QString::fromUtf8("Copy %1...").arg(tables[i]).toLatin1().constData()));
 
         // Now perform the copy action
@@ -193,6 +251,15 @@ bool CoreDbCopyManager::copyTable(CoreDbBackend& fromDBbackend,
     int            resultSize    = -1;
     bool           isForwardOnly = result.isForwardOnly();
 
+    if (!result.isActive() && result.lastError().isValid())
+    {
+        Q_EMIT finished(CoreDbCopyManager::failed,
+                        i18n("Error while reading the source database.\n Details: %1",
+                             result.lastError().databaseText()));
+
+        return false;
+    }
+
     if (result.driver()->hasFeature(QSqlDriver::QuerySize))
     {
         resultSize=result.size();
@@ -227,6 +294,15 @@ bool CoreDbCopyManager::copyTable(CoreDbBackend& fromDBbackend,
     {
         result.finish();
         result = fromDBbackend.execDBActionQuery(fromDBbackend.getDBAction(fromActionName), bindingMap) ;
+
+        if (!result.isActive() && result.lastError().isValid())
+        {
+            Q_EMIT finished(CoreDbCopyManager::failed,
+                            i18n("Error while reading the source database.\n Details: %1",
+                                 result.lastError().databaseText()));
+
+            return false;
+        }
     }
 
     int columnCount = result.record().count();
@@ -272,7 +348,13 @@ bool CoreDbCopyManager::copyTable(CoreDbBackend& fromDBbackend,
                 (columnName == QLatin1String("digitizationDate")) ||
                 (columnName == QLatin1String("creationDate"))     ||
                 (columnName == QLatin1String("filedate"))         ||
-                (columnName == QLatin1String("date"))
+                (columnName == QLatin1String("date"))             ||
+                (columnName == QLatin1String("createdAt"))        ||
+                (columnName == QLatin1String("updatedAt"))        ||
+                (columnName == QLatin1String("originalCreationDate"))     ||
+                (columnName == QLatin1String("originalModificationDate")) ||
+                (columnName == QLatin1String("recoveryAcknowledgedAt"))    ||
+                (columnName == QLatin1String("recoveryVerifiedAt"))
                )
             {
                 // The "date" column can be a QDate or QDateTime.
@@ -296,16 +378,18 @@ bool CoreDbCopyManager::copyTable(CoreDbBackend& fromDBbackend,
         DbEngineAction action                        = toDBbackend.getDBAction(toActionName);
         BdEngineBackend::QueryState queryStateResult = toDBbackend.execDBAction(action, tempBindingMap);
 
-        if (
-            (queryStateResult != BdEngineBackend::NoErrors) &&
-            toDBbackend.lastSQLError().isValid()            &&
-            !toDBbackend.lastSQLError().nativeErrorCode().isEmpty()
-           )
+        if (queryStateResult != BdEngineBackend::NoErrors)
         {
             qCDebug(DIGIKAM_COREDB_LOG) << "Core database: error while converting table data. Details:"
                                         << toDBbackend.lastSQLError();
-            QString errorMsg = i18n("Error while converting the database.\n Details: %1",
-                                    toDBbackend.lastSQLError().databaseText());
+            QString errorDetails = toDBbackend.lastSQLError().databaseText();
+
+            if (errorDetails.isEmpty())
+            {
+                errorDetails = i18n("Unknown database error");
+            }
+
+            QString errorMsg = i18n("Error while converting the database.\n Details: %1", errorDetails);
 
             Q_EMIT finished(CoreDbCopyManager::failed, errorMsg);
 

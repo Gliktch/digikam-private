@@ -34,6 +34,8 @@
 #include "metaengine.h"
 #include "metaenginesettings.h"
 #include "digikam_debug.h"
+#include "privacyruntime.h"
+#include "privacyscangate.h"
 
 using namespace Digikam;
 
@@ -59,6 +61,10 @@ QString DatabaseVideoGpsTest::tempFilePath(const QString& purpose) const
 
 void DatabaseVideoGpsTest::initTestCase()
 {
+    QSharedPointer<PrivacyRuntimeCoordinator> privacyRuntime(new PrivacyRuntimeCoordinator);
+    privacyRuntime->initialize({}, {}, {}, {});
+    PrivacyScanGate::setProvider(privacyRuntime);
+
     MetaEngine::initializeExiv2();
 
     // Locate the source video shipped with digiKam (15 KB, no GPS metadata).

@@ -259,6 +259,182 @@
                     property TEXT,
                     value TEXT);
                 </statement>
+                <statement mode="plain">CREATE TABLE PrivacyCategories
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    backend INTEGER NOT NULL,
+                    presentationMode INTEGER NOT NULL,
+                    unlockedThumbnailMode INTEGER NOT NULL,
+                    tagVisibilityMode INTEGER NOT NULL DEFAULT 1,
+                    lifecycleState INTEGER NOT NULL,
+                    currentCredentialGeneration INTEGER NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyCredentials
+                    (categoryUuid TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    encodingVersion TEXT NOT NULL,
+                    envelopeFormat TEXT NOT NULL,
+                    envelopeBlob BLOB NOT NULL,
+                    envelopeHashAlgorithm TEXT NOT NULL,
+                    envelopeHash TEXT NOT NULL,
+                    recoveryMode INTEGER NOT NULL,
+                    recoveryState INTEGER NOT NULL,
+                    recoveryRecordVersion INTEGER NOT NULL,
+                    recoveryDocumentUuid TEXT,
+                    recoveryAcknowledgedAt DATETIME,
+                    recoveryVerifiedAt DATETIME,
+                    createdAt DATETIME NOT NULL,
+                    PRIMARY KEY (categoryUuid, generation),
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyStorageRoots
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    kind INTEGER NOT NULL,
+                    albumRootId INTEGER,
+                    configuredPath TEXT NOT NULL,
+                    identityVersion INTEGER NOT NULL,
+                    identityData BLOB NOT NULL,
+                    markerUuid TEXT,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    FOREIGN KEY (albumRootId) REFERENCES AlbumRoots (id) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyStores
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    categoryUuid TEXT NOT NULL,
+                    rootUuid TEXT NOT NULL,
+                    format TEXT NOT NULL,
+                    formatVersion INTEGER NOT NULL,
+                    cipherRelativePath TEXT NOT NULL,
+                    configRelativePath TEXT NOT NULL,
+                    configGeneration INTEGER,
+                    lifecycleState INTEGER NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyStoreBindings
+                    (categoryUuid TEXT NOT NULL,
+                    role INTEGER NOT NULL,
+                    storeUuid TEXT NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    PRIMARY KEY (categoryUuid, role),
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyItems
+                    (imageId INTEGER PRIMARY KEY,
+                    uuid TEXT NOT NULL UNIQUE,
+                    categoryUuid TEXT NOT NULL,
+                    originalHash TEXT,
+                    originalSize INTEGER,
+                    originalWidth INTEGER,
+                    originalHeight INTEGER,
+                    originalCreationDate DATETIME,
+                    expectedProxyHash TEXT,
+                    expectedProxySize INTEGER,
+                    presentationVersion INTEGER NOT NULL,
+                    generation INTEGER NOT NULL,
+                    transactionState INTEGER NOT NULL,
+                    FOREIGN KEY (imageId) REFERENCES Images (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyContainers
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    itemUuid TEXT NOT NULL,
+                    kind INTEGER NOT NULL,
+                    rootUuid TEXT,
+                    storeUuid TEXT,
+                    objectRelativePath TEXT NOT NULL,
+                    protectedSize INTEGER NOT NULL,
+                    protectedHashAlgorithm TEXT NOT NULL,
+                    protectedHash TEXT NOT NULL,
+                    formatVersion INTEGER NOT NULL,
+                    credentialGeneration INTEGER NOT NULL,
+                    state INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    updatedAt DATETIME NOT NULL,
+                    UNIQUE (uuid, itemUuid),
+                    FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyAssets
+                    (itemUuid TEXT NOT NULL,
+                    role INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    originalName TEXT NOT NULL,
+                    publicRootUuid TEXT NOT NULL,
+                    publicRelativePath TEXT NOT NULL,
+                    containerUuid TEXT NOT NULL,
+                    protectedRelativePath TEXT NOT NULL,
+                    hashAlgorithm TEXT NOT NULL,
+                    originalHash TEXT NOT NULL,
+                    originalSize INTEGER NOT NULL,
+                    originalCreationDate DATETIME,
+                    originalModificationDate DATETIME,
+                    portableAttributes BLOB,
+                    proxyHashAlgorithm TEXT,
+                    proxyHash TEXT,
+                    proxySize INTEGER,
+                    proxyPresentationVersion INTEGER,
+                    proxyGeneration INTEGER,
+                    PRIMARY KEY (itemUuid, role, ordinal),
+                    FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (publicRootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (containerUuid, itemUuid) REFERENCES PrivacyContainers (uuid, itemUuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyDerivatives
+                    (itemUuid TEXT NOT NULL,
+                    kind INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    storeUuid TEXT NOT NULL,
+                    protectedRelativePath TEXT NOT NULL,
+                    sourceHashAlgorithm TEXT NOT NULL,
+                    sourceOriginalHash TEXT NOT NULL,
+                    derivativeFormat TEXT NOT NULL,
+                    derivativeHashAlgorithm TEXT NOT NULL,
+                    derivativeHash TEXT NOT NULL,
+                    derivativeSize INTEGER NOT NULL,
+                    presentationVersion INTEGER NOT NULL,
+                    generation INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    PRIMARY KEY (itemUuid, kind, ordinal),
+                    FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyTransactions
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    categoryUuid TEXT NOT NULL,
+                    itemUuid TEXT,
+                    type INTEGER NOT NULL,
+                    state INTEGER NOT NULL,
+                    generation INTEGER NOT NULL,
+                    fromCredentialGeneration INTEGER,
+                    toCredentialGeneration INTEGER,
+                    payloadFormatVersion INTEGER NOT NULL,
+                    payloadData BLOB,
+                    createdAt DATETIME NOT NULL,
+                    updatedAt DATETIME NOT NULL,
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyTransactionJournals
+                    (transactionUuid TEXT NOT NULL,
+                    rootUuid TEXT NOT NULL,
+                    journalRelativePath TEXT NOT NULL,
+                    journalFormatVersion INTEGER NOT NULL,
+                    stage INTEGER NOT NULL,
+                    expectedHashAlgorithm TEXT,
+                    expectedJournalHash TEXT,
+                    updatedAt DATETIME NOT NULL,
+                    PRIMARY KEY (transactionUuid, rootUuid),
+                    FOREIGN KEY (transactionUuid) REFERENCES PrivacyTransactions (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
             </dbaction>
 
             <!-- SQlite Core Indexes -->
@@ -279,6 +455,14 @@
                 <statement mode="plain">CREATE INDEX tagproperties_index ON TagProperties (tagid);</statement>
                 <statement mode="plain">CREATE INDEX imgtagprop_img_tag_idx ON ImageTagProperties (imageid, tagid);</statement>
                 <statement mode="plain">CREATE INDEX imgtagprop_prop_tag_img_idx ON ImageTagProperties (property, tagid, imageid);</statement>
+                <statement mode="plain">CREATE INDEX privacyitems_category_index ON PrivacyItems (categoryUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacystores_category_index ON PrivacyStores (categoryUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacystorebindings_store_index ON PrivacyStoreBindings (storeUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacycontainers_item_index ON PrivacyContainers (itemUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacyassets_item_index ON PrivacyAssets (itemUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacyderivatives_item_index ON PrivacyDerivatives (itemUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacytransactions_category_state_index ON PrivacyTransactions (categoryUuid, state);</statement>
+                <statement mode="plain">CREATE INDEX privacytransactionjournals_root_index ON PrivacyTransactionJournals (rootUuid);</statement>
             </dbaction>
 
             <!-- SQlite Core Triggers -->
@@ -357,6 +541,83 @@
                             SELECT A.id, B.pid FROM TagsTree A, TagsTree B
                             WHERE
                             A.pid = NEW.id AND B.id = NEW.pid;
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_image_delete_guard BEFORE DELETE ON Images
+                    WHEN EXISTS (SELECT 1 FROM PrivacyItems WHERE imageId=OLD.id)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'protected image must be unprotected before deletion');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_albumroot_delete_guard BEFORE DELETE ON AlbumRoots
+                    WHEN EXISTS (SELECT 1 FROM PrivacyStorageRoots WHERE albumRootId=OLD.id)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy storage root still references album root');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_category_delete_guard BEFORE DELETE ON PrivacyCategories
+                    WHEN EXISTS (SELECT 1 FROM PrivacyItems WHERE categoryUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyTransactions WHERE categoryUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyCredentials WHERE categoryUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyStores WHERE categoryUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyStoreBindings WHERE categoryUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy category still has protected records');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_item_delete_guard BEFORE DELETE ON PrivacyItems
+                    WHEN EXISTS (SELECT 1 FROM PrivacyAssets WHERE itemUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyContainers WHERE itemUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyDerivatives WHERE itemUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyTransactions WHERE itemUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy item still has protected records');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_credential_delete_guard BEFORE DELETE ON PrivacyCredentials
+                    WHEN EXISTS (SELECT 1 FROM PrivacyCategories
+                                 WHERE uuid=OLD.categoryUuid AND currentCredentialGeneration=OLD.generation)
+                      OR EXISTS (SELECT 1 FROM PrivacyStores
+                                 WHERE categoryUuid=OLD.categoryUuid AND configGeneration=OLD.generation)
+                      OR EXISTS (SELECT 1 FROM PrivacyContainers
+                                 INNER JOIN PrivacyItems ON PrivacyItems.uuid=PrivacyContainers.itemUuid
+                                 WHERE PrivacyItems.categoryUuid=OLD.categoryUuid
+                                   AND PrivacyContainers.credentialGeneration=OLD.generation)
+                      OR EXISTS (SELECT 1 FROM PrivacyTransactions
+                                 WHERE categoryUuid=OLD.categoryUuid
+                                   AND (fromCredentialGeneration=OLD.generation
+                                        OR toCredentialGeneration=OLD.generation))
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy credential generation is still referenced');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_root_delete_guard BEFORE DELETE ON PrivacyStorageRoots
+                    WHEN EXISTS (SELECT 1 FROM PrivacyStores WHERE rootUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyContainers WHERE rootUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyAssets WHERE publicRootUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyTransactionJournals WHERE rootUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy storage root still has protected records');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_store_delete_guard BEFORE DELETE ON PrivacyStores
+                    WHEN EXISTS (SELECT 1 FROM PrivacyStoreBindings WHERE storeUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyContainers WHERE storeUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyDerivatives WHERE storeUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy store still has protected records');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_container_delete_guard BEFORE DELETE ON PrivacyContainers
+                    WHEN EXISTS (SELECT 1 FROM PrivacyAssets WHERE containerUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy container still has protected assets');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_transaction_delete_guard BEFORE DELETE ON PrivacyTransactions
+                    WHEN EXISTS (SELECT 1 FROM PrivacyTransactionJournals WHERE transactionUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy transaction still has journals');
                     END;
                 </statement>
             </dbaction>
@@ -852,6 +1113,159 @@
                 INSERT OR IGNORE INTO Settings (keyword, value) VALUES (:keyword, :value);
             </statement></dbaction>
 
+            <dbaction name="Migrate_Read_PrivacyCategories"><statement mode="query">
+                SELECT uuid, name, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode, lifecycleState,
+                       currentCredentialGeneration, schemaVersion, createdAt FROM PrivacyCategories;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyCategories"><statement mode="query">
+                INSERT INTO PrivacyCategories
+                    (uuid, name, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode, lifecycleState,
+                     currentCredentialGeneration, schemaVersion, createdAt)
+                    VALUES (:uuid, :name, :backend, :presentationMode, :unlockedThumbnailMode, :tagVisibilityMode,
+                            :lifecycleState, :currentCredentialGeneration, :schemaVersion, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyCredentials"><statement mode="query">
+                SELECT categoryUuid, generation, encodingVersion, envelopeFormat, envelopeBlob,
+                       envelopeHashAlgorithm, envelopeHash, recoveryMode, recoveryState, recoveryRecordVersion,
+                       recoveryDocumentUuid, recoveryAcknowledgedAt, recoveryVerifiedAt, createdAt
+                    FROM PrivacyCredentials;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyCredentials"><statement mode="query">
+                INSERT INTO PrivacyCredentials
+                    (categoryUuid, generation, encodingVersion, envelopeFormat, envelopeBlob,
+                     envelopeHashAlgorithm, envelopeHash, recoveryMode, recoveryState, recoveryRecordVersion,
+                     recoveryDocumentUuid, recoveryAcknowledgedAt, recoveryVerifiedAt, createdAt)
+                    VALUES (:categoryUuid, :generation, :encodingVersion, :envelopeFormat, :envelopeBlob,
+                            :envelopeHashAlgorithm, :envelopeHash, :recoveryMode, :recoveryState,
+                            :recoveryRecordVersion, :recoveryDocumentUuid, :recoveryAcknowledgedAt,
+                            :recoveryVerifiedAt, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyStorageRoots"><statement mode="query">
+                SELECT uuid, kind, albumRootId, configuredPath, identityVersion, identityData, markerUuid,
+                       schemaVersion, createdAt FROM PrivacyStorageRoots;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyStorageRoots"><statement mode="query">
+                INSERT INTO PrivacyStorageRoots
+                    (uuid, kind, albumRootId, configuredPath, identityVersion, identityData, markerUuid,
+                     schemaVersion, createdAt)
+                    VALUES (:uuid, :kind, :albumRootId, :configuredPath, :identityVersion, :identityData,
+                            :markerUuid, :schemaVersion, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyStores"><statement mode="query">
+                SELECT uuid, categoryUuid, rootUuid, format, formatVersion, cipherRelativePath,
+                       configRelativePath, configGeneration, lifecycleState, schemaVersion, createdAt
+                    FROM PrivacyStores;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyStores"><statement mode="query">
+                INSERT INTO PrivacyStores
+                    (uuid, categoryUuid, rootUuid, format, formatVersion, cipherRelativePath,
+                     configRelativePath, configGeneration, lifecycleState, schemaVersion, createdAt)
+                    VALUES (:uuid, :categoryUuid, :rootUuid, :format, :formatVersion, :cipherRelativePath,
+                            :configRelativePath, :configGeneration, :lifecycleState, :schemaVersion, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyStoreBindings"><statement mode="query">
+                SELECT categoryUuid, role, storeUuid, schemaVersion FROM PrivacyStoreBindings;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyStoreBindings"><statement mode="query">
+                INSERT INTO PrivacyStoreBindings (categoryUuid, role, storeUuid, schemaVersion)
+                    VALUES (:categoryUuid, :role, :storeUuid, :schemaVersion);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyItems"><statement mode="query">
+                SELECT imageId, uuid, categoryUuid, originalHash, originalSize, originalWidth, originalHeight,
+                       originalCreationDate, expectedProxyHash, expectedProxySize, presentationVersion,
+                       generation, transactionState FROM PrivacyItems;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyItems"><statement mode="query">
+                INSERT INTO PrivacyItems
+                    (imageId, uuid, categoryUuid, originalHash, originalSize, originalWidth, originalHeight,
+                     originalCreationDate, expectedProxyHash, expectedProxySize, presentationVersion,
+                     generation, transactionState)
+                    VALUES (:imageId, :uuid, :categoryUuid, :originalHash, :originalSize, :originalWidth,
+                            :originalHeight, :originalCreationDate, :expectedProxyHash, :expectedProxySize,
+                            :presentationVersion, :generation, :transactionState);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyContainers"><statement mode="query">
+                SELECT uuid, itemUuid, kind, rootUuid, storeUuid, objectRelativePath, protectedSize,
+                       protectedHashAlgorithm, protectedHash, formatVersion, credentialGeneration, state,
+                       createdAt, updatedAt FROM PrivacyContainers;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyContainers"><statement mode="query">
+                INSERT INTO PrivacyContainers
+                    (uuid, itemUuid, kind, rootUuid, storeUuid, objectRelativePath, protectedSize,
+                     protectedHashAlgorithm, protectedHash, formatVersion, credentialGeneration, state,
+                     createdAt, updatedAt)
+                    VALUES (:uuid, :itemUuid, :kind, :rootUuid, :storeUuid, :objectRelativePath,
+                            :protectedSize, :protectedHashAlgorithm, :protectedHash, :formatVersion,
+                            :credentialGeneration, :state, :createdAt, :updatedAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyAssets"><statement mode="query">
+                SELECT itemUuid, role, ordinal, originalName, publicRootUuid, publicRelativePath, containerUuid,
+                       protectedRelativePath, hashAlgorithm, originalHash, originalSize, originalCreationDate,
+                       originalModificationDate, portableAttributes, proxyHashAlgorithm, proxyHash, proxySize,
+                       proxyPresentationVersion, proxyGeneration FROM PrivacyAssets;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyAssets"><statement mode="query">
+                INSERT INTO PrivacyAssets
+                    (itemUuid, role, ordinal, originalName, publicRootUuid, publicRelativePath, containerUuid,
+                     protectedRelativePath, hashAlgorithm, originalHash, originalSize, originalCreationDate,
+                     originalModificationDate, portableAttributes, proxyHashAlgorithm, proxyHash, proxySize,
+                     proxyPresentationVersion, proxyGeneration)
+                    VALUES (:itemUuid, :role, :ordinal, :originalName, :publicRootUuid, :publicRelativePath,
+                            :containerUuid, :protectedRelativePath, :hashAlgorithm, :originalHash, :originalSize,
+                            :originalCreationDate, :originalModificationDate, :portableAttributes,
+                            :proxyHashAlgorithm, :proxyHash, :proxySize, :proxyPresentationVersion,
+                            :proxyGeneration);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyDerivatives"><statement mode="query">
+                SELECT itemUuid, kind, ordinal, storeUuid, protectedRelativePath, sourceHashAlgorithm,
+                       sourceOriginalHash, derivativeFormat, derivativeHashAlgorithm, derivativeHash,
+                       derivativeSize, presentationVersion, generation, createdAt FROM PrivacyDerivatives;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyDerivatives"><statement mode="query">
+                INSERT INTO PrivacyDerivatives
+                    (itemUuid, kind, ordinal, storeUuid, protectedRelativePath, sourceHashAlgorithm,
+                     sourceOriginalHash, derivativeFormat, derivativeHashAlgorithm, derivativeHash,
+                     derivativeSize, presentationVersion, generation, createdAt)
+                    VALUES (:itemUuid, :kind, :ordinal, :storeUuid, :protectedRelativePath,
+                            :sourceHashAlgorithm, :sourceOriginalHash, :derivativeFormat,
+                            :derivativeHashAlgorithm, :derivativeHash, :derivativeSize,
+                            :presentationVersion, :generation, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyTransactions"><statement mode="query">
+                SELECT uuid, categoryUuid, itemUuid, type, state, generation, fromCredentialGeneration,
+                       toCredentialGeneration, payloadFormatVersion, payloadData, createdAt, updatedAt
+                    FROM PrivacyTransactions;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyTransactions"><statement mode="query">
+                INSERT INTO PrivacyTransactions
+                    (uuid, categoryUuid, itemUuid, type, state, generation, fromCredentialGeneration,
+                     toCredentialGeneration, payloadFormatVersion, payloadData, createdAt, updatedAt)
+                    VALUES (:uuid, :categoryUuid, :itemUuid, :type, :state, :generation,
+                            :fromCredentialGeneration, :toCredentialGeneration, :payloadFormatVersion,
+                            :payloadData, :createdAt, :updatedAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyTransactionJournals"><statement mode="query">
+                SELECT transactionUuid, rootUuid, journalRelativePath, journalFormatVersion, stage,
+                       expectedHashAlgorithm, expectedJournalHash, updatedAt FROM PrivacyTransactionJournals;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyTransactionJournals"><statement mode="query">
+                INSERT INTO PrivacyTransactionJournals
+                    (transactionUuid, rootUuid, journalRelativePath, journalFormatVersion, stage,
+                     expectedHashAlgorithm, expectedJournalHash, updatedAt)
+                    VALUES (:transactionUuid, :rootUuid, :journalRelativePath, :journalFormatVersion,
+                            :stage, :expectedHashAlgorithm, :expectedJournalHash, :updatedAt);
+            </statement></dbaction>
+
             <dbaction name="Delete_Thumbnail_ByPath"><statement mode="query">
                 DELETE FROM Thumbnails WHERE id IN (SELECT thumbId FROM FilePaths WHERE path=:path);
             </statement></dbaction>
@@ -1024,6 +1438,270 @@
                 <statement mode="plain">CREATE INDEX image_status_index ON Images (status);</statement>
                 <statement mode="plain">CREATE INDEX imgtagprop_img_tag_idx ON ImageTagProperties (imageid, tagid);</statement>
                 <statement mode="plain">CREATE INDEX imgtagprop_prop_tag_img_idx ON ImageTagProperties (property, tagid, imageid);</statement>
+            </dbaction>
+
+            <dbaction name="UpdateSchemaFromV17ToV18" mode="transaction">
+                <statement mode="plain">CREATE TABLE PrivacyCategories
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    backend INTEGER NOT NULL,
+                    presentationMode INTEGER NOT NULL,
+                    unlockedThumbnailMode INTEGER NOT NULL,
+                    tagVisibilityMode INTEGER NOT NULL DEFAULT 1,
+                    lifecycleState INTEGER NOT NULL,
+                    currentCredentialGeneration INTEGER NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyCredentials
+                    (categoryUuid TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    encodingVersion TEXT NOT NULL,
+                    envelopeFormat TEXT NOT NULL,
+                    envelopeBlob BLOB NOT NULL,
+                    envelopeHashAlgorithm TEXT NOT NULL,
+                    envelopeHash TEXT NOT NULL,
+                    recoveryMode INTEGER NOT NULL,
+                    recoveryState INTEGER NOT NULL,
+                    recoveryRecordVersion INTEGER NOT NULL,
+                    recoveryDocumentUuid TEXT,
+                    recoveryAcknowledgedAt DATETIME,
+                    recoveryVerifiedAt DATETIME,
+                    createdAt DATETIME NOT NULL,
+                    PRIMARY KEY (categoryUuid, generation),
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyStorageRoots
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    kind INTEGER NOT NULL,
+                    albumRootId INTEGER,
+                    configuredPath TEXT NOT NULL,
+                    identityVersion INTEGER NOT NULL,
+                    identityData BLOB NOT NULL,
+                    markerUuid TEXT,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    FOREIGN KEY (albumRootId) REFERENCES AlbumRoots (id) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyStores
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    categoryUuid TEXT NOT NULL,
+                    rootUuid TEXT NOT NULL,
+                    format TEXT NOT NULL,
+                    formatVersion INTEGER NOT NULL,
+                    cipherRelativePath TEXT NOT NULL,
+                    configRelativePath TEXT NOT NULL,
+                    configGeneration INTEGER,
+                    lifecycleState INTEGER NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyStoreBindings
+                    (categoryUuid TEXT NOT NULL,
+                    role INTEGER NOT NULL,
+                    storeUuid TEXT NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    PRIMARY KEY (categoryUuid, role),
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyItems
+                    (imageId INTEGER PRIMARY KEY,
+                    uuid TEXT NOT NULL UNIQUE,
+                    categoryUuid TEXT NOT NULL,
+                    originalHash TEXT,
+                    originalSize INTEGER,
+                    originalWidth INTEGER,
+                    originalHeight INTEGER,
+                    originalCreationDate DATETIME,
+                    expectedProxyHash TEXT,
+                    expectedProxySize INTEGER,
+                    presentationVersion INTEGER NOT NULL,
+                    generation INTEGER NOT NULL,
+                    transactionState INTEGER NOT NULL,
+                    FOREIGN KEY (imageId) REFERENCES Images (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyContainers
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    itemUuid TEXT NOT NULL,
+                    kind INTEGER NOT NULL,
+                    rootUuid TEXT,
+                    storeUuid TEXT,
+                    objectRelativePath TEXT NOT NULL,
+                    protectedSize INTEGER NOT NULL,
+                    protectedHashAlgorithm TEXT NOT NULL,
+                    protectedHash TEXT NOT NULL,
+                    formatVersion INTEGER NOT NULL,
+                    credentialGeneration INTEGER NOT NULL,
+                    state INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    updatedAt DATETIME NOT NULL,
+                    UNIQUE (uuid, itemUuid),
+                    FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyAssets
+                    (itemUuid TEXT NOT NULL,
+                    role INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    originalName TEXT NOT NULL,
+                    publicRootUuid TEXT NOT NULL,
+                    publicRelativePath TEXT NOT NULL,
+                    containerUuid TEXT NOT NULL,
+                    protectedRelativePath TEXT NOT NULL,
+                    hashAlgorithm TEXT NOT NULL,
+                    originalHash TEXT NOT NULL,
+                    originalSize INTEGER NOT NULL,
+                    originalCreationDate DATETIME,
+                    originalModificationDate DATETIME,
+                    portableAttributes BLOB,
+                    proxyHashAlgorithm TEXT,
+                    proxyHash TEXT,
+                    proxySize INTEGER,
+                    proxyPresentationVersion INTEGER,
+                    proxyGeneration INTEGER,
+                    PRIMARY KEY (itemUuid, role, ordinal),
+                    FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (publicRootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (containerUuid, itemUuid) REFERENCES PrivacyContainers (uuid, itemUuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyDerivatives
+                    (itemUuid TEXT NOT NULL,
+                    kind INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    storeUuid TEXT NOT NULL,
+                    protectedRelativePath TEXT NOT NULL,
+                    sourceHashAlgorithm TEXT NOT NULL,
+                    sourceOriginalHash TEXT NOT NULL,
+                    derivativeFormat TEXT NOT NULL,
+                    derivativeHashAlgorithm TEXT NOT NULL,
+                    derivativeHash TEXT NOT NULL,
+                    derivativeSize INTEGER NOT NULL,
+                    presentationVersion INTEGER NOT NULL,
+                    generation INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    PRIMARY KEY (itemUuid, kind, ordinal),
+                    FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyTransactions
+                    (uuid TEXT PRIMARY KEY NOT NULL,
+                    categoryUuid TEXT NOT NULL,
+                    itemUuid TEXT,
+                    type INTEGER NOT NULL,
+                    state INTEGER NOT NULL,
+                    generation INTEGER NOT NULL,
+                    fromCredentialGeneration INTEGER,
+                    toCredentialGeneration INTEGER,
+                    payloadFormatVersion INTEGER NOT NULL,
+                    payloadData BLOB,
+                    createdAt DATETIME NOT NULL,
+                    updatedAt DATETIME NOT NULL,
+                    FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE TABLE PrivacyTransactionJournals
+                    (transactionUuid TEXT NOT NULL,
+                    rootUuid TEXT NOT NULL,
+                    journalRelativePath TEXT NOT NULL,
+                    journalFormatVersion INTEGER NOT NULL,
+                    stage INTEGER NOT NULL,
+                    expectedHashAlgorithm TEXT,
+                    expectedJournalHash TEXT,
+                    updatedAt DATETIME NOT NULL,
+                    PRIMARY KEY (transactionUuid, rootUuid),
+                    FOREIGN KEY (transactionUuid) REFERENCES PrivacyTransactions (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE);
+                </statement>
+                <statement mode="plain">CREATE INDEX privacyitems_category_index ON PrivacyItems (categoryUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacystores_category_index ON PrivacyStores (categoryUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacystorebindings_store_index ON PrivacyStoreBindings (storeUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacycontainers_item_index ON PrivacyContainers (itemUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacyassets_item_index ON PrivacyAssets (itemUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacyderivatives_item_index ON PrivacyDerivatives (itemUuid);</statement>
+                <statement mode="plain">CREATE INDEX privacytransactions_category_state_index ON PrivacyTransactions (categoryUuid, state);</statement>
+                <statement mode="plain">CREATE INDEX privacytransactionjournals_root_index ON PrivacyTransactionJournals (rootUuid);</statement>
+                <statement mode="plain">CREATE TRIGGER privacy_image_delete_guard BEFORE DELETE ON Images
+                    WHEN EXISTS (SELECT 1 FROM PrivacyItems WHERE imageId=OLD.id)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'protected image must be unprotected before deletion');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_albumroot_delete_guard BEFORE DELETE ON AlbumRoots
+                    WHEN EXISTS (SELECT 1 FROM PrivacyStorageRoots WHERE albumRootId=OLD.id)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy storage root still references album root');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_category_delete_guard BEFORE DELETE ON PrivacyCategories
+                    WHEN EXISTS (SELECT 1 FROM PrivacyItems WHERE categoryUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyTransactions WHERE categoryUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyCredentials WHERE categoryUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyStores WHERE categoryUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyStoreBindings WHERE categoryUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy category still has protected records');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_item_delete_guard BEFORE DELETE ON PrivacyItems
+                    WHEN EXISTS (SELECT 1 FROM PrivacyAssets WHERE itemUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyContainers WHERE itemUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyDerivatives WHERE itemUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyTransactions WHERE itemUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy item still has protected records');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_credential_delete_guard BEFORE DELETE ON PrivacyCredentials
+                    WHEN EXISTS (SELECT 1 FROM PrivacyCategories
+                                 WHERE uuid=OLD.categoryUuid AND currentCredentialGeneration=OLD.generation)
+                      OR EXISTS (SELECT 1 FROM PrivacyStores
+                                 WHERE categoryUuid=OLD.categoryUuid AND configGeneration=OLD.generation)
+                      OR EXISTS (SELECT 1 FROM PrivacyContainers
+                                 INNER JOIN PrivacyItems ON PrivacyItems.uuid=PrivacyContainers.itemUuid
+                                 WHERE PrivacyItems.categoryUuid=OLD.categoryUuid
+                                   AND PrivacyContainers.credentialGeneration=OLD.generation)
+                      OR EXISTS (SELECT 1 FROM PrivacyTransactions
+                                 WHERE categoryUuid=OLD.categoryUuid
+                                   AND (fromCredentialGeneration=OLD.generation
+                                        OR toCredentialGeneration=OLD.generation))
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy credential generation is still referenced');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_root_delete_guard BEFORE DELETE ON PrivacyStorageRoots
+                    WHEN EXISTS (SELECT 1 FROM PrivacyStores WHERE rootUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyContainers WHERE rootUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyAssets WHERE publicRootUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyTransactionJournals WHERE rootUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy storage root still has protected records');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_store_delete_guard BEFORE DELETE ON PrivacyStores
+                    WHEN EXISTS (SELECT 1 FROM PrivacyStoreBindings WHERE storeUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyContainers WHERE storeUuid=OLD.uuid)
+                      OR EXISTS (SELECT 1 FROM PrivacyDerivatives WHERE storeUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy store still has protected records');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_container_delete_guard BEFORE DELETE ON PrivacyContainers
+                    WHEN EXISTS (SELECT 1 FROM PrivacyAssets WHERE containerUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy container still has protected assets');
+                    END;
+                </statement>
+                <statement mode="plain">CREATE TRIGGER privacy_transaction_delete_guard BEFORE DELETE ON PrivacyTransactions
+                    WHEN EXISTS (SELECT 1 FROM PrivacyTransactionJournals WHERE transactionUuid=OLD.uuid)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'privacy transaction still has journals');
+                    END;
+                </statement>
             </dbaction>
 
             <dbaction name="UpdateThumbnailsDBSchemaFromV1ToV2" mode="transaction">
@@ -1358,6 +2036,206 @@
                     CONSTRAINT ImageTagProperties_Tags FOREIGN KEY (tagid) REFERENCES Tags (id) ON DELETE CASCADE ON UPDATE CASCADE)
                     ENGINE InnoDB;
                 </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyCategories
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    name LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    backend INTEGER NOT NULL,
+                    presentationMode INTEGER NOT NULL,
+                    unlockedThumbnailMode INTEGER NOT NULL,
+                    tagVisibilityMode INTEGER NOT NULL DEFAULT 1,
+                    lifecycleState INTEGER NOT NULL,
+                    currentCredentialGeneration BIGINT NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyCredentials
+                    (categoryUuid VARCHAR(36) NOT NULL,
+                    generation BIGINT NOT NULL,
+                    encodingVersion VARCHAR(64) NOT NULL,
+                    envelopeFormat VARCHAR(64) NOT NULL,
+                    envelopeBlob LONGBLOB NOT NULL,
+                    envelopeHashAlgorithm VARCHAR(64) NOT NULL,
+                    envelopeHash VARCHAR(128) NOT NULL,
+                    recoveryMode INTEGER NOT NULL,
+                    recoveryState INTEGER NOT NULL,
+                    recoveryRecordVersion INTEGER NOT NULL,
+                    recoveryDocumentUuid VARCHAR(36),
+                    recoveryAcknowledgedAt DATETIME,
+                    recoveryVerifiedAt DATETIME,
+                    createdAt DATETIME NOT NULL,
+                    PRIMARY KEY (categoryUuid, generation),
+                    CONSTRAINT PrivacyCredentials_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyStorageRoots
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    kind INTEGER NOT NULL,
+                    albumRootId INTEGER,
+                    configuredPath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    identityVersion INTEGER NOT NULL,
+                    identityData LONGBLOB NOT NULL,
+                    markerUuid VARCHAR(36),
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    INDEX PrivacyStorageRoots_AlbumRoot (albumRootId),
+                    CONSTRAINT PrivacyStorageRoots_AlbumRoots FOREIGN KEY (albumRootId) REFERENCES AlbumRoots (id) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyStores
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    categoryUuid VARCHAR(36) NOT NULL,
+                    rootUuid VARCHAR(36) NOT NULL,
+                    format VARCHAR(64) NOT NULL,
+                    formatVersion INTEGER NOT NULL,
+                    cipherRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    configRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    configGeneration BIGINT,
+                    lifecycleState INTEGER NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    INDEX PrivacyStores_Category (categoryUuid),
+                    INDEX PrivacyStores_Root (rootUuid),
+                    CONSTRAINT PrivacyStores_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyStores_Roots FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyStoreBindings
+                    (categoryUuid VARCHAR(36) NOT NULL,
+                    role INTEGER NOT NULL,
+                    storeUuid VARCHAR(36) NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    PRIMARY KEY (categoryUuid, role),
+                    INDEX PrivacyStoreBindings_Store (storeUuid),
+                    CONSTRAINT PrivacyStoreBindings_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyStoreBindings_Stores FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyItems
+                    (imageId BIGINT PRIMARY KEY,
+                    uuid VARCHAR(36) NOT NULL UNIQUE,
+                    categoryUuid VARCHAR(36) NOT NULL,
+                    originalHash VARCHAR(128),
+                    originalSize BIGINT,
+                    originalWidth INTEGER,
+                    originalHeight INTEGER,
+                    originalCreationDate DATETIME,
+                    expectedProxyHash VARCHAR(128),
+                    expectedProxySize BIGINT,
+                    presentationVersion INTEGER NOT NULL,
+                    generation BIGINT NOT NULL,
+                    transactionState INTEGER NOT NULL,
+                    INDEX PrivacyItems_Category (categoryUuid),
+                    CONSTRAINT PrivacyItems_Images FOREIGN KEY (imageId) REFERENCES Images (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyItems_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyContainers
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    itemUuid VARCHAR(36) NOT NULL,
+                    kind INTEGER NOT NULL,
+                    rootUuid VARCHAR(36),
+                    storeUuid VARCHAR(36),
+                    objectRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    protectedSize BIGINT NOT NULL,
+                    protectedHashAlgorithm VARCHAR(64) NOT NULL,
+                    protectedHash VARCHAR(128) NOT NULL,
+                    formatVersion INTEGER NOT NULL,
+                    credentialGeneration BIGINT NOT NULL,
+                    state INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    updatedAt DATETIME NOT NULL,
+                    UNIQUE (uuid, itemUuid),
+                    INDEX PrivacyContainers_Item (itemUuid),
+                    INDEX PrivacyContainers_Root (rootUuid),
+                    INDEX PrivacyContainers_Store (storeUuid),
+                    CONSTRAINT PrivacyContainers_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyContainers_Roots FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyContainers_Stores FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyAssets
+                    (itemUuid VARCHAR(36) NOT NULL,
+                    role INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    originalName LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    publicRootUuid VARCHAR(36) NOT NULL,
+                    publicRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    containerUuid VARCHAR(36) NOT NULL,
+                    protectedRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    hashAlgorithm VARCHAR(64) NOT NULL,
+                    originalHash VARCHAR(128) NOT NULL,
+                    originalSize BIGINT NOT NULL,
+                    originalCreationDate DATETIME,
+                    originalModificationDate DATETIME,
+                    portableAttributes LONGBLOB,
+                    proxyHashAlgorithm VARCHAR(64),
+                    proxyHash VARCHAR(128),
+                    proxySize BIGINT,
+                    proxyPresentationVersion INTEGER,
+                    proxyGeneration BIGINT,
+                    PRIMARY KEY (itemUuid, role, ordinal),
+                    INDEX PrivacyAssets_PublicRoot (publicRootUuid),
+                    INDEX PrivacyAssets_ContainerItem (containerUuid, itemUuid),
+                    CONSTRAINT PrivacyAssets_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyAssets_PublicRoots FOREIGN KEY (publicRootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyAssets_Containers FOREIGN KEY (containerUuid, itemUuid) REFERENCES PrivacyContainers (uuid, itemUuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyDerivatives
+                    (itemUuid VARCHAR(36) NOT NULL,
+                    kind INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    storeUuid VARCHAR(36) NOT NULL,
+                    protectedRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    sourceHashAlgorithm VARCHAR(64) NOT NULL,
+                    sourceOriginalHash VARCHAR(128) NOT NULL,
+                    derivativeFormat VARCHAR(64) NOT NULL,
+                    derivativeHashAlgorithm VARCHAR(64) NOT NULL,
+                    derivativeHash VARCHAR(128) NOT NULL,
+                    derivativeSize BIGINT NOT NULL,
+                    presentationVersion INTEGER NOT NULL,
+                    generation BIGINT NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    PRIMARY KEY (itemUuid, kind, ordinal),
+                    INDEX PrivacyDerivatives_Store (storeUuid),
+                    CONSTRAINT PrivacyDerivatives_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyDerivatives_Stores FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyTransactions
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    categoryUuid VARCHAR(36) NOT NULL,
+                    itemUuid VARCHAR(36),
+                    type INTEGER NOT NULL,
+                    state INTEGER NOT NULL,
+                    generation BIGINT NOT NULL,
+                    fromCredentialGeneration BIGINT,
+                    toCredentialGeneration BIGINT,
+                    payloadFormatVersion INTEGER NOT NULL,
+                    payloadData LONGBLOB,
+                    createdAt DATETIME NOT NULL,
+                    updatedAt DATETIME NOT NULL,
+                    INDEX PrivacyTransactions_CategoryState (categoryUuid, state),
+                    CONSTRAINT PrivacyTransactions_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyTransactions_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyTransactionJournals
+                    (transactionUuid VARCHAR(36) NOT NULL,
+                    rootUuid VARCHAR(36) NOT NULL,
+                    journalRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    journalFormatVersion INTEGER NOT NULL,
+                    stage INTEGER NOT NULL,
+                    expectedHashAlgorithm VARCHAR(64),
+                    expectedJournalHash VARCHAR(128),
+                    updatedAt DATETIME NOT NULL,
+                    PRIMARY KEY (transactionUuid, rootUuid),
+                    INDEX PrivacyTransactionJournals_Root (rootUuid),
+                    CONSTRAINT PrivacyTransactionJournals_Transactions FOREIGN KEY (transactionUuid) REFERENCES PrivacyTransactions (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyTransactionJournals_Roots FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
             </dbaction>
 
             <!-- Mysql Core Indexes -->
@@ -1449,6 +2327,26 @@
                               WHERE pid = NEW.id
                              UNION SELECT A.id, B.pid FROM TagsTree A, TagsTree B
                               WHERE A.pid = NEW.id AND B.id = NEW.pid;
+                        END IF;
+                    END;
+                </statement>
+                <statement mode="plain">DROP TRIGGER IF EXISTS privacy_credential_delete_guard;</statement>
+                <statement mode="plain">CREATE TRIGGER privacy_credential_delete_guard BEFORE DELETE ON PrivacyCredentials FOR EACH ROW
+                    BEGIN
+                        IF EXISTS (SELECT 1 FROM PrivacyCategories
+                                   WHERE uuid=OLD.categoryUuid AND currentCredentialGeneration=OLD.generation)
+                           OR EXISTS (SELECT 1 FROM PrivacyStores
+                                      WHERE categoryUuid=OLD.categoryUuid AND configGeneration=OLD.generation)
+                           OR EXISTS (SELECT 1 FROM PrivacyContainers
+                                      INNER JOIN PrivacyItems ON PrivacyItems.uuid=PrivacyContainers.itemUuid
+                                      WHERE PrivacyItems.categoryUuid=OLD.categoryUuid
+                                        AND PrivacyContainers.credentialGeneration=OLD.generation)
+                           OR EXISTS (SELECT 1 FROM PrivacyTransactions
+                                      WHERE categoryUuid=OLD.categoryUuid
+                                        AND (fromCredentialGeneration=OLD.generation
+                                             OR toCredentialGeneration=OLD.generation))
+                        THEN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='privacy credential generation is still referenced';
                         END IF;
                     END;
                 </statement>
@@ -2055,6 +2953,159 @@
             </statement></dbaction>
             <dbaction name="Migrate_Write_Settings" mode="transaction"><statement mode="query">
                 INSERT IGNORE INTO Settings (keyword, value) VALUES (:keyword, :value);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyCategories"><statement mode="query">
+                SELECT uuid, name, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode, lifecycleState,
+                       currentCredentialGeneration, schemaVersion, createdAt FROM PrivacyCategories;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyCategories"><statement mode="query">
+                INSERT INTO PrivacyCategories
+                    (uuid, name, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode, lifecycleState,
+                     currentCredentialGeneration, schemaVersion, createdAt)
+                    VALUES (:uuid, :name, :backend, :presentationMode, :unlockedThumbnailMode, :tagVisibilityMode,
+                            :lifecycleState, :currentCredentialGeneration, :schemaVersion, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyCredentials"><statement mode="query">
+                SELECT categoryUuid, generation, encodingVersion, envelopeFormat, envelopeBlob,
+                       envelopeHashAlgorithm, envelopeHash, recoveryMode, recoveryState, recoveryRecordVersion,
+                       recoveryDocumentUuid, recoveryAcknowledgedAt, recoveryVerifiedAt, createdAt
+                    FROM PrivacyCredentials;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyCredentials"><statement mode="query">
+                INSERT INTO PrivacyCredentials
+                    (categoryUuid, generation, encodingVersion, envelopeFormat, envelopeBlob,
+                     envelopeHashAlgorithm, envelopeHash, recoveryMode, recoveryState, recoveryRecordVersion,
+                     recoveryDocumentUuid, recoveryAcknowledgedAt, recoveryVerifiedAt, createdAt)
+                    VALUES (:categoryUuid, :generation, :encodingVersion, :envelopeFormat, :envelopeBlob,
+                            :envelopeHashAlgorithm, :envelopeHash, :recoveryMode, :recoveryState,
+                            :recoveryRecordVersion, :recoveryDocumentUuid, :recoveryAcknowledgedAt,
+                            :recoveryVerifiedAt, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyStorageRoots"><statement mode="query">
+                SELECT uuid, kind, albumRootId, configuredPath, identityVersion, identityData, markerUuid,
+                       schemaVersion, createdAt FROM PrivacyStorageRoots;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyStorageRoots"><statement mode="query">
+                INSERT INTO PrivacyStorageRoots
+                    (uuid, kind, albumRootId, configuredPath, identityVersion, identityData, markerUuid,
+                     schemaVersion, createdAt)
+                    VALUES (:uuid, :kind, :albumRootId, :configuredPath, :identityVersion, :identityData,
+                            :markerUuid, :schemaVersion, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyStores"><statement mode="query">
+                SELECT uuid, categoryUuid, rootUuid, format, formatVersion, cipherRelativePath,
+                       configRelativePath, configGeneration, lifecycleState, schemaVersion, createdAt
+                    FROM PrivacyStores;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyStores"><statement mode="query">
+                INSERT INTO PrivacyStores
+                    (uuid, categoryUuid, rootUuid, format, formatVersion, cipherRelativePath,
+                     configRelativePath, configGeneration, lifecycleState, schemaVersion, createdAt)
+                    VALUES (:uuid, :categoryUuid, :rootUuid, :format, :formatVersion, :cipherRelativePath,
+                            :configRelativePath, :configGeneration, :lifecycleState, :schemaVersion, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyStoreBindings"><statement mode="query">
+                SELECT categoryUuid, role, storeUuid, schemaVersion FROM PrivacyStoreBindings;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyStoreBindings"><statement mode="query">
+                INSERT INTO PrivacyStoreBindings (categoryUuid, role, storeUuid, schemaVersion)
+                    VALUES (:categoryUuid, :role, :storeUuid, :schemaVersion);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyItems"><statement mode="query">
+                SELECT imageId, uuid, categoryUuid, originalHash, originalSize, originalWidth, originalHeight,
+                       originalCreationDate, expectedProxyHash, expectedProxySize, presentationVersion,
+                       generation, transactionState FROM PrivacyItems;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyItems"><statement mode="query">
+                INSERT INTO PrivacyItems
+                    (imageId, uuid, categoryUuid, originalHash, originalSize, originalWidth, originalHeight,
+                     originalCreationDate, expectedProxyHash, expectedProxySize, presentationVersion,
+                     generation, transactionState)
+                    VALUES (:imageId, :uuid, :categoryUuid, :originalHash, :originalSize, :originalWidth,
+                            :originalHeight, :originalCreationDate, :expectedProxyHash, :expectedProxySize,
+                            :presentationVersion, :generation, :transactionState);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyContainers"><statement mode="query">
+                SELECT uuid, itemUuid, kind, rootUuid, storeUuid, objectRelativePath, protectedSize,
+                       protectedHashAlgorithm, protectedHash, formatVersion, credentialGeneration, state,
+                       createdAt, updatedAt FROM PrivacyContainers;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyContainers"><statement mode="query">
+                INSERT INTO PrivacyContainers
+                    (uuid, itemUuid, kind, rootUuid, storeUuid, objectRelativePath, protectedSize,
+                     protectedHashAlgorithm, protectedHash, formatVersion, credentialGeneration, state,
+                     createdAt, updatedAt)
+                    VALUES (:uuid, :itemUuid, :kind, :rootUuid, :storeUuid, :objectRelativePath,
+                            :protectedSize, :protectedHashAlgorithm, :protectedHash, :formatVersion,
+                            :credentialGeneration, :state, :createdAt, :updatedAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyAssets"><statement mode="query">
+                SELECT itemUuid, role, ordinal, originalName, publicRootUuid, publicRelativePath, containerUuid,
+                       protectedRelativePath, hashAlgorithm, originalHash, originalSize, originalCreationDate,
+                       originalModificationDate, portableAttributes, proxyHashAlgorithm, proxyHash, proxySize,
+                       proxyPresentationVersion, proxyGeneration FROM PrivacyAssets;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyAssets"><statement mode="query">
+                INSERT INTO PrivacyAssets
+                    (itemUuid, role, ordinal, originalName, publicRootUuid, publicRelativePath, containerUuid,
+                     protectedRelativePath, hashAlgorithm, originalHash, originalSize, originalCreationDate,
+                     originalModificationDate, portableAttributes, proxyHashAlgorithm, proxyHash, proxySize,
+                     proxyPresentationVersion, proxyGeneration)
+                    VALUES (:itemUuid, :role, :ordinal, :originalName, :publicRootUuid, :publicRelativePath,
+                            :containerUuid, :protectedRelativePath, :hashAlgorithm, :originalHash, :originalSize,
+                            :originalCreationDate, :originalModificationDate, :portableAttributes,
+                            :proxyHashAlgorithm, :proxyHash, :proxySize, :proxyPresentationVersion,
+                            :proxyGeneration);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyDerivatives"><statement mode="query">
+                SELECT itemUuid, kind, ordinal, storeUuid, protectedRelativePath, sourceHashAlgorithm,
+                       sourceOriginalHash, derivativeFormat, derivativeHashAlgorithm, derivativeHash,
+                       derivativeSize, presentationVersion, generation, createdAt FROM PrivacyDerivatives;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyDerivatives"><statement mode="query">
+                INSERT INTO PrivacyDerivatives
+                    (itemUuid, kind, ordinal, storeUuid, protectedRelativePath, sourceHashAlgorithm,
+                     sourceOriginalHash, derivativeFormat, derivativeHashAlgorithm, derivativeHash,
+                     derivativeSize, presentationVersion, generation, createdAt)
+                    VALUES (:itemUuid, :kind, :ordinal, :storeUuid, :protectedRelativePath,
+                            :sourceHashAlgorithm, :sourceOriginalHash, :derivativeFormat,
+                            :derivativeHashAlgorithm, :derivativeHash, :derivativeSize,
+                            :presentationVersion, :generation, :createdAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyTransactions"><statement mode="query">
+                SELECT uuid, categoryUuid, itemUuid, type, state, generation, fromCredentialGeneration,
+                       toCredentialGeneration, payloadFormatVersion, payloadData, createdAt, updatedAt
+                    FROM PrivacyTransactions;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyTransactions"><statement mode="query">
+                INSERT INTO PrivacyTransactions
+                    (uuid, categoryUuid, itemUuid, type, state, generation, fromCredentialGeneration,
+                     toCredentialGeneration, payloadFormatVersion, payloadData, createdAt, updatedAt)
+                    VALUES (:uuid, :categoryUuid, :itemUuid, :type, :state, :generation,
+                            :fromCredentialGeneration, :toCredentialGeneration, :payloadFormatVersion,
+                            :payloadData, :createdAt, :updatedAt);
+            </statement></dbaction>
+
+            <dbaction name="Migrate_Read_PrivacyTransactionJournals"><statement mode="query">
+                SELECT transactionUuid, rootUuid, journalRelativePath, journalFormatVersion, stage,
+                       expectedHashAlgorithm, expectedJournalHash, updatedAt FROM PrivacyTransactionJournals;
+            </statement></dbaction>
+            <dbaction name="Migrate_Write_PrivacyTransactionJournals"><statement mode="query">
+                INSERT INTO PrivacyTransactionJournals
+                    (transactionUuid, rootUuid, journalRelativePath, journalFormatVersion, stage,
+                     expectedHashAlgorithm, expectedJournalHash, updatedAt)
+                    VALUES (:transactionUuid, :rootUuid, :journalRelativePath, :journalFormatVersion,
+                            :stage, :expectedHashAlgorithm, :expectedJournalHash, :updatedAt);
             </statement></dbaction>
 
             <dbaction name="Delete_Thumbnail_ByPath" mode="query">
@@ -2772,6 +3823,229 @@
                 <statement mode="plain">CALL create_index_if_not_exists('ImageTagProperties','imgtagprop_img_tag_idx','imageid, tagid');</statement>
                 <statement mode="plain">CALL create_index_if_not_exists('ImageTagProperties','imgtagprop_prop_tag_img_idx','property, tagid, imageid');</statement>
                 <statement mode="plain">SET FOREIGN_KEY_CHECKS=1;</statement>
+            </dbaction>
+
+            <dbaction name="UpdateSchemaFromV17ToV18" mode="transaction">
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyCategories
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    name LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    backend INTEGER NOT NULL,
+                    presentationMode INTEGER NOT NULL,
+                    unlockedThumbnailMode INTEGER NOT NULL,
+                    tagVisibilityMode INTEGER NOT NULL DEFAULT 1,
+                    lifecycleState INTEGER NOT NULL,
+                    currentCredentialGeneration BIGINT NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyCredentials
+                    (categoryUuid VARCHAR(36) NOT NULL,
+                    generation BIGINT NOT NULL,
+                    encodingVersion VARCHAR(64) NOT NULL,
+                    envelopeFormat VARCHAR(64) NOT NULL,
+                    envelopeBlob LONGBLOB NOT NULL,
+                    envelopeHashAlgorithm VARCHAR(64) NOT NULL,
+                    envelopeHash VARCHAR(128) NOT NULL,
+                    recoveryMode INTEGER NOT NULL,
+                    recoveryState INTEGER NOT NULL,
+                    recoveryRecordVersion INTEGER NOT NULL,
+                    recoveryDocumentUuid VARCHAR(36),
+                    recoveryAcknowledgedAt DATETIME,
+                    recoveryVerifiedAt DATETIME,
+                    createdAt DATETIME NOT NULL,
+                    PRIMARY KEY (categoryUuid, generation),
+                    CONSTRAINT PrivacyCredentials_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyStorageRoots
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    kind INTEGER NOT NULL,
+                    albumRootId INTEGER,
+                    configuredPath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    identityVersion INTEGER NOT NULL,
+                    identityData LONGBLOB NOT NULL,
+                    markerUuid VARCHAR(36),
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    INDEX PrivacyStorageRoots_AlbumRoot (albumRootId),
+                    CONSTRAINT PrivacyStorageRoots_AlbumRoots FOREIGN KEY (albumRootId) REFERENCES AlbumRoots (id) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyStores
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    categoryUuid VARCHAR(36) NOT NULL,
+                    rootUuid VARCHAR(36) NOT NULL,
+                    format VARCHAR(64) NOT NULL,
+                    formatVersion INTEGER NOT NULL,
+                    cipherRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    configRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    configGeneration BIGINT,
+                    lifecycleState INTEGER NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    INDEX PrivacyStores_Category (categoryUuid),
+                    INDEX PrivacyStores_Root (rootUuid),
+                    CONSTRAINT PrivacyStores_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyStores_Roots FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyStoreBindings
+                    (categoryUuid VARCHAR(36) NOT NULL,
+                    role INTEGER NOT NULL,
+                    storeUuid VARCHAR(36) NOT NULL,
+                    schemaVersion INTEGER NOT NULL,
+                    PRIMARY KEY (categoryUuid, role),
+                    INDEX PrivacyStoreBindings_Store (storeUuid),
+                    CONSTRAINT PrivacyStoreBindings_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyStoreBindings_Stores FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyItems
+                    (imageId BIGINT PRIMARY KEY,
+                    uuid VARCHAR(36) NOT NULL UNIQUE,
+                    categoryUuid VARCHAR(36) NOT NULL,
+                    originalHash VARCHAR(128),
+                    originalSize BIGINT,
+                    originalWidth INTEGER,
+                    originalHeight INTEGER,
+                    originalCreationDate DATETIME,
+                    expectedProxyHash VARCHAR(128),
+                    expectedProxySize BIGINT,
+                    presentationVersion INTEGER NOT NULL,
+                    generation BIGINT NOT NULL,
+                    transactionState INTEGER NOT NULL,
+                    INDEX PrivacyItems_Category (categoryUuid),
+                    CONSTRAINT PrivacyItems_Images FOREIGN KEY (imageId) REFERENCES Images (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyItems_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyContainers
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    itemUuid VARCHAR(36) NOT NULL,
+                    kind INTEGER NOT NULL,
+                    rootUuid VARCHAR(36),
+                    storeUuid VARCHAR(36),
+                    objectRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    protectedSize BIGINT NOT NULL,
+                    protectedHashAlgorithm VARCHAR(64) NOT NULL,
+                    protectedHash VARCHAR(128) NOT NULL,
+                    formatVersion INTEGER NOT NULL,
+                    credentialGeneration BIGINT NOT NULL,
+                    state INTEGER NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    updatedAt DATETIME NOT NULL,
+                    UNIQUE (uuid, itemUuid),
+                    INDEX PrivacyContainers_Item (itemUuid),
+                    INDEX PrivacyContainers_Root (rootUuid),
+                    INDEX PrivacyContainers_Store (storeUuid),
+                    CONSTRAINT PrivacyContainers_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyContainers_Roots FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyContainers_Stores FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyAssets
+                    (itemUuid VARCHAR(36) NOT NULL,
+                    role INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    originalName LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    publicRootUuid VARCHAR(36) NOT NULL,
+                    publicRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    containerUuid VARCHAR(36) NOT NULL,
+                    protectedRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    hashAlgorithm VARCHAR(64) NOT NULL,
+                    originalHash VARCHAR(128) NOT NULL,
+                    originalSize BIGINT NOT NULL,
+                    originalCreationDate DATETIME,
+                    originalModificationDate DATETIME,
+                    portableAttributes LONGBLOB,
+                    proxyHashAlgorithm VARCHAR(64),
+                    proxyHash VARCHAR(128),
+                    proxySize BIGINT,
+                    proxyPresentationVersion INTEGER,
+                    proxyGeneration BIGINT,
+                    PRIMARY KEY (itemUuid, role, ordinal),
+                    INDEX PrivacyAssets_PublicRoot (publicRootUuid),
+                    INDEX PrivacyAssets_ContainerItem (containerUuid, itemUuid),
+                    CONSTRAINT PrivacyAssets_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyAssets_PublicRoots FOREIGN KEY (publicRootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyAssets_Containers FOREIGN KEY (containerUuid, itemUuid) REFERENCES PrivacyContainers (uuid, itemUuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyDerivatives
+                    (itemUuid VARCHAR(36) NOT NULL,
+                    kind INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    storeUuid VARCHAR(36) NOT NULL,
+                    protectedRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    sourceHashAlgorithm VARCHAR(64) NOT NULL,
+                    sourceOriginalHash VARCHAR(128) NOT NULL,
+                    derivativeFormat VARCHAR(64) NOT NULL,
+                    derivativeHashAlgorithm VARCHAR(64) NOT NULL,
+                    derivativeHash VARCHAR(128) NOT NULL,
+                    derivativeSize BIGINT NOT NULL,
+                    presentationVersion INTEGER NOT NULL,
+                    generation BIGINT NOT NULL,
+                    createdAt DATETIME NOT NULL,
+                    PRIMARY KEY (itemUuid, kind, ordinal),
+                    INDEX PrivacyDerivatives_Store (storeUuid),
+                    CONSTRAINT PrivacyDerivatives_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyDerivatives_Stores FOREIGN KEY (storeUuid) REFERENCES PrivacyStores (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyTransactions
+                    (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
+                    categoryUuid VARCHAR(36) NOT NULL,
+                    itemUuid VARCHAR(36),
+                    type INTEGER NOT NULL,
+                    state INTEGER NOT NULL,
+                    generation BIGINT NOT NULL,
+                    fromCredentialGeneration BIGINT,
+                    toCredentialGeneration BIGINT,
+                    payloadFormatVersion INTEGER NOT NULL,
+                    payloadData LONGBLOB,
+                    createdAt DATETIME NOT NULL,
+                    updatedAt DATETIME NOT NULL,
+                    INDEX PrivacyTransactions_CategoryState (categoryUuid, state),
+                    CONSTRAINT PrivacyTransactions_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyTransactions_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyTransactionJournals
+                    (transactionUuid VARCHAR(36) NOT NULL,
+                    rootUuid VARCHAR(36) NOT NULL,
+                    journalRelativePath LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    journalFormatVersion INTEGER NOT NULL,
+                    stage INTEGER NOT NULL,
+                    expectedHashAlgorithm VARCHAR(64),
+                    expectedJournalHash VARCHAR(128),
+                    updatedAt DATETIME NOT NULL,
+                    PRIMARY KEY (transactionUuid, rootUuid),
+                    INDEX PrivacyTransactionJournals_Root (rootUuid),
+                    CONSTRAINT PrivacyTransactionJournals_Transactions FOREIGN KEY (transactionUuid) REFERENCES PrivacyTransactions (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT PrivacyTransactionJournals_Roots FOREIGN KEY (rootUuid) REFERENCES PrivacyStorageRoots (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
+                    ENGINE InnoDB;
+                </statement>
+                <statement mode="plain">DROP TRIGGER IF EXISTS privacy_credential_delete_guard;</statement>
+                <statement mode="plain">CREATE TRIGGER privacy_credential_delete_guard BEFORE DELETE ON PrivacyCredentials FOR EACH ROW
+                    BEGIN
+                        IF EXISTS (SELECT 1 FROM PrivacyCategories
+                                   WHERE uuid=OLD.categoryUuid AND currentCredentialGeneration=OLD.generation)
+                           OR EXISTS (SELECT 1 FROM PrivacyStores
+                                      WHERE categoryUuid=OLD.categoryUuid AND configGeneration=OLD.generation)
+                           OR EXISTS (SELECT 1 FROM PrivacyContainers
+                                      INNER JOIN PrivacyItems ON PrivacyItems.uuid=PrivacyContainers.itemUuid
+                                      WHERE PrivacyItems.categoryUuid=OLD.categoryUuid
+                                        AND PrivacyContainers.credentialGeneration=OLD.generation)
+                           OR EXISTS (SELECT 1 FROM PrivacyTransactions
+                                      WHERE categoryUuid=OLD.categoryUuid
+                                        AND (fromCredentialGeneration=OLD.generation
+                                             OR toCredentialGeneration=OLD.generation))
+                        THEN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='privacy credential generation is still referenced';
+                        END IF;
+                    END;
+                </statement>
             </dbaction>
 
             <dbaction name="UpdateThumbnailsDBSchemaFromV1ToV2" mode="transaction">
