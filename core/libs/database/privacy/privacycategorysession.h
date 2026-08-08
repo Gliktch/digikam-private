@@ -12,6 +12,7 @@
 
 // C++ includes
 
+#include <functional>
 #include <memory>
 
 // Qt includes
@@ -52,6 +53,14 @@ enum class PrivacyCategorySessionStatus
     StrongRecoveryRequired,
     Canceled,
     LockFailed
+};
+
+enum class PrivacyCategoryOperationStatus
+{
+    Completed,
+    InvalidRequest,
+    CategoryLocked,
+    TransactionBlocked
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyCategorySessionResult
@@ -232,6 +241,30 @@ public:
         const QString& passwordText);
     PrivacyCategorySessionResult lockCategory(const QString& categoryUuid);
     QList<PrivacyCategorySessionResult> lockAllCategories();
+
+    /**
+     * Runs one synchronous protected-item operation while the category session
+     * remains unlocked. Category lock and lock-all wait for the callback to
+     * return; competing create/unlock/item operations fail with
+     * TransactionBlocked. The callback runs outside the coordinator mutex.
+     *
+     * A callback must not call createCategory(), unlockCategory(),
+     * lockCategory(), or lockAllCategories() on this coordinator. Such
+     * re-entry is rejected rather than allowed to wait on itself.
+     */
+    PrivacyCategoryOperationStatus runWhileUnlocked(
+        const QString& categoryUuid,
+        const std::function<void()>& operation);
+
+    /**
+     * As runWhileUnlocked(), while borrowing the retained normalized password
+     * for the callback only. The reference must not be retained or returned.
+     * This is the no-redundant-authentication Protect boundary; Unprotect must
+     * continue to use a separately supplied freshly entered password.
+     */
+    PrivacyCategoryOperationStatus runWithUnlockedSecret(
+        const QString& categoryUuid,
+        const std::function<void(const PrivacyPassword&)>& operation);
 
     bool ownsSecret(const QString& categoryUuid) const;
 

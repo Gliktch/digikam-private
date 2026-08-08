@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -577,6 +578,7 @@ private Q_SLOTS:
     void testLockAllWaitsForInflightCreation();
     void testLockCancelsInflightUnlock();
     void testLockAllCancelsInflightUnlock();
+    void testItemOperationBorrowsSecretAndSerializesLock();
     void testCallbacksAndBlockingTeardownAreOutOfLock();
     void testDestructorForcesFailedLockTeardown();
 };
@@ -1011,6 +1013,111 @@ void PrivacyCategorySessionTest::testLockAllCancelsInflightUnlock()
 
     QCOMPARE(unlockResult.status, PrivacyCategorySessionStatus::Canceled);
     QVERIFY(lockResults.isEmpty());
+    QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+}
+
+void PrivacyCategorySessionTest::testItemOperationBorrowsSecretAndSerializesLock()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+
+    QCOMPARE(coordinator.runWhileUnlocked(CategoryUuid, [] {}),
+             PrivacyCategoryOperationStatus::CategoryLocked);
+    QCOMPARE(coordinator.unlockCategory(CategoryUuid,
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Unlocked);
+
+    bool secretMatched = false;
+    PrivacyCategorySessionStatus reentrantLockStatus =
+        PrivacyCategorySessionStatus::InvalidRequest;
+    QList<PrivacyCategorySessionResult> reentrantLockAllResults;
+    QCOMPARE(coordinator.runWithUnlockedSecret(
+                 CategoryUuid,
+                 [&](const PrivacyPassword& password)
+                 {
+                     password.withStdinLine([&](const QByteArray& line)
+                     {
+                         secretMatched = (line == QByteArray("secret\n"));
+                         return true;
+                     });
+                     reentrantLockStatus = coordinator.lockCategory(CategoryUuid).status;
+                     reentrantLockAllResults = coordinator.lockAllCategories();
+                 }),
+             PrivacyCategoryOperationStatus::Completed);
+    QVERIFY(secretMatched);
+    QCOMPARE(reentrantLockStatus,
+             PrivacyCategorySessionStatus::TransactionBlocked);
+    QCOMPARE(reentrantLockAllResults.size(), 1);
+    QCOMPARE(reentrantLockAllResults.constFirst().status,
+             PrivacyCategorySessionStatus::TransactionBlocked);
+    QVERIFY(coordinator.ownsSecret(CategoryUuid));
+
+    bool exceptionObserved = false;
+
+    try
+    {
+        coordinator.runWhileUnlocked(CategoryUuid, []
+        {
+            throw std::runtime_error("synthetic callback failure");
+        });
+    }
+    catch (const std::runtime_error&)
+    {
+        exceptionObserved = true;
+    }
+
+    QVERIFY(exceptionObserved);
+    QCOMPARE(coordinator.runWhileUnlocked(CategoryUuid, [] {}),
+             PrivacyCategoryOperationStatus::Completed);
+
+    QSemaphore operationEntered;
+    QSemaphore operationContinue;
+    std::atomic<bool> lockFinished { false };
+    PrivacyCategoryOperationStatus operationStatus =
+        PrivacyCategoryOperationStatus::InvalidRequest;
+    PrivacyCategorySessionResult lockResult;
+
+    std::thread operationThread([&]()
+    {
+        operationStatus = coordinator.runWhileUnlocked(CategoryUuid, [&]()
+        {
+            operationEntered.release();
+            operationContinue.acquire();
+        });
+    });
+
+    const bool entered = operationEntered.tryAcquire(1, 2000);
+
+    if (!entered)
+    {
+        operationContinue.release();
+        operationThread.join();
+        QVERIFY(entered);
+    }
+
+    QCOMPARE(coordinator.runWhileUnlocked(CategoryUuid, [] {}),
+             PrivacyCategoryOperationStatus::TransactionBlocked);
+
+    std::thread lockThread([&]()
+    {
+        lockResult = coordinator.lockCategory(CategoryUuid);
+        lockFinished.store(true);
+    });
+    QTest::qWait(30);
+    QVERIFY(!lockFinished.load());
+    operationContinue.release();
+    operationThread.join();
+    lockThread.join();
+
+    QCOMPARE(operationStatus, PrivacyCategoryOperationStatus::Completed);
+    QCOMPARE(lockResult.status, PrivacyCategorySessionStatus::Locked);
+    QVERIFY(lockFinished.load());
     QVERIFY(!coordinator.ownsSecret(CategoryUuid));
 }
 

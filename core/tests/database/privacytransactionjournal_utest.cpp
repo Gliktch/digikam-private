@@ -32,6 +32,7 @@
 
 // Local includes
 
+#include "privacycontracts.h"
 #include "privacytransactionjournal.h"
 
 using namespace Digikam;
@@ -156,6 +157,7 @@ private Q_SLOTS:
     void testInterruptedCreateOffersOnlyRecoveryCandidate();
     void testIntentAndCandidateClassification();
     void testCorruptionAndFilesystemAttacks();
+    void testRootExpectationInspectionIsReadOnly();
     void testManagedRootMarkerIdentity();
 };
 
@@ -716,6 +718,92 @@ void PrivacyTransactionJournalTest::testCorruptionAndFilesystemAttacks()
         QVERIFY(!store->create(record, nullptr, &error, &detail));
         ::close(socketFd);
     }
+}
+
+void PrivacyTransactionJournalTest::testRootExpectationInspectionIsReadOnly()
+{
+    QTemporaryDir albumDirectory;
+    QVERIFY(albumDirectory.isValid());
+    PrivacyStorageRoot albumRoot;
+    albumRoot.uuid = RootUuid;
+    albumRoot.kind = PrivacyStorageRootKind::AlbumRoot;
+    albumRoot.albumRootId = 42;
+    albumRoot.configuredPath = albumDirectory.path();
+    albumRoot.identityVersion = 1;
+    albumRoot.identityData = PrivacyRootIdentityCodec::encodeAlbumRootV1(
+        42, QStringLiteral("synthetic-album-root"));
+    albumRoot.schemaVersion = 1;
+    albumRoot.createdAt = QDateTime::currentDateTimeUtc();
+    QVERIFY(albumRoot.isValid());
+    PrivacyJournalRootExpectation albumExpectation;
+    PrivacyJournalError error = PrivacyJournalError::None;
+    QString detail;
+    QVERIFY(PrivacyTransactionJournalStore::inspectRootExpectation(
+        albumRoot, &albumExpectation, &error, &detail));
+    QVERIFY(albumExpectation.device != 0);
+    QVERIFY(albumExpectation.inode != 0);
+    QVERIFY(!QFileInfo::exists(albumDirectory.path() +
+                               QStringLiteral("/.digikam-private")));
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+
+    PrivacyStorageRoot managedRoot;
+    managedRoot.uuid = RootUuid;
+    managedRoot.kind = PrivacyStorageRootKind::ManagedStoreRoot;
+    managedRoot.configuredPath = root.path();
+    managedRoot.identityVersion = 1;
+    managedRoot.identityData = PrivacyRootIdentityCodec::encodeManagedRootV1(
+        MarkerUuid);
+    managedRoot.markerUuid = MarkerUuid;
+    managedRoot.schemaVersion = 1;
+    managedRoot.createdAt = QDateTime::currentDateTimeUtc();
+    QVERIFY(managedRoot.isValid());
+
+    PrivacyJournalRootExpectation inspected;
+    QVERIFY(!PrivacyTransactionJournalStore::inspectRootExpectation(
+        managedRoot, &inspected, &error, &detail));
+    QCOMPARE(error, PrivacyJournalError::RootIdentityMismatch);
+    QVERIFY(!QFileInfo::exists(root.path() + QStringLiteral("/.digikam-private")));
+
+    const QString metadata = root.path() + QStringLiteral("/.digikam-private");
+    QVERIFY(QDir().mkpath(metadata));
+    QCOMPARE(::chmod(QFile::encodeName(metadata).constData(), 0700), 0);
+    const QByteArray markerBytes = PrivacyRootIdentityCodec::encodeManagedRootMarkerV1(
+        RootUuid, MarkerUuid);
+    QVERIFY(writeNewFile(metadata + QStringLiteral("/root-marker-v1.json"),
+                         markerBytes,
+                         QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+    const QStringList before = QDir(metadata).entryList(
+        QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+    QVERIFY(PrivacyTransactionJournalStore::inspectRootExpectation(
+        managedRoot, &inspected, &error, &detail));
+    QCOMPARE(inspected.rootUuid, RootUuid);
+    QCOMPARE(inspected.markerUuid, MarkerUuid);
+    QCOMPARE(inspected.identitySha256, digest(managedRoot.identityData));
+    QVERIFY(inspected.device != 0);
+    QVERIFY(inspected.inode != 0);
+    QCOMPARE(QDir(metadata).entryList(QDir::AllEntries | QDir::NoDotAndDotDot,
+                                      QDir::Name),
+             before);
+    QVERIFY(!QFileInfo::exists(metadata + QStringLiteral("/transactions")));
+
+    PrivacyJournalRootExpectation repeated;
+    QVERIFY(PrivacyTransactionJournalStore::inspectRootExpectation(
+        managedRoot, &repeated, &error, &detail));
+    QCOMPARE(repeated.device, inspected.device);
+    QCOMPARE(repeated.inode, inspected.inode);
+    QCOMPARE(repeated.identitySha256, inspected.identitySha256);
+
+    managedRoot.markerUuid = ItemUuid;
+    managedRoot.identityData = PrivacyRootIdentityCodec::encodeManagedRootV1(ItemUuid);
+    QVERIFY(!PrivacyTransactionJournalStore::inspectRootExpectation(
+        managedRoot, &repeated, &error, &detail));
+    QCOMPARE(error, PrivacyJournalError::RootIdentityMismatch);
+    QCOMPARE(QDir(metadata).entryList(QDir::AllEntries | QDir::NoDotAndDotDot,
+                                      QDir::Name),
+             before);
 }
 
 void PrivacyTransactionJournalTest::testManagedRootMarkerIdentity()

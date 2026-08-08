@@ -1357,6 +1357,56 @@ PrivacyTransactionJournalStore::PrivacyTransactionJournalStore(
 PrivacyTransactionJournalStore& PrivacyTransactionJournalStore::operator=(
     PrivacyTransactionJournalStore&& other) noexcept = default;
 
+bool PrivacyTransactionJournalStore::inspectRootExpectation(
+    const PrivacyStorageRoot& root,
+    PrivacyJournalRootExpectation* const expectation,
+    PrivacyJournalError* const error, QString* const detail)
+{
+    if (!expectation)
+    {
+        setError(error, PrivacyJournalError::InvalidRoot, detail,
+                 QStringLiteral("root expectation output is missing"));
+        return false;
+    }
+
+    *expectation = PrivacyJournalRootExpectation();
+
+    if (!root.isValid())
+    {
+        setError(error, PrivacyJournalError::InvalidRoot, detail,
+                 QStringLiteral("persistent root record is invalid"));
+        return false;
+    }
+
+    PrivacyJournalRootExpectation candidate;
+    candidate.rootUuid = root.uuid;
+    candidate.markerUuid = root.markerUuid;
+    candidate.identitySha256 = QCryptographicHash::hash(
+        root.identityData, QCryptographicHash::Sha256);
+
+    std::unique_ptr<PrivacyTransactionJournalStore> store = open(
+        root.configuredPath, candidate, error, detail);
+
+    if (!store)
+    {
+        return false;
+    }
+
+    candidate.device = store->rootDevice();
+    candidate.inode = store->rootInode();
+
+    if ((candidate.device == 0) || (candidate.inode == 0))
+    {
+        setError(error, PrivacyJournalError::RootIdentityMismatch, detail,
+                 QStringLiteral("persistent root identity is incomplete"));
+        return false;
+    }
+
+    *expectation = candidate;
+    setError(error, PrivacyJournalError::None, detail, {});
+    return true;
+}
+
 std::unique_ptr<PrivacyTransactionJournalStore>
 PrivacyTransactionJournalStore::open(
     const QString& absoluteRootPath,

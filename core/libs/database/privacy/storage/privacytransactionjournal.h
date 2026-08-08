@@ -200,6 +200,18 @@ public:
     PrivacyTransactionJournalStore(const PrivacyTransactionJournalStore&)            = delete;
     PrivacyTransactionJournalStore& operator=(const PrivacyTransactionJournalStore&) = delete;
 
+    /**
+     * Resolves one validated persistent root to the exact device/inode and
+     * identity facts required by a transaction. This is read-only: it opens
+     * and verifies the existing root and managed-root marker but never creates
+     * journal directories or files.
+     */
+    static bool inspectRootExpectation(
+        const PrivacyStorageRoot& root,
+        PrivacyJournalRootExpectation* expectation,
+        PrivacyJournalError* error = nullptr,
+        QString* detail = nullptr);
+
     static std::unique_ptr<PrivacyTransactionJournalStore> open(
         const QString& absoluteRootPath,
         const PrivacyJournalRootExpectation& expectation,
