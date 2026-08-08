@@ -42,6 +42,7 @@ LoadingTask::LoadingTask(LoadSaveThread* const thread,
       m_loadingDescription(description),
       m_loadingTaskStatus (loadingTaskStatus)
 {
+    m_loadingDescription.resolveSource();
 }
 
 LoadingTask::LoadingTaskStatus LoadingTask::status() const
@@ -68,7 +69,24 @@ void LoadingTask::execute()
         return;
     }
 
-    DImg img(m_loadingDescription.filePath, this, m_loadingDescription.rawDecodingSettings);
+    DImg img;
+
+    if (!m_loadingDescription.isSourceDenied() &&
+        m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        img = DImg(m_loadingDescription.effectiveFilePath(), this,
+                   m_loadingDescription.rawDecodingSettings);
+
+        if (!m_loadingDescription.sourceResolutionIsCurrent())
+        {
+            img = DImg();
+        }
+        else if (!img.isNull())
+        {
+            img.setAttribute(QLatin1String("originalFilePath"), m_loadingDescription.filePath);
+        }
+    }
+
     m_thread->taskHasFinished();
     m_thread->imageLoaded(m_loadingDescription, img);
 }
@@ -124,6 +142,15 @@ void SharedLoadingTask::execute()
     // send StartedLoadingEvent from each single Task, not via LoadingProcess list
 
     m_thread->imageStartedLoading(m_loadingDescription);
+
+    if (m_loadingDescription.isSourceDenied() ||
+        !m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        m_thread->taskHasFinished();
+        m_thread->imageLoaded(m_loadingDescription, DImg());
+
+        return;
+    }
 
     LoadingCache* const cache = LoadingCache::cache();
     {
@@ -210,7 +237,13 @@ void SharedLoadingTask::execute()
         }
     }
 
-    if (continueQuery() && m_img.isNull())
+    if (!m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        m_img = DImg();
+    }
+
+    if (continueQuery() && m_img.isNull() &&
+        m_loadingDescription.sourceResolutionIsCurrent())
     {
         {
             LoadingCache::CacheLock lock(cache);
@@ -228,11 +261,22 @@ void SharedLoadingTask::execute()
 
         // load image
 
-        m_img = DImg(m_loadingDescription.filePath, this, m_loadingDescription.rawDecodingSettings);
+        m_img = DImg(m_loadingDescription.effectiveFilePath(), this,
+                     m_loadingDescription.rawDecodingSettings);
+
+        if (!m_img.isNull())
+        {
+            m_img.setAttribute(QLatin1String("originalFilePath"), m_loadingDescription.filePath);
+        }
 
         if (continueQuery() && !m_img.isNull())
         {
             postProcess();
+        }
+
+        if (!m_loadingDescription.sourceResolutionIsCurrent())
+        {
+            m_img = DImg();
         }
 
         {
@@ -287,6 +331,11 @@ void SharedLoadingTask::execute()
     }
 
     // following the golden rule to avoid deadlocks, do this when CacheLock is not held
+
+    if (!m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        m_img = DImg();
+    }
 
     if      (continueQuery() && !m_img.isNull())
     {

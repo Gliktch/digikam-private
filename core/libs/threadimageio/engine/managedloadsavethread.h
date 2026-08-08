@@ -136,7 +136,9 @@ public:
     void load(const LoadingDescription& description, LoadingPolicy policy);
 
     /**
-     * @brief Stop and remove tasks filtered by filePath and policy.
+     * @brief Stop and remove tasks filtered by logical filePath and policy.
+     * Source resolution, preview/thumbnail consumer and size do not affect a
+     * path match.
      * If filePath isNull, applies to all file paths.
      */
     void stopLoading(const QString& filePath = QString(),
@@ -203,7 +205,9 @@ private:
                                    LoadingMode loadingMode,
                                    AccessMode accessMode);
 
-    void removeLoadingTasks(const LoadingDescription& description, LoadingTaskFilter filter);
+    void removeLoadingTasks(const LoadingDescription& description,
+                            LoadingTaskFilter filter,
+                            bool logicalPathOnly = false);
 
 private:
 

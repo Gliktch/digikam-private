@@ -60,6 +60,15 @@ void ThumbnailLoadingTask::execute()
         return;
     }
 
+    if (m_loadingDescription.isSourceDenied() ||
+        !m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        m_thread->taskHasFinished();
+        m_thread->thumbnailLoaded(m_loadingDescription, QImage());
+
+        return;
+    }
+
     if (m_loadingDescription.previewParameters.onlyPregenerate())
     {
         setupCreator();
@@ -140,7 +149,13 @@ void ThumbnailLoadingTask::execute()
         }
     }
 
-    if (continueQuery() && m_qimage.isNull())
+    if (!m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        m_qimage = QImage();
+    }
+
+    if (continueQuery() && m_qimage.isNull() &&
+        m_loadingDescription.sourceResolutionIsCurrent())
     {
         {
             LoadingCache::CacheLock lock(cache);
@@ -188,6 +203,11 @@ void ThumbnailLoadingTask::execute()
             postProcess();
         }
 
+        if (!m_loadingDescription.sourceResolutionIsCurrent())
+        {
+            m_qimage = QImage();
+        }
+
         {
             LoadingCache::CacheLock lock(cache);
 
@@ -232,7 +252,7 @@ void ThumbnailLoadingTask::execute()
         }
     }
 
-    if (!continueQuery())
+    if (!continueQuery() || !m_loadingDescription.sourceResolutionIsCurrent())
     {
         m_qimage = QImage();
     }

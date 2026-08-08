@@ -165,13 +165,15 @@ void ThumbnailCreator::storeFreedesktop(const ThumbnailInfo& info, const Thumbna
     }
 }
 
-void ThumbnailCreator::deleteFromDiskFreedesktop(const QString& filePath) const
+bool ThumbnailCreator::deleteFromDiskFreedesktop(const QString& filePath) const
 {
     QFile smallThumb(thumbnailPath(filePath, normalThumbnailDir()));
     QFile largeThumb(thumbnailPath(filePath, largeThumbnailDir()));
 
-    smallThumb.remove();
-    largeThumb.remove();
+    const bool smallRemoved = !smallThumb.exists() || smallThumb.remove();
+    const bool largeRemoved = !largeThumb.exists() || largeThumb.remove();
+
+    return (smallRemoved && largeRemoved);
 }
 
 } // namespace Digikam

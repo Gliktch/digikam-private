@@ -141,6 +141,16 @@ public:
     virtual void load(const LoadingDescription& description);
 
     /**
+     * Stops queued/current loads for one exact logical source snapshot and
+     * waits until a matching execute() call has actually returned. New denied
+     * transition requests with another namespace are not unnecessarily
+     * drained. Must not be called from this object's worker task.
+     */
+    bool stopLoadingAndWaitForSource(const QString& logicalFilePath,
+                                     const QString& cacheNamespace,
+                                     quint64 resolverGeneration);
+
+    /**
      * Append a task to save the image to the task list
      */
     virtual void save(const DImg& image, const QString& filePath, const QString& format);
@@ -232,6 +242,11 @@ protected:
     QList<LoadSaveTask*> m_todo;
 
     LoadSaveTask*        m_currentTask          = nullptr;
+    LoadSaveTask*        m_executingTask        = nullptr;
+    QThread*             m_executionThread      = nullptr;
+
+    /** Woken only after execute() has returned and its stack pixels are gone. */
+    QWaitCondition       m_taskExecutionChanged;
 
     NotificationPolicy   m_notificationPolicy   = NotificationPolicyTimeLimited;
 

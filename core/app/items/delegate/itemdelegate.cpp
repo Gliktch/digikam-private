@@ -43,6 +43,7 @@
 #include "itemmodel.h"
 #include "itemfiltermodel.h"
 #include "itemthumbnailmodel.h"
+#include "privacyitemviewadornment.h"
 #include "thumbnailloadthread.h"
 #include "applicationsettings.h"
 
@@ -391,6 +392,14 @@ void ItemDelegate::paint(QPainter* p, const QStyleOptionViewItem& option, const 
     {
         drawGeolocationIndicator(p, d->coordinatesRect);
     }
+
+    const PrivacyItemViewState privacyState =
+        PrivacyItemViewAdornment::stateForItem(info.id());
+    const QRect privacyRect = actualPixRect.isNull() ? d->pixmapRect
+                                                     : actualPixRect;
+    PrivacyItemViewAdornment::paint(p, privacyRect, privacyState,
+                                    option.palette,
+                                    p->device()->devicePixelRatioF());
 
     if (d->drawFocusFrame)
     {

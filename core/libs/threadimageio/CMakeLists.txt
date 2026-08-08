@@ -26,6 +26,8 @@ set(libthreadimageio_SRCS
 
     ${CMAKE_CURRENT_SOURCE_DIR}/fileio/loadsavethread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fileio/loadingdescription.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fileio/privacycachetransition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fileio/privacysourceresolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fileio/loadingcache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fileio/loadingcacheinterface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fileio/loadsavetask.cpp

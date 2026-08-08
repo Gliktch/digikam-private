@@ -161,6 +161,15 @@ public:
     void deleteThumbnailsFromDisk(const QString& filePath)                          const;
 
     /**
+     * Deletes the exact thumbnail identified by a previously resolved source
+     * snapshot. Privacy lifecycle code must retain this identifier before a
+     * presentation-generation change; a logical path alone cannot reconstruct
+     * an older namespaced persistent-cache identifier.
+     */
+    bool deleteThumbnailsFromDisk(const ThumbnailIdentifier& identifier,
+                                  const QRect& detailRect = QRect())                 const;
+
+    /**
      * Creates a default ThumbnailInfo for the given path using QFileInfo only
      */
     static ThumbnailInfo fileThumbnailInfo(const QString& path);
@@ -211,11 +220,11 @@ private:
     ThumbsDbInfo loadThumbsDbInfo(const ThumbnailInfo& info)                        const;
     ThumbnailImage loadFromDatabase(const ThumbnailInfo& info)                      const;
     bool isInDatabase(const ThumbnailInfo& info)                                    const;
-    void deleteFromDatabase(const ThumbnailInfo& info)                              const;
+    bool deleteFromDatabase(const ThumbnailInfo& info)                              const;
 
     void storeFreedesktop(const ThumbnailInfo& info, const ThumbnailImage& image)   const;
     ThumbnailImage loadFreedesktop(const ThumbnailInfo& info)                       const;
-    void deleteFromDiskFreedesktop(const QString& filePath)                         const;
+    bool deleteFromDiskFreedesktop(const QString& filePath)                         const;
 
     void initThumbnailDirs();
     QString thumbnailPath(const QString& uri)                                       const;

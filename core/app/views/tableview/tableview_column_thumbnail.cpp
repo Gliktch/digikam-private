@@ -27,6 +27,7 @@
 // Local includes
 
 #include "itemfiltermodel.h"
+#include "privacyitemviewadornment.h"
 #include "tableview.h"
 #include "thumbnailloadthread.h"
 #include "thumbnailsize.h"
@@ -86,10 +87,19 @@ QString ColumnThumbnail::getTitle() const
 
 QVariant ColumnThumbnail::data(TableViewModel::Item* const item, const int role) const
 {
-    Q_UNUSED(item)
-    Q_UNUSED(role)
+    if (item &&
+        ((role == Qt::ToolTipRole) || (role == Qt::AccessibleDescriptionRole)))
+    {
+        const ItemInfo info = s->tableViewModel->infoFromItem(item);
 
-    // we do not return any data, but paint(...) something
+        if (!info.isNull())
+        {
+            return PrivacyItemViewAdornment::statusText(
+                       PrivacyItemViewAdornment::stateForItem(info.id()));
+        }
+    }
+
+    // Other roles have no data; this column paints its thumbnail directly.
 
     return QVariant();
 }
@@ -105,6 +115,8 @@ bool ColumnThumbnail::paint(QPainter* const painter, const QStyleOptionViewItem&
 
     if (!info.isNull())
     {
+        const PrivacyItemViewState privacyState =
+            PrivacyItemViewAdornment::stateForItem(info.id());
         QSize availableSize = option.rect.size() - QSize(ThumbnailBorder, ThumbnailBorder);
         QSize imageSize     = info.dimensions();
         int maxSize         = m_thumbnailSize;
@@ -153,8 +165,23 @@ bool ColumnThumbnail::paint(QPainter* const painter, const QStyleOptionViewItem&
                               (alignSize.height() - pixmapSize.height()) / 2);
             startPoint      += option.rect.topLeft();
 
-            painter->drawPixmap(QRect(startPoint, pixmapSize), thumbnail,
+            const QRect thumbnailRect(startPoint, pixmapSize);
+            painter->drawPixmap(thumbnailRect, thumbnail,
                                 QRect(QPoint(0, 0), thumbnail.size()));
+            PrivacyItemViewAdornment::paint(
+                painter, thumbnailRect, privacyState,
+                option.palette, dpr);
+
+            return true;
+        }
+
+        if (privacyState != PrivacyItemViewState::Unprotected)
+        {
+            PrivacyItemViewAdornment::paint(
+                painter, option.rect.adjusted(ThumbnailBorder, ThumbnailBorder,
+                                               -ThumbnailBorder, -ThumbnailBorder),
+                privacyState, option.palette,
+                m_displayWidget->devicePixelRatioF());
 
             return true;
         }

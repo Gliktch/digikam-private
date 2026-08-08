@@ -36,6 +36,7 @@
 #include "itemselectionoverlay.h"
 #include "itemviewtooltip.h"
 #include "loadingcacheinterface.h"
+#include "privacyitemviewadornment.h"
 #include "thumbnailloadthread.h"
 #include "tooltipfiller.h"
 #include "itemfacedelegate.h"
@@ -65,7 +66,11 @@ protected:
     {
         ItemInfo info = ItemModel::retrieveItemInfo(currentIndex());
 
-        return ToolTipFiller::imageInfoTipContents(info);
+        const PrivacyItemViewState privacyState =
+            PrivacyItemViewAdornment::stateForItem(info.id());
+
+        return PrivacyItemViewAdornment::withStatusToolTip(
+                   ToolTipFiller::imageInfoTipContents(info), privacyState);
     }
 };
 

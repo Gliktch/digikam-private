@@ -11,7 +11,24 @@ include_directories(
     $<TARGET_PROPERTY:Qt${QT_VERSION_MAJOR}::Test,INTERFACE_INCLUDE_DIRECTORIES>
 
     ${CMAKE_SOURCE_DIR}/core/app/items/utils
+    ${CMAKE_SOURCE_DIR}/core/app/items/delegate
     ${CMAKE_SOURCE_DIR}/core/app/utils
+)
+
+#------------------------------------------------------------------------
+
+ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyitemviewadornment_utest.cpp
+
+              NAME_PREFIX
+
+              "digikam-"
+
+              LINK_LIBRARIES
+
+              digikamcore
+              digikamdatabase
+              digikamgui
+              ${COMMON_TEST_LINK}
 )
 
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/timelapsefilenamematch_utest.cpp

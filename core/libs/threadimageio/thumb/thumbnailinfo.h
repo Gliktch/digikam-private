@@ -18,6 +18,7 @@
 
 #include <QDateTime>
 #include <QString>
+#include <QtGlobal>
 
 // Local includes
 
@@ -47,6 +48,29 @@ public:
      * The database id, which needs to be translated to uniqueHash + fileSize
      */
     qlonglong id = 0;
+
+    /**
+     * Optional decoder source selected for this logical item. These fields are
+     * populated only by the low-level privacy source resolver; ordinary
+     * identifiers retain their legacy behavior.
+     */
+    QString   sourceFilePath;
+    QString   cacheNamespace;
+    quint64   sourceResolverGeneration = 0;
+    bool      sourceResolutionApplied  = false;
+    bool      sourceAccessDenied       = false;
+    bool      persistentCacheAllowed   = true;
+
+    QString effectiveFilePath() const
+    {
+        if (sourceAccessDenied)
+        {
+            return QString();
+        }
+
+        return sourceFilePath.isEmpty() ? filePath
+                                        : sourceFilePath;
+    }
 };
 
 class DIGIKAM_EXPORT ThumbnailInfo : public ThumbnailIdentifier

@@ -56,6 +56,18 @@ void PreviewLoadingTask::execute()
         m_thread->imageStartedLoading(m_loadingDescription);
     }
 
+    if (m_loadingDescription.isSourceDenied() ||
+        !m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        if (m_thread)
+        {
+            m_thread->taskHasFinished();
+            m_thread->imageLoaded(m_loadingDescription, DImg());
+        }
+
+        return;
+    }
+
     // Check if preview is in cache first.
 
     LoadingCache* const cache = LoadingCache::cache();
@@ -148,7 +160,13 @@ void PreviewLoadingTask::execute()
         }
     }
 
-    if (continueQuery() && m_img.isNull())
+    if (!m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        m_img = DImg();
+    }
+
+    if (continueQuery() && m_img.isNull() &&
+        m_loadingDescription.sourceResolutionIsCurrent())
     {
         {
             LoadingCache::CacheLock lock(cache);
@@ -166,12 +184,12 @@ void PreviewLoadingTask::execute()
 
         // Preview is not in cache, we will load image from file.
 
-        DImg::FORMAT format      = DImg::fileFormat(m_loadingDescription.filePath);
+        DImg::FORMAT format      = DImg::fileFormat(m_loadingDescription.effectiveFilePath());
         m_fromRawEmbeddedPreview = false;
 
         if (format == DImg::RAW)
         {
-            MetaEnginePreviews previews(m_loadingDescription.filePath);
+            MetaEnginePreviews previews(m_loadingDescription.effectiveFilePath());
 
             // Check original image size using Exiv2.
 
@@ -183,7 +201,7 @@ void PreviewLoadingTask::execute()
             {
                 DRawInfo container;
 
-                if (DRawDecoder::rawFileIdentify(container, m_loadingDescription.filePath))
+                if (DRawDecoder::rawFileIdentify(container, m_loadingDescription.effectiveFilePath()))
                 {
                     originalSize = container.imageSize;
                 }
@@ -288,7 +306,7 @@ void PreviewLoadingTask::execute()
         {
             m_fromRawEmbeddedPreview = false;
 
-            qCDebug(DIGIKAM_GENERAL_LOG) << "Try to get preview from" << m_loadingDescription.filePath;
+            qCDebug(DIGIKAM_GENERAL_LOG) << "Try to get preview from" << m_loadingDescription.effectiveFilePath();
             qCDebug(DIGIKAM_GENERAL_LOG) << "Preview quality: " << m_loadingDescription.previewParameters.previewSettings.quality;
 
             bool isFast = (m_loadingDescription.previewParameters.previewSettings.quality == PreviewSettings::FastPreview);
@@ -311,13 +329,15 @@ void PreviewLoadingTask::execute()
                         m_img.setAttribute(QLatin1String("scaledLoadingSize"), m_loadingDescription.previewParameters.size);
                     }
 
-                    m_img.load(m_loadingDescription.filePath, this, m_loadingDescription.rawDecodingSettings);
+                    m_img.load(m_loadingDescription.effectiveFilePath(), this,
+                               m_loadingDescription.rawDecodingSettings);
                     break;
                 }
 
                 case PreviewSettings::HighQualityPreview:
                 {
-                    m_img.load(m_loadingDescription.filePath, this, m_loadingDescription.rawDecodingSettings);
+                    m_img.load(m_loadingDescription.effectiveFilePath(), this,
+                               m_loadingDescription.rawDecodingSettings);
                     break;
                 }
             }
@@ -325,6 +345,8 @@ void PreviewLoadingTask::execute()
 
         if (continueQuery() && !m_img.isNull())
         {
+            m_img.setAttribute(QLatin1String("originalFilePath"), m_loadingDescription.filePath);
+
             if (needToScale())
             {
                 QSize scaledSize = m_img.size();
@@ -336,13 +358,18 @@ void PreviewLoadingTask::execute()
 
             if (MetaEngineSettings::instance()->settings().exifRotate)
             {
-                m_img.exifRotate(m_loadingDescription.filePath);
+                m_img.exifRotate(m_loadingDescription.effectiveFilePath());
             }
 
             if (needsPostProcessing())
             {
                 postProcess();
             }
+        }
+
+        if (!m_loadingDescription.sourceResolutionIsCurrent())
+        {
+            m_img = DImg();
         }
 
         {
@@ -397,6 +424,11 @@ void PreviewLoadingTask::execute()
     }
 
     // following the golden rule to avoid deadlocks, do this when CacheLock is not held
+
+    if (!m_loadingDescription.sourceResolutionIsCurrent())
+    {
+        m_img = DImg();
+    }
 
     if (continueQuery() && !m_img.isNull())
     {
@@ -499,7 +531,7 @@ bool PreviewLoadingTask::loadLibRawPreview(int sizeLimit)
     }
 
     QImage rawPreview;
-    DRawDecoder::loadEmbeddedPreview(rawPreview, m_loadingDescription.filePath);
+    DRawDecoder::loadEmbeddedPreview(rawPreview, m_loadingDescription.effectiveFilePath());
 
     if (!rawPreview.isNull() &&
         ((sizeLimit == -1) || (qMax(rawPreview.width(), rawPreview.height()) >= sizeLimit)))
@@ -520,7 +552,7 @@ bool PreviewLoadingTask::loadHalfSizeRaw()
         return false;
     }
 
-    DRawDecoder::loadHalfPreview(m_qimage, m_loadingDescription.filePath);
+    DRawDecoder::loadHalfPreview(m_qimage, m_loadingDescription.effectiveFilePath());
 
     return (!m_qimage.isNull());
 }
@@ -532,7 +564,7 @@ bool PreviewLoadingTask::loadFullSizeRaw()
         return false;
     }
 
-    DRawDecoder::loadFullImage(m_qimage, m_loadingDescription.filePath);
+    DRawDecoder::loadFullImage(m_qimage, m_loadingDescription.effectiveFilePath());
 
     return (!m_qimage.isNull());
 }
@@ -547,12 +579,12 @@ void PreviewLoadingTask::convertQImageToDImg()
     // convert from QImage
 
     m_img               = DImg(m_qimage);
-    DImg::FORMAT format = DImg::fileFormat(m_loadingDescription.filePath);
+    DImg::FORMAT format = DImg::fileFormat(m_loadingDescription.effectiveFilePath());
 
     m_img.setAttribute(QLatin1String("detectedFileFormat"), format);
     m_img.setAttribute(QLatin1String("originalFilePath"),   m_loadingDescription.filePath);
 
-    QScopedPointer<DMetadata> metadata(new DMetadata(m_loadingDescription.filePath));
+    QScopedPointer<DMetadata> metadata(new DMetadata(m_loadingDescription.effectiveFilePath()));
     QSize orgSize = metadata->getPixelSize();
 
     if ((format == DImg::RAW) && LoadSaveThread::infoProvider())
@@ -600,7 +632,7 @@ void PreviewLoadingTask::convertQImageToDImg()
 
 bool PreviewLoadingTask::loadImagePreview(int sizeLimit)
 {
-    QScopedPointer<DMetadata> metadata(new DMetadata(m_loadingDescription.filePath));
+    QScopedPointer<DMetadata> metadata(new DMetadata(m_loadingDescription.effectiveFilePath()));
 
     QImage previewImage;
 
@@ -617,7 +649,8 @@ bool PreviewLoadingTask::loadImagePreview(int sizeLimit)
         }
     }
 
-    qDebug(DIGIKAM_GENERAL_LOG) << "Try to load DImg preview from:" << m_loadingDescription.filePath;
+    qDebug(DIGIKAM_GENERAL_LOG) << "Try to load DImg preview from:"
+                                << m_loadingDescription.effectiveFilePath();
 
     DImg img;
     DImgLoader::LoadFlags loadFlags = DImgLoader::LoadItemInfo |
@@ -625,7 +658,7 @@ bool PreviewLoadingTask::loadImagePreview(int sizeLimit)
                                       DImgLoader::LoadICCData  |
                                       DImgLoader::LoadPreview;
 
-    if (img.load(m_loadingDescription.filePath, loadFlags, this))
+    if (img.load(m_loadingDescription.effectiveFilePath(), loadFlags, this))
     {
         if (
             (sizeLimit == -1) ||

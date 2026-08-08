@@ -301,7 +301,7 @@ ThumbnailImage ThumbnailCreator::loadFromDatabase(const ThumbnailInfo& info) con
     return image;
 }
 
-void ThumbnailCreator::deleteFromDatabase(const ThumbnailInfo& info) const
+bool ThumbnailCreator::deleteFromDatabase(const ThumbnailInfo& info) const
 {
     ThumbsDbAccess access;
     BdEngineBackend::QueryState lastQueryState = BdEngineBackend::QueryState(BdEngineBackend::ConnectionError);
@@ -315,7 +315,16 @@ void ThumbnailCreator::deleteFromDatabase(const ThumbnailInfo& info) const
             continue;
         }
 
-        if (!info.uniqueHash.isNull())
+        if (!info.customIdentifier.isNull())
+        {
+            lastQueryState = access.db()->removeByCustomIdentifier(info.customIdentifier);
+
+            if (BdEngineBackend::NoErrors != lastQueryState)
+            {
+                continue;
+            }
+        }
+        else if (!info.uniqueHash.isNull())
         {
             lastQueryState = access.db()->removeByUniqueHash(info.uniqueHash, info.fileSize);
 
@@ -325,7 +334,7 @@ void ThumbnailCreator::deleteFromDatabase(const ThumbnailInfo& info) const
             }
         }
 
-        if (!info.filePath.isNull())
+        if (info.customIdentifier.isNull() && !info.filePath.isNull())
         {
             lastQueryState = access.db()->removeByFilePath(info.filePath);
 
@@ -342,6 +351,8 @@ void ThumbnailCreator::deleteFromDatabase(const ThumbnailInfo& info) const
             continue;
         }
     }
+
+    return (BdEngineBackend::NoErrors == lastQueryState);
 }
 
 } // namespace Digikam

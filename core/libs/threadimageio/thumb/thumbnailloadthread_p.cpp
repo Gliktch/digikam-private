@@ -48,6 +48,12 @@ int ThumbnailLoadThread::Private::thumbnailSizeForPixmapSize(int pixmapSize) con
 
 bool ThumbnailLoadThread::Private::checkDescription(const LoadingDescription& description)
 {
+    if (description.isSourceDenied() ||
+        !description.sourceResolutionIsCurrent())
+    {
+        return true;
+    }
+
     QString cacheKey = description.cacheKey();
 
     {
@@ -82,6 +88,8 @@ QList<LoadingDescription> ThumbnailLoadThread::Private::makeDescriptions(const Q
         {
             description.filePath                           = identifier.filePath;
             description.previewParameters.storageReference = identifier.id;
+            description.resetSourceResolution();
+            description.resolveSource();
 
             if (!checkDescription(description))
             {
@@ -108,6 +116,8 @@ QList<LoadingDescription> ThumbnailLoadThread::Private::makeDescriptions(const Q
         {
             description.filePath                           = pair.first.filePath;
             description.previewParameters.storageReference = pair.first.id;
+            description.resetSourceResolution();
+            description.resolveSource();
 
             if (!checkDescription(description))
             {

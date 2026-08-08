@@ -91,7 +91,10 @@ void LoadingCache::Private::mapImageFilePath(const QString& filePath, const QStr
 
 void LoadingCache::Private::mapThumbnailFilePath(const QString& filePath, const QString& cacheKey)
 {
-    if (thumbnailFilePathHash.size() > (5 * (thumbnailImageCache.size() + thumbnailPixmapCache.size())))
+    if (thumbnailFilePathHash.size() >
+        (5 * (thumbnailImageCache.size() +
+              thumbnailPixmapCache.size() +
+              bufferedTPixmapCache.size())))
     {
         cleanUpThumbnailFilePathHash();
     }
@@ -126,6 +129,7 @@ void LoadingCache::Private::cleanUpThumbnailFilePathHash()
 
     keys += thumbnailImageCache.keys();
     keys += thumbnailPixmapCache.keys();
+    keys += bufferedTPixmapCache.keys();
 
     QMultiHash<QString, QString>::iterator it;
 
@@ -218,9 +222,36 @@ void LoadingCache::removeImage(const QString& cacheKey)
     d->imageCache.remove(cacheKey);
 }
 
+void LoadingCache::removeImagesForFilePath(const QString& filePath)
+{
+    if (filePath.isEmpty())
+    {
+        return;
+    }
+
+    const QList<QString> keys = d->imageFilePathHash.values(filePath);
+
+    for (const QString& cacheKey : keys)
+    {
+        d->imageCache.remove(cacheKey);
+    }
+
+    d->imageFilePathHash.remove(filePath);
+    d->fileWatch()->removeImage(filePath);
+}
+
 void LoadingCache::removeImages()
 {
     d->imageCache.clear();
+
+    const QList<QString> filePaths = d->imageFilePathHash.keys();
+
+    for (const QString& filePath : filePaths)
+    {
+        d->fileWatch()->removeImage(filePath);
+    }
+
+    d->imageFilePathHash.clear();
 }
 
 bool LoadingCache::isCacheable(const DImg& img) const
@@ -313,12 +344,32 @@ void LoadingCache::removeThumbnail(const QString& cacheKey)
 {
     d->thumbnailImageCache.remove(cacheKey);
     d->thumbnailPixmapCache.remove(cacheKey);
+    d->bufferedTPixmapCache.remove(cacheKey);
+}
+
+void LoadingCache::removeThumbnailsForFilePath(const QString& filePath)
+{
+    if (filePath.isEmpty())
+    {
+        return;
+    }
+
+    const QList<QString> keys = d->thumbnailFilePathHash.values(filePath);
+
+    for (const QString& cacheKey : keys)
+    {
+        removeThumbnail(cacheKey);
+    }
+
+    d->thumbnailFilePathHash.remove(filePath);
 }
 
 void LoadingCache::removeThumbnails()
 {
     d->thumbnailImageCache.clear();
     d->thumbnailPixmapCache.clear();
+    d->bufferedTPixmapCache.clear();
+    d->thumbnailFilePathHash.clear();
 }
 
 void LoadingCache::setThumbnailCacheSize(int numberOfQImages, int numberOfQPixmaps)

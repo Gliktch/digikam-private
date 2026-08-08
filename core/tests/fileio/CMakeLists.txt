@@ -52,6 +52,21 @@ ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/loadsavethread_utest.cpp
 
 #------------------------------------------------------------------------
 
+ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacysourceresolver_utest.cpp
+
+              NAME_PREFIX
+
+              "digikam-"
+
+              LINK_LIBRARIES
+
+              digikamcore
+
+              ${COMMON_TEST_LINK}
+)
+
+#------------------------------------------------------------------------
+
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/loadpgfdata_utest.cpp
 
               NAME_PREFIX

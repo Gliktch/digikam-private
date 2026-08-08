@@ -143,7 +143,8 @@ QString LoadingDescription::cacheKey() const
         QString fileRef = filePath.isEmpty() ? (QLatin1String("id:/") + previewParameters.storageReference.toString())
                                              : filePath;
 
-        return (fileRef + QLatin1String("-thumbnail-") + QString::number(previewParameters.size));
+        return namespacedCacheKey(fileRef + QLatin1String("-thumbnail-") +
+                                  QString::number(previewParameters.size));
     }
     else if (previewParameters.type == PreviewParameters::DetailThumbnail)
     {
@@ -156,7 +157,8 @@ QString LoadingDescription::cacheKey() const
                              .arg(rect.width())
                              .arg(rect.height());
 
-        return (fileRef + QLatin1String("-thumbnail-") + rectString + QString::number(previewParameters.size));
+        return namespacedCacheKey(fileRef + QLatin1String("-thumbnail-") + rectString +
+                                  QString::number(previewParameters.size));
     }
 
     // DImg loading
@@ -169,11 +171,11 @@ QString LoadingDescription::cacheKey() const
 
         if      (rawDecodingHint == RawDecodingGlobalSettings)
         {
-            return (filePath + QLatin1String("-globalraw"));
+            return namespacedCacheKey(filePath + QLatin1String("-globalraw"));
         }
         else if (rawDecodingHint == RawDecodingCustomSettings)
         {
-            return (filePath + QLatin1String("-customraw"));
+            return namespacedCacheKey(filePath + QLatin1String("-customraw"));
         }
     }
     else
@@ -182,11 +184,12 @@ QString LoadingDescription::cacheKey() const
 
         if (previewParameters.size)
         {
-            return (filePath + QLatin1String("-previewImage-") + QString::number(previewParameters.size));
+            return namespacedCacheKey(filePath + QLatin1String("-previewImage-") +
+                                      QString::number(previewParameters.size));
         }
         else
         {
-            return (filePath + QLatin1String("-previewImage"));
+            return namespacedCacheKey(filePath + QLatin1String("-previewImage"));
         }
     }
 
@@ -211,7 +214,7 @@ QString LoadingDescription::cacheKey() const
         }
     }
 
-    return (filePath + suffix);
+    return namespacedCacheKey(filePath + suffix);
 }
 
 QStringList LoadingDescription::lookupCacheKeys() const
@@ -290,7 +293,7 @@ QStringList LoadingDescription::lookupCacheKeys() const
         cacheKeys << filePath + QLatin1String("-customraw");
     }
 
-    return cacheKeys;
+    return namespacedCacheKeys(cacheKeys);
 }
 
 bool LoadingDescription::needCheckRawDecoding() const
@@ -309,10 +312,13 @@ bool LoadingDescription::isReducedVersion() const
 
 bool LoadingDescription::operator==(const LoadingDescription& other) const
 {
-    return ((filePath                 == other.filePath)                   &&
-            (rawDecodingSettings      == other.rawDecodingSettings)        &&
-            (previewParameters        == other.previewParameters)          &&
-            (postProcessingParameters == other.postProcessingParameters));
+    return (equalsIgnoringSourceResolution(other)                          &&
+            (m_sourceDisposition      == other.m_sourceDisposition)        &&
+            (m_sourceCachePolicy      == other.m_sourceCachePolicy)        &&
+            ((!m_sourceResolutionApplied || !other.m_sourceResolutionApplied) ||
+             (m_sourceResolverGeneration == other.m_sourceResolverGeneration)) &&
+            (m_sourceFilePath         == other.m_sourceFilePath)           &&
+            (m_privacyCacheNamespace  == other.m_privacyCacheNamespace));
 }
 
 bool LoadingDescription::operator!=(const LoadingDescription& other) const
@@ -322,7 +328,21 @@ bool LoadingDescription::operator!=(const LoadingDescription& other) const
 
 bool LoadingDescription::equalsIgnoreReducedVersion(const LoadingDescription& other) const
 {
-    return (filePath == other.filePath);
+    return ((filePath                == other.filePath)                &&
+            (m_sourceDisposition     == other.m_sourceDisposition)     &&
+            (m_sourceCachePolicy     == other.m_sourceCachePolicy)     &&
+            ((!m_sourceResolutionApplied || !other.m_sourceResolutionApplied) ||
+             (m_sourceResolverGeneration == other.m_sourceResolverGeneration)) &&
+            (m_sourceFilePath        == other.m_sourceFilePath)        &&
+            (m_privacyCacheNamespace == other.m_privacyCacheNamespace));
+}
+
+bool LoadingDescription::equalsIgnoringSourceResolution(const LoadingDescription& other) const
+{
+    return ((filePath                 == other.filePath)                   &&
+            (rawDecodingSettings      == other.rawDecodingSettings)        &&
+            (previewParameters        == other.previewParameters)          &&
+            (postProcessingParameters == other.postProcessingParameters));
 }
 
 bool LoadingDescription::equalsOrBetterThan(const LoadingDescription& other) const
@@ -336,7 +356,13 @@ bool LoadingDescription::equalsOrBetterThan(const LoadingDescription& other) con
     fast.optimizeTimeLoading();
 
     return (
-            (filePath == other.filePath) &&
+            (filePath                == other.filePath)                &&
+            (m_sourceDisposition     == other.m_sourceDisposition)     &&
+            (m_sourceCachePolicy     == other.m_sourceCachePolicy)     &&
+            ((!m_sourceResolutionApplied || !other.m_sourceResolutionApplied) ||
+             (m_sourceResolverGeneration == other.m_sourceResolverGeneration)) &&
+            (m_sourceFilePath        == other.m_sourceFilePath)        &&
+            (m_privacyCacheNamespace == other.m_privacyCacheNamespace) &&
             (
                 (rawDecodingSettings == other.rawDecodingSettings) ||
                 (fast                == other.rawDecodingSettings)
@@ -370,8 +396,171 @@ ThumbnailIdentifier LoadingDescription::thumbnailIdentifier() const
 
     id.filePath = filePath;
     id.id       = previewParameters.storageReference.toLongLong();
+    id.sourceFilePath      = m_sourceFilePath;
+    id.cacheNamespace      = m_privacyCacheNamespace;
+    id.sourceResolverGeneration = m_sourceResolverGeneration;
+    id.sourceResolutionApplied = m_sourceResolutionApplied;
+    id.sourceAccessDenied  = isSourceDenied();
+    // Detail/crop identifiers include an arbitrary rectangle. There is no
+    // reverse logical-owner index in either persistent thumbnail backend, so
+    // old privacy generations could not be enumerated safely for deletion.
+    // Keep handled detail derivatives memory-only; locked primary proxies may
+    // still use the persistent cache and are addressable by their prior id.
+
+    id.persistentCacheAllowed = persistentCacheAllowed() &&
+                                ((previewParameters.type != PreviewParameters::DetailThumbnail) ||
+                                 m_privacyCacheNamespace.isEmpty());
 
     return id;
+}
+
+void LoadingDescription::resolveSource()
+{
+    if (m_sourceResolutionApplied)
+    {
+        return;
+    }
+
+    PrivacySourceRequest request;
+    request.logicalFilePath = filePath;
+    request.itemReference   = previewParameters.storageReference;
+
+    if      (isThumbnail())
+    {
+        request.consumer = PrivacySourceRequest::Thumbnail;
+    }
+    else if (isPreviewImage())
+    {
+        request.consumer = PrivacySourceRequest::Preview;
+    }
+    else
+    {
+        request.consumer = PrivacySourceRequest::Image;
+    }
+
+    const PrivacySourceResult result = PrivacySourceResolver::resolve(request);
+
+    m_sourceResolutionApplied = true;
+    m_sourceDisposition       = result.disposition;
+    m_sourceCachePolicy       = result.cachePolicy;
+    m_sourceResolverGeneration = result.resolverGeneration;
+    m_sourceFilePath          = result.physicalFilePath;
+    m_privacyCacheNamespace   = result.cacheNamespace;
+}
+
+void LoadingDescription::resetSourceResolution()
+{
+    m_sourceResolutionApplied = false;
+    m_sourceDisposition       = PrivacySourceResult::NotHandled;
+    m_sourceCachePolicy       = PrivacySourceResult::Persistent;
+    m_sourceResolverGeneration = 0;
+    m_sourceFilePath.clear();
+    m_privacyCacheNamespace.clear();
+}
+
+QString LoadingDescription::effectiveFilePath() const
+{
+    if (isSourceDenied())
+    {
+        return QString();
+    }
+
+    if (m_sourceDisposition == PrivacySourceResult::Resolved)
+    {
+        return m_sourceFilePath;
+    }
+
+    return filePath;
+}
+
+bool LoadingDescription::isSourceDenied() const
+{
+    return (m_sourceDisposition == PrivacySourceResult::Denied);
+}
+
+bool LoadingDescription::sourceResolutionApplied() const
+{
+    return m_sourceResolutionApplied;
+}
+
+bool LoadingDescription::sourceResolutionIsCurrent() const
+{
+    if (!m_sourceResolutionApplied)
+    {
+        return false;
+    }
+
+    PrivacySourceRequest request;
+    request.logicalFilePath = filePath;
+    request.itemReference   = previewParameters.storageReference;
+
+    if      (isThumbnail())
+    {
+        request.consumer = PrivacySourceRequest::Thumbnail;
+    }
+    else if (isPreviewImage())
+    {
+        request.consumer = PrivacySourceRequest::Preview;
+    }
+    else
+    {
+        request.consumer = PrivacySourceRequest::Image;
+    }
+
+    const PrivacySourceResult current = PrivacySourceResolver::resolve(request);
+
+    return ((m_sourceDisposition      == current.disposition)      &&
+            (m_sourceCachePolicy      == current.cachePolicy)      &&
+            (m_sourceResolverGeneration == current.resolverGeneration) &&
+            (m_sourceFilePath         == current.physicalFilePath) &&
+            (m_privacyCacheNamespace  == current.cacheNamespace));
+}
+
+bool LoadingDescription::persistentCacheAllowed() const
+{
+    return (m_sourceCachePolicy == PrivacySourceResult::Persistent);
+}
+
+QString LoadingDescription::privacyCacheNamespace() const
+{
+    return m_privacyCacheNamespace;
+}
+
+quint64 LoadingDescription::sourceResolverGeneration() const
+{
+    return m_sourceResolverGeneration;
+}
+
+QString LoadingDescription::namespacedCacheKey(const QString& legacyKey) const
+{
+    if (m_privacyCacheNamespace.isEmpty())
+    {
+        return legacyKey;
+    }
+
+    return (QLatin1String("digikam-private-cache:/v1/") +
+            PrivacySourceResolver::cacheNamespaceDigest(
+                m_privacyCacheNamespace + QLatin1Char('\0') +
+                QString::number(m_sourceResolverGeneration)) +
+            QLatin1Char('/') + legacyKey);
+}
+
+QStringList LoadingDescription::namespacedCacheKeys(const QStringList& legacyKeys) const
+{
+    if (m_privacyCacheNamespace.isEmpty())
+    {
+        return legacyKeys;
+    }
+
+    QStringList keys;
+    keys.reserve(legacyKeys.size());
+
+    for (const QString& key : legacyKeys)
+    {
+        keys << namespacedCacheKey(key);
+    }
+
+    return keys;
 }
 
 QStringList LoadingDescription::possibleCacheKeys(const QString& filePath)

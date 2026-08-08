@@ -183,13 +183,27 @@ void ManagedLoadSaveThread::load(const LoadingDescription& description, LoadingM
 void ManagedLoadSaveThread::load(const LoadingDescription& description, LoadingMode loadingMode,
                                  LoadingPolicy policy, AccessMode accessMode)
 {
+    LoadingDescription resolvedDescription = description;
+    resolvedDescription.resolveSource();
+
+    if (!resolvedDescription.sourceResolutionIsCurrent())
+    {
+        return;
+    }
+
     QMutexLocker lock(threadMutex());
+
+    if (!resolvedDescription.sourceResolutionIsCurrent())
+    {
+        return;
+    }
+
     LoadingTask* loadingTask  = nullptr;
     LoadingTask* existingTask = nullptr;
 
     if ((policy != LoadingPolicySimplePrepend) && (policy != LoadingPolicySimpleAppend))
     {
-        existingTask = findExistingTask(description);
+        existingTask = findExistingTask(resolvedDescription);
     }
 
     //qCDebug(DIGIKAM_GENERAL_LOG) << "ManagedLoadSaveThread::load " << description.filePath << ", policy " << policy;
@@ -243,7 +257,7 @@ void ManagedLoadSaveThread::load(const LoadingDescription& description, LoadingM
                 break;
             }
 
-            m_todo.append(createLoadingTask(description, false, loadingMode, accessMode));
+            m_todo.append(createLoadingTask(resolvedDescription, false, loadingMode, accessMode));
             break;
         }
 
@@ -271,13 +285,13 @@ void ManagedLoadSaveThread::load(const LoadingDescription& description, LoadingM
                 break;
             }
 
-            m_todo.prepend(createLoadingTask(description, false, loadingMode, accessMode));
+            m_todo.prepend(createLoadingTask(resolvedDescription, false, loadingMode, accessMode));
             break;
         }
 
         case LoadingPolicySimplePrepend:
         {
-            m_todo.prepend(createLoadingTask(description, false, loadingMode, accessMode));
+            m_todo.prepend(createLoadingTask(resolvedDescription, false, loadingMode, accessMode));
             break;
         }
 
@@ -315,13 +329,13 @@ void ManagedLoadSaveThread::load(const LoadingDescription& description, LoadingM
                 }
             }
 
-            m_todo.insert(i, createLoadingTask(description, false, loadingMode, accessMode));
+            m_todo.insert(i, createLoadingTask(resolvedDescription, false, loadingMode, accessMode));
             break;
         }
 
         case LoadingPolicySimpleAppend:
         {
-            m_todo.append(createLoadingTask(description, false, loadingMode, accessMode));
+            m_todo.append(createLoadingTask(resolvedDescription, false, loadingMode, accessMode));
             break;
         }
 
@@ -336,7 +350,7 @@ void ManagedLoadSaveThread::load(const LoadingDescription& description, LoadingM
                 break;
             }
 
-            m_todo.append(createLoadingTask(description, true, loadingMode, accessMode));
+            m_todo.append(createLoadingTask(resolvedDescription, true, loadingMode, accessMode));
             break;
         }
     }
@@ -357,8 +371,22 @@ void ManagedLoadSaveThread::loadThumbnail(const LoadingDescription& description)
     // Thumbnail threads typically only support thumbnail tasks,
     // so no need to differentiate with normal loading tasks.
 
+    LoadingDescription resolvedDescription = description;
+    resolvedDescription.resolveSource();
+
+    if (!resolvedDescription.sourceResolutionIsCurrent())
+    {
+        return;
+    }
+
     QMutexLocker lock(threadMutex());
-    LoadingTask* const existingTask = findExistingTask(description);
+
+    if (!resolvedDescription.sourceResolutionIsCurrent())
+    {
+        return;
+    }
+
+    LoadingTask* const existingTask = findExistingTask(resolvedDescription);
 
     // reuse task if it exists
 
@@ -370,15 +398,29 @@ void ManagedLoadSaveThread::loadThumbnail(const LoadingDescription& description)
 
     // append new loading task
 
-    m_todo.prepend(new ThumbnailLoadingTask(this, description));
+    m_todo.prepend(new ThumbnailLoadingTask(this, resolvedDescription));
 
     start(lock);
 }
 
 void ManagedLoadSaveThread::preloadThumbnail(const LoadingDescription& description)
 {
+    LoadingDescription resolvedDescription = description;
+    resolvedDescription.resolveSource();
+
+    if (!resolvedDescription.sourceResolutionIsCurrent())
+    {
+        return;
+    }
+
     QMutexLocker lock(threadMutex());
-    const LoadingTask* const existingTask = findExistingTask(description);
+
+    if (!resolvedDescription.sourceResolutionIsCurrent())
+    {
+        return;
+    }
+
+    const LoadingTask* const existingTask = findExistingTask(resolvedDescription);
 
     // reuse task if it exists
 
@@ -389,7 +431,7 @@ void ManagedLoadSaveThread::preloadThumbnail(const LoadingDescription& descripti
 
     // create new loading task
 
-    ThumbnailLoadingTask* const task = new ThumbnailLoadingTask(this, description);
+    ThumbnailLoadingTask* const task = new ThumbnailLoadingTask(this, resolvedDescription);
 
     // mark as preload task
 
@@ -413,7 +455,15 @@ void ManagedLoadSaveThread::preloadThumbnailGroup(const QList<LoadingDescription
 
     for (const LoadingDescription& description : std::as_const(descriptions))
     {
-        const LoadingTask* const existingTask = findExistingTask(description);
+        LoadingDescription resolvedDescription = description;
+        resolvedDescription.resolveSource();
+
+        if (!resolvedDescription.sourceResolutionIsCurrent())
+        {
+            continue;
+        }
+
+        const LoadingTask* const existingTask = findExistingTask(resolvedDescription);
 
         // reuse task if it exists
 
@@ -424,7 +474,7 @@ void ManagedLoadSaveThread::preloadThumbnailGroup(const QList<LoadingDescription
 
         // create new loading task
 
-        ThumbnailLoadingTask* const task = new ThumbnailLoadingTask(this, description);
+        ThumbnailLoadingTask* const task = new ThumbnailLoadingTask(this, resolvedDescription);
 
         // mark as preload task
 
@@ -458,7 +508,15 @@ void ManagedLoadSaveThread::prependThumbnailGroup(const QList<LoadingDescription
 
     for (int i = 0 ; i < descriptions.size() ; ++i)
     {
-        LoadingTask* const existingTask = findExistingTask(descriptions.at(i));
+        LoadingDescription resolvedDescription = descriptions.at(i);
+        resolvedDescription.resolveSource();
+
+        if (!resolvedDescription.sourceResolutionIsCurrent())
+        {
+            continue;
+        }
+
+        LoadingTask* const existingTask = findExistingTask(resolvedDescription);
 
         // remove task, if not the current task
 
@@ -481,7 +539,7 @@ void ManagedLoadSaveThread::prependThumbnailGroup(const QList<LoadingDescription
 
         // insert new loading task, in the order given by descriptions list
 
-        m_todo.insert(index++, new ThumbnailLoadingTask(this, descriptions.at(i)));
+        m_todo.insert(index++, new ThumbnailLoadingTask(this, resolvedDescription));
     }
 
     start(lock);
@@ -523,7 +581,7 @@ LoadingTask* ManagedLoadSaveThread::createLoadingTask(const LoadingDescription& 
 void ManagedLoadSaveThread::stopLoading(const QString& filePath, LoadingTaskFilter filter)
 {
     QMutexLocker lock(threadMutex());
-    removeLoadingTasks(LoadingDescription(filePath), filter);
+    removeLoadingTasks(LoadingDescription(filePath), filter, true);
 }
 
 void ManagedLoadSaveThread::stopLoading(const LoadingDescription& desc, LoadingTaskFilter filter)
@@ -600,15 +658,32 @@ void ManagedLoadSaveThread::stopSaving(const QString& filePath)
     }
 }
 
-void ManagedLoadSaveThread::removeLoadingTasks(const LoadingDescription& description, LoadingTaskFilter filter)
+void ManagedLoadSaveThread::removeLoadingTasks(const LoadingDescription& description,
+                                               LoadingTaskFilter filter,
+                                               bool logicalPathOnly)
 {
     LoadingTask* loadingTask = nullptr;
+
+    const auto matches = [&description, logicalPathOnly](const LoadingDescription& taskDescription)
+    {
+        if (logicalPathOnly)
+        {
+            return (taskDescription.filePath == description.filePath);
+        }
+
+        if (description.sourceResolutionApplied())
+        {
+            return (taskDescription == description);
+        }
+
+        return taskDescription.equalsIgnoringSourceResolution(description);
+    };
 
     // stop current task if it is matching the criteria
 
     if ((loadingTask = checkLoadingTask(m_currentTask, filter)))
     {
-        if (description.filePath.isNull() || (loadingTask->loadingDescription() == description))
+        if (description.filePath.isNull() || matches(loadingTask->loadingDescription()))
         {
             loadingTask->setStatus(LoadingTask::LoadingTaskStatusStopping);
         }
@@ -622,7 +697,7 @@ void ManagedLoadSaveThread::removeLoadingTasks(const LoadingDescription& descrip
 
         if ((loadingTask = checkLoadingTask(task, filter)))
         {
-            if (description.filePath.isNull() || (loadingTask->loadingDescription() == description))
+            if (description.filePath.isNull() || matches(loadingTask->loadingDescription()))
             {
                 delete m_todo.takeAt(i--);
             }

@@ -24,6 +24,7 @@
 #include "dimg.h"
 #include "digikam_export.h"
 #include "previewsettings.h"
+#include "privacysourceresolver.h"
 
 namespace Digikam
 {
@@ -210,6 +211,23 @@ public:
     ThumbnailIdentifier thumbnailIdentifier()                           const;
 
     /**
+     * Resolve the physical decoder source without changing filePath, which is
+     * the logical catalogue/completion identity. Resolution is idempotent for
+     * a queued description; call resetSourceResolution() after changing the
+     * logical path or storage reference.
+     */
+    void                resolveSource();
+    void                resetSourceResolution();
+    QString             effectiveFilePath()                             const;
+    bool                isSourceDenied()                                const;
+    bool                sourceResolutionApplied()                       const;
+    /** Re-resolves and compares the complete normalized source snapshot. */
+    bool                sourceResolutionIsCurrent()                     const;
+    bool                persistentCacheAllowed()                        const;
+    QString             privacyCacheNamespace()                         const;
+    quint64             sourceResolverGeneration()                      const;
+
+    /**
      * Returns whether the other loading task equals this one
      */
     bool operator==(const LoadingDescription& other)                    const;
@@ -220,6 +238,13 @@ public:
      * ignoring parameters used to specify a reduced version.
      */
     bool equalsIgnoreReducedVersion(const LoadingDescription& other)    const;
+
+    /**
+     * Legacy comparison without the resolved physical source. This is used
+     * by logical-path cancellation so relock can stop tasks from every
+     * privacy namespace for the same catalogue request.
+     */
+    bool equalsIgnoringSourceResolution(const LoadingDescription& other) const;
 
     /**
      * Returns whether this loading task equals the other one
@@ -236,6 +261,11 @@ public:
     static QStringList possibleCacheKeys(const QString& filePath);
     static QStringList possibleThumbnailCacheKeys(const QString& filePath);
 
+private:
+
+    QString namespacedCacheKey(const QString& legacyKey) const;
+    QStringList namespacedCacheKeys(const QStringList& legacyKeys) const;
+
 public:
 
     QString                  filePath;
@@ -243,6 +273,15 @@ public:
     RawDecodingHint          rawDecodingHint            = RawDecodingDefaultSettings;
     PreviewParameters        previewParameters;
     PostProcessingParameters postProcessingParameters;
+
+private:
+
+    bool                             m_sourceResolutionApplied = false;
+    PrivacySourceResult::Disposition m_sourceDisposition       = PrivacySourceResult::NotHandled;
+    PrivacySourceResult::CachePolicy m_sourceCachePolicy        = PrivacySourceResult::Persistent;
+    quint64                          m_sourceResolverGeneration  = 0;
+    QString                          m_sourceFilePath;
+    QString                          m_privacyCacheNamespace;
 };
 
 } // namespace Digikam

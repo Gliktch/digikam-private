@@ -72,9 +72,90 @@ LoadSaveFileInfoProvider* LoadSaveThread::infoProvider()
 
 void LoadSaveThread::load(const LoadingDescription& description)
 {
+    LoadingDescription resolvedDescription = description;
+    resolvedDescription.resolveSource();
+
+    if (!resolvedDescription.sourceResolutionIsCurrent())
+    {
+        return;
+    }
+
     QMutexLocker lock(threadMutex());
-    m_todo << new LoadingTask(this, description);
+
+    if (!resolvedDescription.sourceResolutionIsCurrent())
+    {
+        return;
+    }
+
+    m_todo << new LoadingTask(this, resolvedDescription);
     start(lock);
+}
+
+bool LoadSaveThread::stopLoadingAndWaitForSource(const QString& logicalFilePath,
+                                                 const QString& cacheNamespace,
+                                                 quint64 resolverGeneration)
+{
+    if (logicalFilePath.isEmpty())
+    {
+        return false;
+    }
+
+    const auto loadingTask = [](LoadSaveTask* const task)
+    {
+        if (!task || (task->type() != LoadSaveTask::TaskTypeLoading))
+        {
+            return static_cast<LoadingTask*>(nullptr);
+        }
+
+        return dynamic_cast<LoadingTask*>(task);
+    };
+
+    const auto matches = [&logicalFilePath, &cacheNamespace, resolverGeneration](
+                             const LoadingTask* const task)
+    {
+        if (!task)
+        {
+            return false;
+        }
+
+        const LoadingDescription& description = task->loadingDescription();
+
+        return ((description.filePath                   == logicalFilePath) &&
+                (description.privacyCacheNamespace()    == cacheNamespace) &&
+                (description.sourceResolverGeneration() == resolverGeneration));
+    };
+
+    QMutexLocker lock(threadMutex());
+
+    if (matches(loadingTask(m_executingTask)) &&
+        (QThread::currentThread() == m_executionThread))
+    {
+        return false;
+    }
+
+    LoadingTask* task = loadingTask(m_currentTask);
+
+    if (matches(task))
+    {
+        task->setStatus(LoadingTask::LoadingTaskStatusStopping);
+    }
+
+    for (int i = 0 ; i < m_todo.size() ; ++i)
+    {
+        task = loadingTask(m_todo.at(i));
+
+        if (matches(task))
+        {
+            delete m_todo.takeAt(i--);
+        }
+    }
+
+    while (matches(loadingTask(m_executingTask)))
+    {
+        m_taskExecutionChanged.wait(lock.mutex());
+    }
+
+    return true;
 }
 
 void LoadSaveThread::save(const DImg& image, const QString& filePath, const QString& format)
@@ -88,6 +169,8 @@ void LoadSaveThread::run()
 {
     while (runningFlag())
     {
+        LoadSaveTask* taskToExecute = nullptr;
+
         {
             QMutexLocker lock(threadMutex());
 
@@ -99,6 +182,9 @@ void LoadSaveThread::run()
             if (!m_todo.isEmpty())
             {
                 m_currentTask = m_todo.takeFirst();
+                m_executingTask = m_currentTask;
+                m_executionThread = QThread::currentThread();
+                taskToExecute   = m_currentTask;
 
                 if (m_notificationPolicy == NotificationPolicyTimeLimited)
                 {
@@ -115,9 +201,19 @@ void LoadSaveThread::run()
             }
         }
 
-        if (m_currentTask)
+        if (taskToExecute)
         {
-            m_currentTask->execute();
+            taskToExecute->execute();
+
+            QMutexLocker lock(threadMutex());
+
+            if (m_executingTask == taskToExecute)
+            {
+                m_executingTask = nullptr;
+                m_executionThread = nullptr;
+            }
+
+            m_taskExecutionChanged.wakeAll();
         }
     }
 }
@@ -158,7 +254,15 @@ void LoadSaveThread::imageLoaded(const LoadingDescription& loadingDescription, c
 {
     notificationReceived();
 
-    Q_EMIT signalImageLoaded(loadingDescription, img);
+    if (!loadingDescription.isSourceDenied() &&
+        loadingDescription.sourceResolutionIsCurrent())
+    {
+        Q_EMIT signalImageLoaded(loadingDescription, img);
+    }
+    else
+    {
+        Q_EMIT signalImageLoaded(loadingDescription, DImg());
+    }
 }
 
 void LoadSaveThread::moreCompleteLoadingAvailable(const LoadingDescription& oldLoadingDescription,
@@ -194,7 +298,15 @@ void LoadSaveThread::thumbnailLoaded(const LoadingDescription& loadingDescriptio
 {
     notificationReceived();
 
-    Q_EMIT signalQImageThumbnailLoaded(loadingDescription, img);
+    if (!loadingDescription.isSourceDenied() &&
+        loadingDescription.sourceResolutionIsCurrent())
+    {
+        Q_EMIT signalQImageThumbnailLoaded(loadingDescription, img);
+    }
+    else
+    {
+        Q_EMIT signalQImageThumbnailLoaded(loadingDescription, QImage());
+    }
 }
 
 void LoadSaveThread::notificationReceived()

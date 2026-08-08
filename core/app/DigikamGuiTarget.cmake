@@ -50,6 +50,7 @@ set(libdigikamgui_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/items/delegate/digikamitemdelegate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/items/delegate/itemdelegate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/items/delegate/itemfacedelegate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/items/delegate/privacyitemviewadornment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/items/views/digikamitemview.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/items/views/digikamitemview_p.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/items/views/itemcategorizedview.cpp

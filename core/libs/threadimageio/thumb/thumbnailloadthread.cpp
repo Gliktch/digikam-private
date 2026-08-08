@@ -36,6 +36,11 @@ LoadingDescription ThumbnailLoadThread::Private::createLoadingDescription(const 
                                    LoadingDescription::PreviewParameters::Thumbnail);
     description.previewParameters.storageReference = identifier.id;
 
+    if (!identifier.filePath.isEmpty() || identifier.id)
+    {
+        description.resolveSource();
+    }
+
     if (IccSettings::instance()->useManagedPreviews())
     {
         description.postProcessingParameters.colorManagement = LoadingDescription::ConvertForDisplay;
@@ -64,6 +69,11 @@ LoadingDescription ThumbnailLoadThread::Private::createLoadingDescription(const 
 
     description.previewParameters.storageReference = identifier.id;
     description.previewParameters.extraParameter   = detailRect;
+
+    if (!identifier.filePath.isEmpty() || identifier.id)
+    {
+        description.resolveSource();
+    }
 
     if (IccSettings::instance()->useManagedPreviews())
     {
@@ -269,18 +279,29 @@ bool ThumbnailLoadThread::find(const ThumbnailIdentifier& identifier,
 
     QString cacheKey = description.cacheKey();
 
+    if (!description.isSourceDenied() &&
+        description.sourceResolutionIsCurrent())
     {
-        LoadingCache* const cache = LoadingCache::cache();
-        LoadingCache::CacheLock lock(cache);
-        const QPixmap* cachePix   = cache->retrieveThumbnailPixmap(cacheKey);
-
-        if (cachePix)
         {
-            pix = *cachePix;
+            LoadingCache* const cache = LoadingCache::cache();
+            LoadingCache::CacheLock lock(cache);
+            const QPixmap* cachePix   = cache->retrieveThumbnailPixmap(cacheKey);
+
+            if (cachePix)
+            {
+                pix = *cachePix;
+            }
+        }
+
+        if (!description.sourceResolutionIsCurrent())
+        {
+            pix = QPixmap();
         }
     }
 
-    if (!pix.isNull())
+    if (!pix.isNull()                              &&
+        !description.isSourceDenied()              &&
+        description.sourceResolutionIsCurrent())
     {
         if (retPixmap)
         {
@@ -291,12 +312,25 @@ bool ThumbnailLoadThread::find(const ThumbnailIdentifier& identifier,
         {
             load(description);
 
+            if (description.isSourceDenied() ||
+                !description.sourceResolutionIsCurrent())
+            {
+                if (retPixmap)
+                {
+                    *retPixmap = QPixmap();
+                }
+
+                return false;
+            }
+
             Q_EMIT signalThumbnailLoaded(description, pix);
         }
 
         return true;
     }
 
+    if (!description.isSourceDenied() &&
+        description.sourceResolutionIsCurrent())
     {
         // If there is a result waiting for conversion to pixmap, return false - pixmap will come shortly
 
@@ -395,6 +429,7 @@ bool ThumbnailLoadThread::findBuffered(const ThumbnailIdentifier& identifier,
                                        const QRect& rect, QPixmap& pixmap, int size)
 {
     LoadingDescription description;
+    bool found = false;
 
     if (rect.isNull())
     {
@@ -407,6 +442,12 @@ bool ThumbnailLoadThread::findBuffered(const ThumbnailIdentifier& identifier,
 
     QString cacheKey = description.cacheKey();
 
+    if (description.isSourceDenied() ||
+        !description.sourceResolutionIsCurrent())
+    {
+        return false;
+    }
+
     {
         LoadingCache* const cache = LoadingCache::cache();
         LoadingCache::CacheLock lock(cache);
@@ -415,12 +456,18 @@ bool ThumbnailLoadThread::findBuffered(const ThumbnailIdentifier& identifier,
         if (cachePix)
         {
             pixmap = *cachePix;
-
-            return true;
+            found  = true;
         }
     }
 
-    return false;
+    if (!description.sourceResolutionIsCurrent())
+    {
+        pixmap = QPixmap();
+
+        return false;
+    }
+
+    return found;
 }
 
 // --- Preloading ---
@@ -537,9 +584,14 @@ bool ThumbnailLoadThread::checkSize(int size)
  */
 void ThumbnailLoadThread::thumbnailLoaded(const LoadingDescription& loadingDescription, const QImage& img)
 {
+    const bool sourceCurrent = !loadingDescription.isSourceDenied() &&
+                               loadingDescription.sourceResolutionIsCurrent();
+    const QImage safeImage = sourceCurrent ? img
+                                           : QImage();
+
     // call parent to send signalThumbnailLoaded(LoadingDescription, QImage) - signal is part of public API
 
-    ManagedLoadSaveThread::thumbnailLoaded(loadingDescription, img);
+    ManagedLoadSaveThread::thumbnailLoaded(loadingDescription, safeImage);
 
     if (!d->wantPixmap)
     {
@@ -550,8 +602,14 @@ void ThumbnailLoadThread::thumbnailLoaded(const LoadingDescription& loadingDescr
     // This means there can be several results per pixmap,
     // to speed up cases where inter-thread communication is the limiting factor
 
+    const bool sourceStillCurrent = !loadingDescription.isSourceDenied() &&
+                                    loadingDescription.sourceResolutionIsCurrent();
+    const QImage collectedImage = sourceStillCurrent ? safeImage
+                                                     : QImage();
+
     QMutexLocker lock(&d->resultsMutex);
-    d->collectedResults.insert(loadingDescription.cacheKey(), ThumbnailResult(loadingDescription, img));
+    d->collectedResults.insert(loadingDescription.cacheKey(),
+                               ThumbnailResult(loadingDescription, collectedImage));
 
     // only sent signal when flag indicates there is no signal on the way currently
 
@@ -587,8 +645,13 @@ void ThumbnailLoadThread::slotThumbnailsAvailable()
 void ThumbnailLoadThread::slotThumbnailLoaded(const LoadingDescription& description, const QImage& thumb)
 {
     QPixmap pix;
+    const auto sourceIsCurrent = [&description]()
+    {
+        return (!description.isSourceDenied() &&
+                description.sourceResolutionIsCurrent());
+    };
 
-    if (thumb.isNull())
+    if (thumb.isNull() || !sourceIsCurrent())
     {
         pix = surrogatePixmap(description);
     }
@@ -614,13 +677,23 @@ void ThumbnailLoadThread::slotThumbnailLoaded(const LoadingDescription& descript
         }
     }
 
+    if (!sourceIsCurrent())
+    {
+        pix = surrogatePixmap(description);
+    }
+
     // put into cache
 
-    if (!pix.isNull())
+    if (!pix.isNull() && sourceIsCurrent())
     {
         LoadingCache* const cache = LoadingCache::cache();
         LoadingCache::CacheLock lock(cache);
         cache->putThumbnail(description.cacheKey(), pix, description.filePath);
+    }
+
+    if (!sourceIsCurrent())
+    {
+        pix = surrogatePixmap(description);
     }
 
     Q_EMIT signalThumbnailLoaded(description, pix);
@@ -635,7 +708,12 @@ QPixmap ThumbnailLoadThread::surrogatePixmap(const LoadingDescription& descripti
 
     QPixmap pix;
 
-    QMimeType mimeType = QMimeDatabase().mimeTypeForFile(description.filePath);
+    const bool sourceMayBeInspected = !description.isSourceDenied() &&
+                                      description.sourceResolutionIsCurrent();
+    const QMimeDatabase::MatchMode matchMode = sourceMayBeInspected
+                                                   ? QMimeDatabase::MatchDefault
+                                                   : QMimeDatabase::MatchExtension;
+    QMimeType mimeType = QMimeDatabase().mimeTypeForFile(description.filePath, matchMode);
 
     if (mimeType.isValid())
     {
@@ -684,17 +762,24 @@ int ThumbnailLoadThread::storedSize() const
 
 void ThumbnailLoadThread::deleteThumbnail(const QString& filePath)
 {
+    deleteThumbnail(ThumbnailIdentifier(filePath));
+}
+
+void ThumbnailLoadThread::deleteThumbnail(const ThumbnailIdentifier& identifier)
+{
     {
         LoadingCache* const cache = LoadingCache::cache();
         LoadingCache::CacheLock lock(cache);
-        QStringList possibleKeys  = LoadingDescription::possibleThumbnailCacheKeys(filePath);
-
-        for (const QString& cacheKey : std::as_const(possibleKeys))
-        {
-            cache->removeThumbnail(cacheKey);
-        }
+        cache->removeThumbnailsForFilePath(identifier.filePath);
     }
 
+    deleteThumbnailFromPersistentCache(identifier);
+}
+
+bool ThumbnailLoadThread::deleteThumbnailFromPersistentCache(
+    const ThumbnailIdentifier& identifier,
+    const QRect& detailRect)
+{
     ThumbnailCreator creator(static_d->storageMethod);
 
     if (static_d->provider)
@@ -702,7 +787,7 @@ void ThumbnailLoadThread::deleteThumbnail(const QString& filePath)
         creator.setThumbnailInfoProvider(static_d->provider);
     }
 
-    creator.deleteThumbnailsFromDisk(filePath);
+    return creator.deleteThumbnailsFromDisk(identifier, detailRect);
 }
 
 ThumbnailImageCatcher::ThumbnailImageCatcher(QObject* const parent)

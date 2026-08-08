@@ -66,6 +66,15 @@ void LoadingCacheInterface::cleanThumbnailCache()
     cache->removeThumbnails();
 }
 
+void LoadingCacheInterface::cleanFileCache(const QString& filePath)
+{
+    LoadingCache* const cache = LoadingCache::cache();
+    LoadingCache::CacheLock lock(cache);
+
+    cache->removeImagesForFilePath(filePath);
+    cache->removeThumbnailsForFilePath(filePath);
+}
+
 void LoadingCacheInterface::putImage(const QString& filePath, const DImg& img)
 {
     LoadingCache* const cache = LoadingCache::cache();

@@ -65,6 +65,12 @@ public:
     static void cleanThumbnailCache();
 
     /**
+     * Remove every in-memory image and thumbnail cache namespace owned by one
+     * logical file path. Persistent thumbnail storage is not modified.
+     */
+    static void cleanFileCache(const QString& filePath);
+
+    /**
      * add a copy of the image to cache
      */
     static void putImage(const QString& filePath, const DImg& img);

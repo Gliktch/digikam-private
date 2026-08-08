@@ -40,8 +40,11 @@ LoadingDescription PreviewLoadThread::createLoadingDescription(const QString& fi
                                                                const IccProfile& displayProfile)
 {
     LoadingDescription description(filePath, previewSettings, size);
+    description.resolveSource();
 
-    if (DImg::fileFormat(filePath) == DImg::RAW)
+    if (!description.isSourceDenied()                    &&
+        description.sourceResolutionIsCurrent()         &&
+        (DImg::fileFormat(description.effectiveFilePath()) == DImg::RAW))
     {
         description.rawDecodingSettings.optimizeTimeLoading();
         description.rawDecodingSettings.rawPrm.sixteenBitsImage   = false;

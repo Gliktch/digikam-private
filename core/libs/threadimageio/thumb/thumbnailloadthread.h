@@ -243,6 +243,20 @@ public:
      */
     static void deleteThumbnail(const QString& filePath);
 
+    /**
+     * Deletes the exact persistent entry represented by a previously resolved
+     * identifier, in addition to all in-memory namespaces for its logical path.
+     */
+    static void deleteThumbnail(const ThumbnailIdentifier& identifier);
+
+    /**
+     * Deletes one exact primary or detail persistent-cache address without
+     * deriving identity from a decrypted physical source path. This does not
+     * perform RAM eviction; PrivacyCacheTransition does that once per item.
+     */
+    static bool deleteThumbnailFromPersistentCache(const ThumbnailIdentifier& identifier,
+                                                   const QRect& detailRect = QRect());
+
 Q_SIGNALS:
 
     /// @note See LoadSaveThread for a QImage-based thumbnailLoaded() signal.

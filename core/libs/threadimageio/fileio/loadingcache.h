@@ -171,6 +171,11 @@ public:
     void removeImage(const QString& cacheKey);
 
     /**
+     * Remove every image-cache namespace owned by the logical file path.
+     */
+    void removeImagesForFilePath(const QString& filePath);
+
+    /**
      * @brief Remove all entries from the cache
      */
     void removeImages();
@@ -235,6 +240,12 @@ public:
      * @brief Remove the thumbnail for the given file path from the thumbnail cache
      */
     void removeThumbnail(const QString& cacheKey);
+
+    /**
+     * Remove every QImage, QPixmap and buffered-QPixmap namespace owned by the
+     * logical file path.
+     */
+    void removeThumbnailsForFilePath(const QString& filePath);
 
     /**
      * @brief Remove all thumbnails
