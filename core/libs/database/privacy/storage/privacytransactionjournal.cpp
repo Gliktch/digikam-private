@@ -22,6 +22,7 @@
 // Qt includes
 
 #include <QCryptographicHash>
+#include <QByteArrayView>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -53,6 +54,7 @@ constexpr qsizetype MaximumIntentBytes       = 65;
 
 const QString MetadataDirectory    = QStringLiteral(".digikam-private");
 const QString TransactionsDirectory = QStringLiteral("transactions");
+const QString CheckoutDirectory    = QStringLiteral("checkout");
 const QString JournalFile          = QStringLiteral("journal-v1.json");
 const QString NextFile             = QStringLiteral("journal-v1.next");
 const QString IntentFile           = QStringLiteral("journal-v1.intent");
@@ -238,6 +240,13 @@ bool safeRelativePath(const QString& path, bool allowEmpty = false)
     }
 
     return true;
+}
+
+bool safeCheckoutFileName(const QString& fileName)
+{
+    return (safeRelativePath(fileName) &&
+            !fileName.contains(QLatin1Char('/')) &&
+            (fileName.toUtf8().size() <= MaximumComponentBytes));
 }
 
 bool validTransactionType(PrivacyTransactionType type)
@@ -1165,6 +1174,211 @@ int openOwnedDirectoryAt(int parentFd, const QByteArray& name, dev_t device,
     return fd;
 }
 
+enum class CheckoutReadStatus
+{
+    Missing,
+    Verified,
+    Unsafe,
+    IoFailure
+};
+
+struct CheckoutFileEvidence
+{
+    PrivacyJournalObjectFact fact;
+    dev_t                     device = 0;
+    ino_t                     inode  = 0;
+};
+
+bool sameStableCheckoutFile(const struct stat& left,
+                            const struct stat& right)
+{
+    bool same = ((left.st_dev == right.st_dev) &&
+                 (left.st_ino == right.st_ino) &&
+                 (left.st_mode == right.st_mode) &&
+                 (left.st_nlink == right.st_nlink) &&
+                 (left.st_size == right.st_size));
+
+#ifdef Q_OS_LINUX
+    same = same &&
+           (left.st_mtim.tv_sec == right.st_mtim.tv_sec) &&
+           (left.st_mtim.tv_nsec == right.st_mtim.tv_nsec) &&
+           (left.st_ctim.tv_sec == right.st_ctim.tv_sec) &&
+           (left.st_ctim.tv_nsec == right.st_ctim.tv_nsec);
+#else
+    same = same && (left.st_mtime == right.st_mtime) &&
+           (left.st_ctime == right.st_ctime);
+#endif
+
+    return same;
+}
+
+CheckoutReadStatus inspectCheckoutAt(int directoryFd, const QByteArray& name,
+                                     dev_t expectedDevice,
+                                     CheckoutFileEvidence* const evidence,
+                                     QString* const detail)
+{
+    const int fd = PrivacyPosixStorage::confinedOpenAt(
+        directoryFd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+
+    if (fd < 0)
+    {
+        if (errno == ENOENT)
+        {
+            return CheckoutReadStatus::Missing;
+        }
+
+        struct stat pathStatus = {};
+
+        if ((::fstatat(directoryFd, name.constData(), &pathStatus,
+                       AT_SYMLINK_NOFOLLOW) == 0) &&
+            (!S_ISREG(pathStatus.st_mode) ||
+             (pathStatus.st_uid != ::geteuid()) ||
+             (pathStatus.st_nlink != 1) ||
+             (pathStatus.st_dev != expectedDevice) ||
+             ((pathStatus.st_mode & 0777) != 0600)))
+        {
+            if (detail)
+            {
+                *detail = QStringLiteral("checkout is not a safe 0600 owned regular file");
+            }
+
+            return CheckoutReadStatus::Unsafe;
+        }
+
+        if (detail)
+        {
+            *detail = QStringLiteral("cannot open checkout: %1")
+                          .arg(QString::fromLocal8Bit(std::strerror(errno)));
+        }
+
+        return ((errno == ELOOP) || (errno == EXDEV))
+             ? CheckoutReadStatus::Unsafe
+             : CheckoutReadStatus::IoFailure;
+    }
+
+    struct stat before = {};
+
+    if ((::fstat(fd, &before) != 0) || !S_ISREG(before.st_mode) ||
+        (before.st_uid != ::geteuid()) || (before.st_nlink != 1) ||
+        (before.st_dev != expectedDevice) ||
+        ((before.st_mode & 0777) != 0600) || (before.st_size < 0))
+    {
+        ::close(fd);
+
+        if (detail)
+        {
+            *detail = QStringLiteral("opened checkout is unsafe");
+        }
+
+        return CheckoutReadStatus::Unsafe;
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    QByteArray buffer(1024 * 1024, Qt::Uninitialized);
+    qlonglong offset = 0;
+
+    while (offset < static_cast<qlonglong>(before.st_size))
+    {
+        const qsizetype wanted = static_cast<qsizetype>(
+            std::min<qlonglong>(buffer.size(),
+                                static_cast<qlonglong>(before.st_size) - offset));
+        const ssize_t count = ::pread(fd, buffer.data(),
+                                      static_cast<size_t>(wanted), offset);
+
+        if (count < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+
+            ::close(fd);
+            return CheckoutReadStatus::IoFailure;
+        }
+
+        if (count == 0)
+        {
+            ::close(fd);
+            return CheckoutReadStatus::IoFailure;
+        }
+
+        hash.addData(QByteArrayView(buffer.constData(),
+                                    static_cast<qsizetype>(count)));
+        offset += static_cast<qlonglong>(count);
+    }
+
+    struct stat after = {};
+    const bool stable = (::fstat(fd, &after) == 0) &&
+                        sameStableCheckoutFile(before, after);
+    ::close(fd);
+
+    if (!stable)
+    {
+        if (detail)
+        {
+            *detail = QStringLiteral("checkout changed while it was inspected");
+        }
+
+        return CheckoutReadStatus::IoFailure;
+    }
+
+    evidence->fact.presence  = PrivacyJournalExpectedPresence::Present;
+    evidence->fact.size      = static_cast<qlonglong>(before.st_size);
+    evidence->fact.linkCount = 1;
+    evidence->fact.sha256    = hash.result();
+    evidence->device         = before.st_dev;
+    evidence->inode          = before.st_ino;
+    return CheckoutReadStatus::Verified;
+}
+
+bool sameCheckoutContent(const PrivacyJournalObjectFact& left,
+                         const PrivacyJournalObjectFact& right)
+{
+    return ((left.presence == PrivacyJournalExpectedPresence::Present) &&
+            (right.presence == PrivacyJournalExpectedPresence::Present) &&
+            (left.size == right.size) && (left.sha256 == right.sha256));
+}
+
+bool journalOwnsCheckout(const PrivacyJournalLoadResult& loaded,
+                         const QString& transactionUuid,
+                         const QString& fileName,
+                         const PrivacyJournalObjectFact& baseline,
+                         bool creation)
+{
+    if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+        !loaded.authoritative || !loaded.hasRecord ||
+        (loaded.record.transactionUuid != transactionUuid) ||
+        (loaded.record.transactionType != PrivacyTransactionType::ExternalCheckout) ||
+        (creation &&
+         (loaded.record.stage != PrivacyJournalStage::Created) &&
+         (loaded.record.stage != PrivacyJournalStage::Prepared)))
+    {
+        return false;
+    }
+
+    const QString relative = QStringLiteral("%1/%2/%3/%4/%5")
+        .arg(MetadataDirectory, TransactionsDirectory, transactionUuid,
+             CheckoutDirectory, fileName);
+    const PrivacyJournalAsset* owner = nullptr;
+
+    for (const PrivacyJournalAsset& asset : loaded.record.assets)
+    {
+        if (asset.publicRelativePath != relative)
+        {
+            continue;
+        }
+
+        if (owner)
+        {
+            return false;
+        }
+
+        owner = &asset;
+    }
+
+    return owner && sameCheckoutContent(owner->original, baseline);
+}
+
 #endif // Q_OS_UNIX
 
 } // namespace
@@ -1344,6 +1558,38 @@ public:
 
         setError(error, PrivacyJournalError::None, detail, {});
         return transactionFd;
+    }
+
+    int openCheckoutDirectory(const QString& transactionUuid, bool create,
+                              PrivacyJournalError* const error,
+                              QString* const detail) const
+    {
+        const int transactionFd = openTransactionDirectory(
+            transactionUuid, false, error, detail);
+
+        if (transactionFd < 0)
+        {
+            return -1;
+        }
+
+        bool created = false;
+        const int checkoutFd = openOwnedDirectoryAt(
+            transactionFd, CheckoutDirectory.toUtf8(),
+            static_cast<dev_t>(device), create, &created, detail);
+        ::close(transactionFd);
+
+        if (checkoutFd < 0)
+        {
+            const bool missing = (!create && (errno == ENOENT));
+            setError(error, missing ? PrivacyJournalError::None
+                                    : PrivacyJournalError::UnsafeStorage,
+                     detail, missing ? QString()
+                                     : (detail ? *detail : QString()));
+            return -1;
+        }
+
+        setError(error, PrivacyJournalError::None, detail, {});
+        return checkoutFd;
     }
 #endif
 };
@@ -1874,6 +2120,478 @@ bool PrivacyTransactionJournalStore::compareAndUpdate(
 {
     return persist(record, expectedCurrentSha256, true, publishedSha256,
                    error, detail);
+}
+
+QString PrivacyTransactionJournalStore::relativeCheckoutPath(
+    const QString& transactionUuid, const QString& fileName)
+{
+    if (!canonicalUuid(transactionUuid) || !safeCheckoutFileName(fileName))
+    {
+        return {};
+    }
+
+    return QStringLiteral("%1/%2/%3/%4/%5")
+        .arg(MetadataDirectory, TransactionsDirectory, transactionUuid,
+             CheckoutDirectory, fileName);
+}
+
+bool PrivacyTransactionJournalStore::createCheckoutFile(
+    const QString& transactionUuid, const QString& fileName,
+    const PrivacyJournalObjectFact& baseline,
+    const CheckoutProducer& producer,
+    PrivacyJournalObjectFact* const createdFact,
+    PrivacyJournalError* const error, QString* const detail)
+{
+    if (createdFact)
+    {
+        *createdFact = PrivacyJournalObjectFact();
+    }
+
+#ifndef Q_OS_UNIX
+    Q_UNUSED(transactionUuid);
+    Q_UNUSED(fileName);
+    Q_UNUSED(baseline);
+    Q_UNUSED(producer);
+    setError(error, PrivacyJournalError::UnsupportedPlatform, detail,
+             QStringLiteral("writable checkout storage requires Unix"));
+    return false;
+#else
+    if (!d || !canonicalUuid(transactionUuid) ||
+        !safeCheckoutFileName(fileName) || !validFact(baseline) ||
+        (baseline.presence != PrivacyJournalExpectedPresence::Present) ||
+        !producer)
+    {
+        setError(error, PrivacyJournalError::InvalidRecord, detail,
+                 QStringLiteral("checkout request or baseline is invalid"));
+        return false;
+    }
+
+    const PrivacyJournalLoadResult owningJournal = load(transactionUuid);
+
+    if (!journalOwnsCheckout(owningJournal, transactionUuid, fileName,
+                             baseline, true))
+    {
+        setError(error, PrivacyJournalError::IdentityMismatch, detail,
+                 QStringLiteral("authoritative External Checkout journal does not own this file"));
+        return false;
+    }
+
+    PrivacyJournalError directoryError = PrivacyJournalError::None;
+    QString directoryDetail;
+    const int checkoutFd = d->openCheckoutDirectory(
+        transactionUuid, true, &directoryError, &directoryDetail);
+
+    if (checkoutFd < 0)
+    {
+        setError(error, directoryError, detail, directoryDetail);
+        return false;
+    }
+
+    const QByteArray encodedName = fileName.toUtf8();
+    CheckoutFileEvidence existingEvidence;
+    const CheckoutReadStatus existing = inspectCheckoutAt(
+        checkoutFd, encodedName, static_cast<dev_t>(d->device),
+        &existingEvidence, &directoryDetail);
+
+    if (existing == CheckoutReadStatus::Verified)
+    {
+        ::close(checkoutFd);
+
+        if (!sameCheckoutContent(existingEvidence.fact, baseline))
+        {
+            setError(error, PrivacyJournalError::PublicationConflict, detail,
+                     QStringLiteral("existing checkout differs from its baseline"));
+            return false;
+        }
+
+        if (createdFact)
+        {
+            *createdFact = existingEvidence.fact;
+        }
+
+        setError(error, PrivacyJournalError::None, detail, {});
+        return true;
+    }
+
+    if (existing != CheckoutReadStatus::Missing)
+    {
+        ::close(checkoutFd);
+        setError(error,
+                 (existing == CheckoutReadStatus::Unsafe)
+                     ? PrivacyJournalError::UnsafeStorage
+                     : PrivacyJournalError::IoFailure,
+                 detail, directoryDetail);
+        return false;
+    }
+
+    const int fileFd = PrivacyPosixStorage::confinedOpenAt(
+        checkoutFd, encodedName,
+        O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+
+    if ((fileFd < 0) ||
+        !verifyOpenedOwnedRegular(fileFd, static_cast<dev_t>(d->device),
+                                  &directoryDetail))
+    {
+        if (fileFd >= 0)
+        {
+            ::close(fileFd);
+        }
+
+        ::close(checkoutFd);
+        setError(error, PrivacyJournalError::UnsafeStorage, detail,
+                 directoryDetail.isEmpty()
+                     ? QStringLiteral("cannot exclusively create safe checkout")
+                     : directoryDetail);
+        return false;
+    }
+
+    QString producerDetail;
+    const bool produced = producer(fileFd, &producerDetail);
+    const bool fileSynced = produced && syncFd(fileFd);
+    ::close(fileFd);
+
+    CheckoutFileEvidence writtenEvidence;
+    const CheckoutReadStatus written = fileSynced
+        ? inspectCheckoutAt(checkoutFd, encodedName,
+                            static_cast<dev_t>(d->device), &writtenEvidence,
+                            &directoryDetail)
+        : CheckoutReadStatus::IoFailure;
+    const bool exact = (written == CheckoutReadStatus::Verified) &&
+                       sameCheckoutContent(writtenEvidence.fact, baseline);
+
+    if (!exact)
+    {
+        (void)::unlinkat(checkoutFd, encodedName.constData(), 0);
+        (void)syncFd(checkoutFd);
+        ::close(checkoutFd);
+        setError(error,
+                 (written == CheckoutReadStatus::Unsafe)
+                     ? PrivacyJournalError::UnsafeStorage
+                     : PrivacyJournalError::IoFailure,
+                 detail, !producerDetail.isEmpty()
+                     ? producerDetail
+                     : QStringLiteral("checkout bytes do not match the verified baseline"));
+        return false;
+    }
+
+    if (!syncFd(checkoutFd))
+    {
+        ::close(checkoutFd);
+        setError(error, PrivacyJournalError::DurabilityUncertain, detail,
+                 QStringLiteral("checkout directory fsync failed"));
+        return false;
+    }
+
+    ::close(checkoutFd);
+
+    if (createdFact)
+    {
+        *createdFact = writtenEvidence.fact;
+    }
+
+    setError(error, PrivacyJournalError::None, detail, {});
+    return true;
+#endif
+}
+
+PrivacyCheckoutInspectionResult
+PrivacyTransactionJournalStore::inspectCheckoutFile(
+    const QString& transactionUuid, const QString& fileName,
+    const PrivacyJournalObjectFact& baseline) const
+{
+    PrivacyCheckoutInspectionResult result;
+
+#ifndef Q_OS_UNIX
+    Q_UNUSED(transactionUuid);
+    Q_UNUSED(fileName);
+    Q_UNUSED(baseline);
+    result.disposition = PrivacyCheckoutInspectionDisposition::Unsafe;
+    result.detail = QStringLiteral("writable checkout inspection requires Unix");
+    return result;
+#else
+    if (!d || !canonicalUuid(transactionUuid) ||
+        !safeCheckoutFileName(fileName) || !validFact(baseline) ||
+        (baseline.presence != PrivacyJournalExpectedPresence::Present))
+    {
+        result.disposition = PrivacyCheckoutInspectionDisposition::Unsafe;
+        result.detail = QStringLiteral("checkout inspection request is invalid");
+        return result;
+    }
+
+    const PrivacyJournalLoadResult owningJournal = load(transactionUuid);
+
+    if (!journalOwnsCheckout(owningJournal, transactionUuid, fileName,
+                             baseline, false))
+    {
+        result.disposition = PrivacyCheckoutInspectionDisposition::Unsafe;
+        result.detail = QStringLiteral(
+            "authoritative External Checkout journal does not own this file");
+        return result;
+    }
+
+    PrivacyJournalError openError = PrivacyJournalError::None;
+    const int checkoutFd = d->openCheckoutDirectory(
+        transactionUuid, false, &openError, &result.detail);
+
+    if (checkoutFd < 0)
+    {
+        result.disposition = (openError == PrivacyJournalError::None)
+                           ? PrivacyCheckoutInspectionDisposition::Missing
+                           : PrivacyCheckoutInspectionDisposition::Unsafe;
+        return result;
+    }
+
+    CheckoutFileEvidence evidence;
+    const CheckoutReadStatus status = inspectCheckoutAt(
+        checkoutFd, fileName.toUtf8(), static_cast<dev_t>(d->device),
+        &evidence, &result.detail);
+    ::close(checkoutFd);
+
+    if (status == CheckoutReadStatus::Missing)
+    {
+        result.disposition = PrivacyCheckoutInspectionDisposition::Missing;
+    }
+    else if (status == CheckoutReadStatus::Unsafe)
+    {
+        result.disposition = PrivacyCheckoutInspectionDisposition::Unsafe;
+    }
+    else if (status == CheckoutReadStatus::IoFailure)
+    {
+        result.disposition = PrivacyCheckoutInspectionDisposition::IoFailure;
+    }
+    else
+    {
+        result.fact = evidence.fact;
+        result.disposition = sameCheckoutContent(evidence.fact, baseline)
+                           ? PrivacyCheckoutInspectionDisposition::MatchesBaseline
+                           : PrivacyCheckoutInspectionDisposition::Changed;
+    }
+
+    return result;
+#endif
+}
+
+bool PrivacyTransactionJournalStore::hasUnexpectedCheckoutEntries(
+    const QString& transactionUuid, bool* const unexpected,
+    PrivacyJournalError* const error, QString* const detail) const
+{
+    if (unexpected)
+    {
+        *unexpected = false;
+    }
+
+#ifndef Q_OS_UNIX
+    Q_UNUSED(transactionUuid);
+    setError(error, PrivacyJournalError::UnsupportedPlatform, detail,
+             QStringLiteral("writable checkout enumeration requires Unix"));
+    return false;
+#else
+    if (!d || !unexpected || !canonicalUuid(transactionUuid))
+    {
+        setError(error, PrivacyJournalError::InvalidRecord, detail,
+                 QStringLiteral("checkout enumeration request is invalid"));
+        return false;
+    }
+
+    const PrivacyJournalLoadResult owningJournal = load(transactionUuid);
+
+    if ((owningJournal.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+        !owningJournal.authoritative || !owningJournal.hasRecord ||
+        (owningJournal.record.transactionType !=
+         PrivacyTransactionType::ExternalCheckout))
+    {
+        setError(error, PrivacyJournalError::IdentityMismatch, detail,
+                 QStringLiteral("authoritative External Checkout journal is unavailable"));
+        return false;
+    }
+
+    QSet<QByteArray> expectedNames;
+
+    for (const PrivacyJournalAsset& asset : owningJournal.record.assets)
+    {
+        const QString fileName = asset.publicRelativePath.section(
+            QLatin1Char('/'), -1);
+
+        if (relativeCheckoutPath(transactionUuid, fileName) !=
+            asset.publicRelativePath)
+        {
+            setError(error, PrivacyJournalError::IdentityMismatch, detail,
+                     QStringLiteral("journal checkout path is not canonical"));
+            return false;
+        }
+
+        expectedNames.insert(fileName.toUtf8());
+    }
+
+    PrivacyJournalError openError = PrivacyJournalError::None;
+    const int checkoutFd = d->openCheckoutDirectory(
+        transactionUuid, false, &openError, detail);
+
+    if (checkoutFd < 0)
+    {
+        if (openError == PrivacyJournalError::None)
+        {
+            setError(error, PrivacyJournalError::None, detail, {});
+            return true;
+        }
+
+        setError(error, openError, detail, detail ? *detail : QString());
+        return false;
+    }
+
+    DIR* const directory = ::fdopendir(checkoutFd);
+
+    if (!directory)
+    {
+        ::close(checkoutFd);
+        setError(error, PrivacyJournalError::IoFailure, detail,
+                 QStringLiteral("cannot enumerate checkout directory"));
+        return false;
+    }
+
+    errno = 0;
+
+    while (const dirent* const entry = ::readdir(directory))
+    {
+        const QByteArray name(entry->d_name);
+
+        if ((name == QByteArrayLiteral(".")) ||
+            (name == QByteArrayLiteral("..")))
+        {
+            continue;
+        }
+
+        if (!expectedNames.contains(name))
+        {
+            *unexpected = true;
+        }
+    }
+
+    const int enumerationError = errno;
+    ::closedir(directory);
+
+    if (enumerationError != 0)
+    {
+        setError(error, PrivacyJournalError::IoFailure, detail,
+                 QStringLiteral("checkout enumeration was incomplete"));
+        return false;
+    }
+
+    setError(error, PrivacyJournalError::None, detail, {});
+    return true;
+#endif
+}
+
+bool PrivacyTransactionJournalStore::removeUnchangedCheckoutFile(
+    const QString& transactionUuid, const QString& fileName,
+    const PrivacyJournalObjectFact& baseline, bool* const absent,
+    PrivacyJournalError* const error, QString* const detail)
+{
+    if (absent)
+    {
+        *absent = false;
+    }
+
+#ifndef Q_OS_UNIX
+    Q_UNUSED(transactionUuid);
+    Q_UNUSED(fileName);
+    Q_UNUSED(baseline);
+    setError(error, PrivacyJournalError::UnsupportedPlatform, detail,
+             QStringLiteral("writable checkout cleanup requires Unix"));
+    return false;
+#else
+    if (!d || !canonicalUuid(transactionUuid) ||
+        !safeCheckoutFileName(fileName) || !validFact(baseline) ||
+        (baseline.presence != PrivacyJournalExpectedPresence::Present))
+    {
+        setError(error, PrivacyJournalError::InvalidRecord, detail,
+                 QStringLiteral("checkout cleanup request is invalid"));
+        return false;
+    }
+
+    const PrivacyJournalLoadResult owningJournal = load(transactionUuid);
+
+    if (!journalOwnsCheckout(owningJournal, transactionUuid, fileName,
+                             baseline, false))
+    {
+        setError(error, PrivacyJournalError::IdentityMismatch, detail,
+                 QStringLiteral("authoritative External Checkout journal does not own this file"));
+        return false;
+    }
+
+    PrivacyJournalError openError = PrivacyJournalError::None;
+    const int checkoutFd = d->openCheckoutDirectory(
+        transactionUuid, false, &openError, detail);
+
+    if (checkoutFd < 0)
+    {
+        if (openError == PrivacyJournalError::None)
+        {
+            if (absent)
+            {
+                *absent = true;
+            }
+
+            setError(error, PrivacyJournalError::None, detail, {});
+            return true;
+        }
+
+        setError(error, openError, detail, detail ? *detail : QString());
+        return false;
+    }
+
+    const QByteArray encodedName = fileName.toUtf8();
+    CheckoutFileEvidence evidence;
+    const CheckoutReadStatus status = inspectCheckoutAt(
+        checkoutFd, encodedName, static_cast<dev_t>(d->device),
+        &evidence, detail);
+
+    if (status == CheckoutReadStatus::Missing)
+    {
+        ::close(checkoutFd);
+
+        if (absent)
+        {
+            *absent = true;
+        }
+
+        setError(error, PrivacyJournalError::None, detail, {});
+        return true;
+    }
+
+    if ((status != CheckoutReadStatus::Verified) ||
+        !sameCheckoutContent(evidence.fact, baseline))
+    {
+        ::close(checkoutFd);
+        setError(error,
+                 (status == CheckoutReadStatus::Unsafe)
+                     ? PrivacyJournalError::UnsafeStorage
+                     : PrivacyJournalError::PublicationConflict,
+                 detail, (status == CheckoutReadStatus::Verified)
+                     ? QStringLiteral("changed checkout must be preserved")
+                     : (detail ? *detail : QString()));
+        return false;
+    }
+
+    struct stat current = {};
+
+    if ((::fstatat(checkoutFd, encodedName.constData(), &current,
+                   AT_SYMLINK_NOFOLLOW) != 0) ||
+        !S_ISREG(current.st_mode) || (current.st_dev != evidence.device) ||
+        (current.st_ino != evidence.inode) || (current.st_nlink != 1) ||
+        (::unlinkat(checkoutFd, encodedName.constData(), 0) != 0) ||
+        !syncFd(checkoutFd))
+    {
+        ::close(checkoutFd);
+        setError(error, PrivacyJournalError::DurabilityUncertain, detail,
+                 QStringLiteral("checkout changed during cleanup or removal was not durable"));
+        return false;
+    }
+
+    ::close(checkoutFd);
+    setError(error, PrivacyJournalError::None, detail, {});
+    return true;
+#endif
 }
 
 bool PrivacyTransactionJournalStore::persist(

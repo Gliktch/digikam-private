@@ -160,6 +160,7 @@ private Q_SLOTS:
     void testCorruptionAndFilesystemAttacks();
     void testRootExpectationInspectionIsReadOnly();
     void testManagedRootMarkerIdentity();
+    void testWritableCheckoutLifecycleAndAttacks();
 };
 
 void PrivacyTransactionJournalTest::testCanonicalCodecAndSecretExclusion()
@@ -889,6 +890,147 @@ void PrivacyTransactionJournalTest::testManagedRootMarkerIdentity()
                                                   &error, &detail);
     QVERIFY(!store);
     QCOMPARE(error, PrivacyJournalError::RootIdentityMismatch);
+}
+
+void PrivacyTransactionJournalTest::testWritableCheckoutLifecycleAndAttacks()
+{
+    const QByteArray original = QByteArrayLiteral("synthetic private original");
+    const PrivacyJournalObjectFact baseline = presentFact(original);
+
+    const auto externalRecord = [&baseline](
+        const PrivacyTransactionJournalStore& store,
+        const PrivacyJournalRootExpectation& expectation)
+    {
+        PrivacyJournalRecord record = makeRecord(store, expectation);
+        record.transactionType = PrivacyTransactionType::ExternalCheckout;
+        record.assets.first().publicRelativePath =
+            PrivacyTransactionJournalStore::relativeCheckoutPath(
+                TransactionUuid, QStringLiteral("photo.jpg"));
+        record.assets.first().stagedRelativePath = QStringLiteral(
+            ".digikam-private/transactions/%1/preserved/photo.jpg")
+                .arg(TransactionUuid);
+        record.assets.first().original = baseline;
+        return record;
+    };
+
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        PrivacyJournalRootExpectation expectation;
+        auto store = openStore(root.path(), &expectation);
+        const PrivacyJournalRecord record = externalRecord(*store, expectation);
+        PrivacyJournalError error = PrivacyJournalError::None;
+        QString detail;
+        QVERIFY2(store->create(record, nullptr, &error, &detail),
+                 qPrintable(detail));
+        QVERIFY(!store->createCheckoutFile(
+            TransactionUuid, QStringLiteral("unowned.jpg"), baseline,
+            [](int, QString*) { return true; }, nullptr, &error, &detail));
+        QCOMPARE(error, PrivacyJournalError::IdentityMismatch);
+
+        PrivacyJournalObjectFact created;
+        QVERIFY2(store->createCheckoutFile(
+                     TransactionUuid, QStringLiteral("photo.jpg"), baseline,
+                     [&original](int descriptor, QString*)
+                     {
+                         return (::write(descriptor, original.constData(),
+                                         static_cast<size_t>(original.size())) ==
+                                 original.size());
+                     },
+                     &created, &error, &detail),
+                 qPrintable(detail));
+        QCOMPARE(created.size, baseline.size);
+        QCOMPARE(created.sha256, baseline.sha256);
+
+        const QString relative =
+            PrivacyTransactionJournalStore::relativeCheckoutPath(
+                TransactionUuid, QStringLiteral("photo.jpg"));
+        QCOMPARE(relative, record.assets.first().publicRelativePath);
+        const QString absolute = QDir(root.path()).absoluteFilePath(relative);
+        const QFileInfo checkout(absolute);
+        QVERIFY(checkout.isFile());
+        QCOMPARE(checkout.permissions() &
+                     (QFileDevice::ReadGroup | QFileDevice::WriteGroup |
+                      QFileDevice::ExeGroup | QFileDevice::ReadOther |
+                      QFileDevice::WriteOther | QFileDevice::ExeOther),
+                 QFileDevice::Permissions());
+
+        PrivacyCheckoutInspectionResult inspection =
+            store->inspectCheckoutFile(TransactionUuid,
+                                       QStringLiteral("photo.jpg"), baseline);
+        QCOMPARE(inspection.disposition,
+                 PrivacyCheckoutInspectionDisposition::MatchesBaseline);
+        bool unexpected = true;
+        QVERIFY(store->hasUnexpectedCheckoutEntries(
+            TransactionUuid, &unexpected, &error, &detail));
+        QVERIFY(!unexpected);
+
+        QVERIFY(writeNewFile(
+            transactionDirectory(root.path()) +
+                QStringLiteral("/checkout/new-sidecar.xmp"),
+            QByteArrayLiteral("new external output"),
+            QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        QVERIFY(store->hasUnexpectedCheckoutEntries(
+            TransactionUuid, &unexpected, &error, &detail));
+        QVERIFY(unexpected);
+
+        QFile changed(absolute);
+        QVERIFY(changed.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(changed.write(QByteArrayLiteral("external edit")), 13);
+        QVERIFY(changed.flush());
+        changed.close();
+        inspection = store->inspectCheckoutFile(
+            TransactionUuid, QStringLiteral("photo.jpg"), baseline);
+        QCOMPARE(inspection.disposition,
+                 PrivacyCheckoutInspectionDisposition::Changed);
+        QVERIFY(!store->removeUnchangedCheckoutFile(
+            TransactionUuid, QStringLiteral("photo.jpg"), baseline, nullptr,
+            &error, &detail));
+        QCOMPARE(error, PrivacyJournalError::PublicationConflict);
+        QVERIFY(QFileInfo::exists(absolute));
+    }
+
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        PrivacyJournalRootExpectation expectation;
+        auto store = openStore(root.path(), &expectation);
+        const PrivacyJournalRecord record = externalRecord(*store, expectation);
+        QVERIFY(store->create(record));
+        QVERIFY(store->createCheckoutFile(
+            TransactionUuid, QStringLiteral("photo.jpg"), baseline,
+            [&original](int descriptor, QString*)
+            {
+                return (::write(descriptor, original.constData(),
+                                static_cast<size_t>(original.size())) ==
+                        original.size());
+            }));
+        bool absent = false;
+        QVERIFY(store->removeUnchangedCheckoutFile(
+            TransactionUuid, QStringLiteral("photo.jpg"), baseline, &absent));
+        QVERIFY(!absent);
+        QCOMPARE(store->inspectCheckoutFile(
+                     TransactionUuid, QStringLiteral("photo.jpg"), baseline)
+                     .disposition,
+                 PrivacyCheckoutInspectionDisposition::Missing);
+
+        const QString checkoutDirectory = transactionDirectory(root.path()) +
+                                          QStringLiteral("/checkout");
+        const QString target = root.path() + QStringLiteral("/outside");
+        QVERIFY(writeNewFile(target, original,
+                             QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        QCOMPARE(::symlink(QFile::encodeName(target).constData(),
+                           QFile::encodeName(checkoutDirectory +
+                                             QStringLiteral("/photo.jpg")).constData()),
+                 0);
+        QCOMPARE(store->inspectCheckoutFile(
+                     TransactionUuid, QStringLiteral("photo.jpg"), baseline)
+                     .disposition,
+                 PrivacyCheckoutInspectionDisposition::Unsafe);
+        QVERIFY(!store->createCheckoutFile(
+            TransactionUuid, QStringLiteral("photo.jpg"), baseline,
+            [](int, QString*) { return true; }));
+    }
 }
 
 QTEST_GUILESS_MAIN(PrivacyTransactionJournalTest)

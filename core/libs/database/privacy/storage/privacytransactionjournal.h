@@ -133,6 +133,23 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyJournalLoadResult
     QString                       detail;
 };
 
+enum class PrivacyCheckoutInspectionDisposition
+{
+    Missing         = 1,
+    MatchesBaseline = 2,
+    Changed         = 3,
+    Unsafe          = 4,
+    IoFailure       = 5
+};
+
+struct DIGIKAM_DATABASE_EXPORT PrivacyCheckoutInspectionResult
+{
+    PrivacyCheckoutInspectionDisposition disposition =
+        PrivacyCheckoutInspectionDisposition::Missing;
+    PrivacyJournalObjectFact fact;
+    QString detail;
+};
+
 enum class PrivacyJournalFaultPoint
 {
     AfterDirectoriesFsynced,
@@ -191,6 +208,7 @@ class DIGIKAM_DATABASE_EXPORT PrivacyTransactionJournalStore
 public:
 
     using FaultHook = std::function<bool(PrivacyJournalFaultPoint)>;
+    using CheckoutProducer = std::function<bool(int, QString*)>;
 
     ~PrivacyTransactionJournalStore();
 
@@ -239,6 +257,46 @@ public:
                           QByteArray* publishedSha256 = nullptr,
                           PrivacyJournalError* error = nullptr,
                           QString* detail = nullptr);
+
+    /**
+     * Creates one writable 0600 checkout below the exact transaction's 0700
+     * private directory. The producer receives an owned, exclusive descriptor;
+     * publication succeeds only when the resulting bytes match baseline.
+     */
+    bool createCheckoutFile(
+        const QString& transactionUuid,
+        const QString& fileName,
+        const PrivacyJournalObjectFact& baseline,
+        const CheckoutProducer& producer,
+        PrivacyJournalObjectFact* createdFact = nullptr,
+        PrivacyJournalError* error = nullptr,
+        QString* detail = nullptr);
+
+    PrivacyCheckoutInspectionResult inspectCheckoutFile(
+        const QString& transactionUuid,
+        const QString& fileName,
+        const PrivacyJournalObjectFact& baseline) const;
+
+    /** Reports any checkout-directory entry not named by the authoritative
+     * External Checkout journal. Unknown files, directories and undecodable
+     * names are all preserved and reported rather than traversed. */
+    bool hasUnexpectedCheckoutEntries(
+        const QString& transactionUuid,
+        bool* unexpected,
+        PrivacyJournalError* error = nullptr,
+        QString* detail = nullptr) const;
+
+    /** Removes the checkout only when its stable bytes still match baseline. */
+    bool removeUnchangedCheckoutFile(
+        const QString& transactionUuid,
+        const QString& fileName,
+        const PrivacyJournalObjectFact& baseline,
+        bool* absent = nullptr,
+        PrivacyJournalError* error = nullptr,
+        QString* detail = nullptr);
+
+    static QString relativeCheckoutPath(const QString& transactionUuid,
+                                        const QString& fileName);
 
     void setFaultHook(const FaultHook& hook);
     quint64 rootDevice() const;

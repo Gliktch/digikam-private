@@ -103,6 +103,8 @@ public:
                                const PrivacyTransactionJournal& journal) const;
     bool beginCompatibilityUnlock(const PrivacyTransaction& transaction,
                                   const PrivacyTransactionJournal& journal) const;
+    bool beginExternalCheckout(const PrivacyTransaction& transaction,
+                               const PrivacyTransactionJournal& journal) const;
     bool publishItemUnprotection(qlonglong imageId,
                                  const QString& itemUuid,
                                  const QString& categoryUuid,

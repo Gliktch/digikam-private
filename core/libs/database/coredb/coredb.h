@@ -179,6 +179,8 @@ public:
                                       const PrivacyTransactionJournal& journal)                                 const;
     bool beginPrivacyCompatibilityUnlock(const PrivacyTransaction& transaction,
                                          const PrivacyTransactionJournal& journal)                              const;
+    bool beginPrivacyExternalCheckout(const PrivacyTransaction& transaction,
+                                      const PrivacyTransactionJournal& journal)                                 const;
     bool publishPrivacyItemUnprotection(qlonglong imageId,
                                         const QString& itemUuid,
                                         const QString& categoryUuid,

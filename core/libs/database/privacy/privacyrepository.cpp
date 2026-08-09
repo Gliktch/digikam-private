@@ -674,6 +674,23 @@ bool PrivacyRepository::beginCompatibilityUnlock(
                                                          normalizedJournal);
 }
 
+bool PrivacyRepository::beginExternalCheckout(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    normalizedTransaction.itemUuid = normalizedUuid(transaction.itemUuid);
+    PrivacyTransactionJournal normalizedJournal = journal;
+    normalizedJournal.transactionUuid = normalizedUuid(journal.transactionUuid);
+    normalizedJournal.rootUuid = normalizedUuid(journal.rootUuid);
+    CoreDbAccess access;
+
+    return access.db()->beginPrivacyExternalCheckout(normalizedTransaction,
+                                                      normalizedJournal);
+}
+
 bool PrivacyRepository::publishItemUnprotection(
     qlonglong imageId, const QString& itemUuid, const QString& categoryUuid,
     qlonglong expectedItemGeneration,
