@@ -36,6 +36,7 @@
 #include "faceutils.h"
 #include "jpegutils.h"
 #include "dimg.h"
+#include "privacyactionpolicy.h"
 
 namespace Digikam
 {
@@ -53,6 +54,14 @@ void FileActionMngrFileWorker::writeOrientationToFiles(const FileActionItemInfoL
         if (state() == WorkerObject::Deactivating)
         {
             break;
+        }
+
+        if (!PrivacyActionGate::mayMutatePublicItem(
+                info.id(), info.filePath(), PrivacyActionKind::MetadataWrite))
+        {
+            failedItems.append(info.name());
+            infos.writtenToOne();
+            continue;
         }
 
         QString filePath              = info.filePath();
@@ -177,6 +186,14 @@ void FileActionMngrFileWorker::transform(const FileActionItemInfoList& infos, in
         if (state() == WorkerObject::Deactivating)
         {
             break;
+        }
+
+        if (!PrivacyActionGate::mayMutatePublicItem(
+                info.id(), info.filePath(), PrivacyActionKind::InternalEdit))
+        {
+            failedItems.append(info.name());
+            infos.writtenToOne();
+            continue;
         }
 
         if (MetaEngineRotation::RotateAuto == action)

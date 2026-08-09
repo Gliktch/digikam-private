@@ -56,6 +56,7 @@ private Q_SLOTS:
     void testTagQueriesAndPeopleListingsConsumeVisibility();
     void testCompatibilityActionsUseTransactionOwner();
     void testProtectedMutationsCannotBypassDioGate();
+    void testProtectedPublicWritesRemainGated();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -258,6 +259,34 @@ void PrivacyAnalysisWiringTest::testProtectedMutationsCannotBypassDioGate()
         "            !allowPrivacyMutation(data->itemInfos())")));
     QCOMPARE(occurrences(runtime,
                          QStringLiteral("PrivacyActionGate::setProvider(runtime)")), 2);
+}
+
+void PrivacyAnalysisWiringTest::testProtectedPublicWritesRemainGated()
+{
+    const QString metadataHub = source(QStringLiteral(
+        "core/libs/fileactionmanager/metadatahub.cpp"));
+    const QString fileWorker = source(QStringLiteral(
+        "core/libs/fileactionmanager/fileworkeriface.cpp"));
+    const QString focusPoints = source(QStringLiteral(
+        "core/utilities/focuspointmanagement/focuspointgroup.cpp"));
+    const QString metadataPlugin = source(QStringLiteral(
+        "core/dplugins/generic/metadata/metadataedit/dialog/metadataeditdialog.cpp"));
+
+    QVERIFY2(!metadataHub.isEmpty(), "Unable to read MetadataHub source");
+    QVERIFY2(!fileWorker.isEmpty(), "Unable to read file worker source");
+    QVERIFY2(!focusPoints.isEmpty(), "Unable to read focus-point source");
+    QVERIFY2(!metadataPlugin.isEmpty(), "Unable to read metadata plugin source");
+    QVERIFY(metadataHub.contains(QStringLiteral(
+        "PrivacyActionKind::MetadataWrite")));
+    QVERIFY(occurrences(metadataHub,
+                        QStringLiteral("privacyAllowsMetadataWrite(")) >= 7);
+    QCOMPARE(occurrences(fileWorker,
+                         QStringLiteral("PrivacyActionGate::mayMutatePublicItem(")), 2);
+    QVERIFY(fileWorker.contains(QStringLiteral("PrivacyActionKind::MetadataWrite")));
+    QVERIFY(fileWorker.contains(QStringLiteral("PrivacyActionKind::InternalEdit")));
+    QCOMPARE(occurrences(focusPoints,
+                         QStringLiteral("PrivacyActionGate::mayMutatePublicItem(")), 1);
+    QVERIFY(!metadataPlugin.contains(QStringLiteral("privacyactionpolicy.h")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)

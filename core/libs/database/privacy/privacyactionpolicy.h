@@ -147,6 +147,9 @@ public:
     static void resetProvider();
     static bool isInstalled();
     static PrivacyActionPolicyResult classify(const PrivacyActionRequest& request);
+    static bool mayMutatePublicItem(qlonglong imageId,
+                                    const QString& publicPath,
+                                    PrivacyActionKind actionKind);
 };
 
 } // namespace Digikam

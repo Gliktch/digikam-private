@@ -498,4 +498,29 @@ PrivacyActionPolicyResult PrivacyActionGate::classify(
     return result;
 }
 
+bool PrivacyActionGate::mayMutatePublicItem(qlonglong imageId,
+                                            const QString& publicPath,
+                                            PrivacyActionKind actionKind)
+{
+    if (!isInstalled())
+    {
+        return true;
+    }
+
+    PrivacyActionItem item;
+    item.imageId    = imageId;
+    item.publicPath = publicPath;
+
+    PrivacyActionRequest request;
+    request.actionKind       = actionKind;
+    request.consumerIdentity = QLatin1String("digikam-public-item-mutation");
+    request.items             = { item };
+    request.requestedSource   = PrivacyRequestedSource::NoPixels;
+    request.mutationPolicy    = PrivacyMutationPolicy::CommitProtectedAsset;
+
+    const PrivacyActionPolicyResult result = classify(request);
+
+    return (result.isValid() && result.isImmediatelyReady());
+}
+
 } // namespace Digikam

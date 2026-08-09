@@ -38,6 +38,7 @@
 #include "tagscache.h"
 #include "facetagseditor.h"
 #include "metadatahubmngr.h"
+#include "privacyactionpolicy.h"
 
 #ifdef HAVE_KFILEMETADATA
 #   include "baloowrap.h"
@@ -45,6 +46,23 @@
 
 namespace Digikam
 {
+
+namespace
+{
+
+bool privacyAllowsMetadataWrite(const ItemInfo& info)
+{
+    return (info.isNull() ||
+            PrivacyActionGate::mayMutatePublicItem(
+                info.id(), info.filePath(), PrivacyActionKind::MetadataWrite));
+}
+
+bool privacyAllowsMetadataWrite(const QString& filePath)
+{
+    return privacyAllowsMetadataWrite(ItemInfo::fromLocalFile(filePath));
+}
+
+} // namespace
 
 class Q_DECL_HIDDEN MetadataHub::Private
 {
@@ -215,6 +233,11 @@ bool MetadataHub::writeToMetadata(const ItemInfo& info,
                                   bool ignoreLazySync,
                                   const MetaEngineSettingsContainer &settings)
 {
+    if (!privacyAllowsMetadataWrite(info))
+    {
+        return false;
+    }
+
     applyChangeNotifications();
 
     // if no metadata container is needed at all, don't construct one -
@@ -250,6 +273,12 @@ bool MetadataHub::write(DMetadata& metadata,
                         WriteComponent writeMode,
                         const MetaEngineSettingsContainer& settings)
 {
+    if (!metadata.getFilePath().isEmpty() &&
+        !privacyAllowsMetadataWrite(metadata.getFilePath()))
+    {
+        return false;
+    }
+
     applyChangeNotifications();
 
     bool dirty = false;
@@ -353,6 +382,11 @@ bool MetadataHub::write(const QString& filePath,
                         bool ignoreLazySync,
                         const MetaEngineSettingsContainer& settings)
 {
+    if (!privacyAllowsMetadataWrite(filePath))
+    {
+        return false;
+    }
+
     applyChangeNotifications();
 
     // if no metadata container is needed at all, don't construct one -
@@ -432,6 +466,11 @@ bool MetadataHub::writeTags(const QString& filePath,
                             WriteComponent writeMode,
                             const MetaEngineSettingsContainer& settings)
 {
+    if (!privacyAllowsMetadataWrite(filePath))
+    {
+        return false;
+    }
+
     applyChangeNotifications();
 
     // if no metadata container is needed at all, don't construct one -

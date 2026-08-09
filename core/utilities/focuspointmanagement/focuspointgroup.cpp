@@ -15,10 +15,19 @@
 
 #include "focuspointgroup_p.h"
 
+// Qt includes
+
+#include <QMessageBox>
+
+// KDE includes
+
+#include <klocalizedstring.h>
+
 // Local includes
 
 #include "focuspoints_extractor.h"
 #include "focuspoints_writer.h"
+#include "privacyactionpolicy.h"
 
 namespace Digikam
 {
@@ -262,6 +271,17 @@ void FocusPointGroup::slotAddItemFinished(const QRectF& rect)
 {
     if (d->manuallyAddedItem)
     {
+        if (!PrivacyActionGate::mayMutatePublicItem(
+                d->info.id(), d->info.filePath(), PrivacyActionKind::MetadataWrite))
+        {
+            QMessageBox::warning(
+                d->view, i18nc("@title:window", "Protected Item Cannot Be Changed"),
+                i18nc("@info", "Unprotect this item before writing focus-point metadata. "
+                      "No file was changed."));
+            slotCancelAddItem();
+            return;
+        }
+
         d->manuallyAddedItem->setRectInSceneCoordinatesAdjusted(rect);
         QRect pointRect   = d->manuallyAddedItem->originalRect();
         DImg preview(d->view->previewItem()->image().copy());

@@ -134,6 +134,7 @@ private Q_SLOTS:
     void testProviderFailureFailsClosed();
     void testProcessGateUsesInstalledProvider();
     void testProcessGateReplacementFailsClosed();
+    void testPublicItemMutationGate();
 };
 
 void PrivacyActionPolicyTest::testUnprotectedPassThrough()
@@ -406,6 +407,30 @@ void PrivacyActionPolicyTest::testProcessGateReplacementFailsClosed()
                     PrivacyMutationPolicy::DestructiveMutation, { 1 }));
 
     QVERIFY(!result.isValid());
+    PrivacyActionGate::resetProvider();
+}
+
+void PrivacyActionPolicyTest::testPublicItemMutationGate()
+{
+    PrivacyActionGate::resetProvider();
+    QVERIFY(PrivacyActionGate::mayMutatePublicItem(
+        1, QLatin1String("/synthetic/item.jpg"), PrivacyActionKind::MetadataWrite));
+
+    QSharedPointer<FakeActionStateProvider> provider(new FakeActionStateProvider);
+    provider->states.insert(1, unprotectedState());
+    provider->states.insert(2, protectedState(PrivacyItemAccess::Unlocked));
+    PrivacyActionGate::setProvider(provider);
+
+    QVERIFY(PrivacyActionGate::mayMutatePublicItem(
+        1, QLatin1String("/synthetic/item.jpg"), PrivacyActionKind::MetadataWrite));
+    QVERIFY(!PrivacyActionGate::mayMutatePublicItem(
+        2, QLatin1String("/synthetic/private.jpg"), PrivacyActionKind::MetadataWrite));
+    QVERIFY(!PrivacyActionGate::mayMutatePublicItem(
+        2, QLatin1String("/synthetic/private.jpg"), PrivacyActionKind::InternalEdit));
+    QVERIFY(!PrivacyActionGate::mayMutatePublicItem(
+        99, QLatin1String("/synthetic/unknown.jpg"), PrivacyActionKind::MetadataWrite));
+    QVERIFY(!PrivacyActionGate::mayMutatePublicItem(
+        -1, QString(), PrivacyActionKind::MetadataWrite));
     PrivacyActionGate::resetProvider();
 }
 
