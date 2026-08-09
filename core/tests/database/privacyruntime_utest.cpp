@@ -67,10 +67,11 @@ public:
 
     PrivacyRecoveryDisposition recoverRoot(
         const PrivacyStorageRoot&,
-        const PrivacyTransaction&,
+        const PrivacyTransaction& transaction,
         const QList<PrivacyTransactionJournal>&) const override
     {
         ++callCount;
+        lastTransactionUuid = transaction.uuid;
 
         if (onRecover)
         {
@@ -80,11 +81,26 @@ public:
         return disposition;
     }
 
+    bool loadReconciledSnapshot(
+        PrivacyRepositorySnapshot* const snapshot) const override
+    {
+        if (!provideReconciledSnapshot || !snapshot)
+        {
+            return false;
+        }
+
+        *snapshot = reconciledSnapshot;
+        return true;
+    }
+
 public:
 
     PrivacyRecoveryDisposition disposition = PrivacyRecoveryDisposition::Recovered;
     mutable int callCount = 0;
+    mutable QString lastTransactionUuid;
     std::function<void()> onRecover;
+    bool provideReconciledSnapshot = false;
+    PrivacyRepositorySnapshot reconciledSnapshot;
 };
 
 class FakeIntegrityInspector final : public PrivacyRootIntegrityInspector
@@ -360,6 +376,7 @@ private Q_SLOTS:
     void testOnDisplayProxyValidation();
     void testOfflineAndMismatchedRoot();
     void testCompatibilityTransactionRecovery();
+    void testCompatibilityRecoverySnapshotHandoff();
     void testReconnectRecoveryPipeline();
     void testRootIntegritySummary();
     void testStartupIssueSuppressionIsNarrow();
@@ -744,6 +761,50 @@ void PrivacyRuntimeTest::testCompatibilityTransactionRecovery()
              PrivacyScanDisposition::ProtectedProxyExpected);
     QVERIFY(runtime.stateForItem(42, &actionState));
     QVERIFY(!actionState.unresolvedTransaction);
+}
+
+void PrivacyRuntimeTest::testCompatibilityRecoverySnapshotHandoff()
+{
+    PrivacyRepositorySnapshot initial = makeSnapshot();
+    initial.transactions << makeCompatibilityTransaction();
+    initial.transactionJournals << makeJournal();
+
+    PrivacyTransaction replacement = makeCompatibilityTransaction();
+    replacement.uuid = QLatin1String(
+        "60000000-0000-0000-0000-000000000002");
+    replacement.type = PrivacyTransactionType::CompatibilityRelock;
+    replacement.state = PrivacyTransactionState::NeedsReconciliation;
+    replacement.generation = 2;
+    PrivacyTransactionJournal replacementJournal = makeJournal();
+    replacementJournal.transactionUuid = replacement.uuid;
+    replacementJournal.journalRelativePath = QLatin1String(
+        "journals/compatibility-relock.cbor");
+
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+    const QSharedPointer<FakeIntegrityInspector> integrity(
+        new FakeIntegrityInspector);
+    const QSharedPointer<FakeRecovery> recovery(new FakeRecovery);
+    recovery->disposition = PrivacyRecoveryDisposition::Deferred;
+    recovery->provideReconciledSnapshot = true;
+    recovery->reconciledSnapshot = makeSnapshot();
+    recovery->reconciledSnapshot.transactions << replacement;
+    recovery->reconciledSnapshot.transactionJournals << replacementJournal;
+
+    PrivacyRuntimeCoordinator runtime;
+    const PrivacyStartupReport report = runtime.initialize(
+        initial, verifier, recovery, integrity);
+    QCOMPARE(report.state, PrivacyStartupState::Degraded);
+    QCOMPARE(report.unresolvedTransactionCount, 1);
+    QCOMPARE(runtime.rootSummary(rootUuid).compatibilityExposureCount, 1);
+    QCOMPARE(recovery->lastTransactionUuid,
+             makeCompatibilityTransaction().uuid);
+
+    QCOMPARE(runtime.recoverRoot(rootUuid),
+             PrivacyRootRecoveryResult::Deferred);
+    QCOMPARE(recovery->lastTransactionUuid, replacement.uuid);
+    QCOMPARE(runtime.rootSummary(rootUuid).unresolvedTransactionCount, 1);
+    QCOMPARE(runtime.rootSummary(rootUuid).compatibilityExposureCount, 1);
 }
 
 void PrivacyRuntimeTest::testReconnectRecoveryPipeline()

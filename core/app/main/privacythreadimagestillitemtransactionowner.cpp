@@ -1076,7 +1076,9 @@ PrivacyThreadImageIOStillItemTransactionOwner::recoverRoot(
 {
     if ((root.kind != PrivacyStorageRootKind::AlbumRoot) ||
         ((transaction.type != PrivacyTransactionType::ProtectItem) &&
-         (transaction.type != PrivacyTransactionType::UnprotectItem)) ||
+         (transaction.type != PrivacyTransactionType::UnprotectItem) &&
+         (transaction.type != PrivacyTransactionType::CompatibilityUnlock) &&
+         (transaction.type != PrivacyTransactionType::CompatibilityRelock)) ||
         (journals.size() != 1) ||
         (journals.constFirst().transactionUuid != transaction.uuid) ||
         (journals.constFirst().rootUuid != root.uuid))
@@ -1110,6 +1112,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::recoverRoot(
         case PrivacyStillItemTransactionStatus::AuthenticationRequired:
         case PrivacyStillItemTransactionStatus::CacheTransitionFailure:
         case PrivacyStillItemTransactionStatus::CleanupPending:
+        case PrivacyStillItemTransactionStatus::ReconciliationRequired:
         {
             return PrivacyRecoveryDisposition::Deferred;
         }
@@ -1119,6 +1122,12 @@ PrivacyThreadImageIOStillItemTransactionOwner::recoverRoot(
             return PrivacyRecoveryDisposition::Failed;
         }
     }
+}
+
+bool PrivacyThreadImageIOStillItemTransactionOwner::loadReconciledSnapshot(
+    PrivacyRepositorySnapshot* const snapshot) const
+{
+    return PrivacyRepository().loadRuntimeSnapshot(snapshot);
 }
 
 } // namespace Digikam

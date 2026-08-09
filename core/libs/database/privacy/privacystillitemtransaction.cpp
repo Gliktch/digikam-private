@@ -266,6 +266,99 @@ bool stableFileFact(const QString& path,
 #endif
 }
 
+bool copyRegularFileToDescriptor(const QString& sourcePath, int destination)
+{
+#if !defined(Q_OS_UNIX)
+    Q_UNUSED(sourcePath);
+    Q_UNUSED(destination);
+    return false;
+#else
+    if (sourcePath.isEmpty() || !QDir::isAbsolutePath(sourcePath) ||
+        (QDir::cleanPath(sourcePath) != sourcePath) || (destination < 0))
+    {
+        return false;
+    }
+
+    const QByteArray encoded = QFile::encodeName(sourcePath);
+    const int source = ::open(encoded.constData(),
+                              O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+
+    if (source < 0)
+    {
+        return false;
+    }
+
+    struct stat before = {};
+    bool okay = (::fstat(source, &before) == 0) && S_ISREG(before.st_mode) &&
+                (before.st_nlink == 1);
+    QByteArray buffer(IoChunkBytes, Qt::Uninitialized);
+    qlonglong offset = 0;
+
+    while (okay && (offset < static_cast<qlonglong>(before.st_size)))
+    {
+        const qsizetype wanted = static_cast<qsizetype>(std::min<qlonglong>(
+            buffer.size(), static_cast<qlonglong>(before.st_size) - offset));
+        const ssize_t count = ::pread(source, buffer.data(),
+                                      static_cast<size_t>(wanted), offset);
+
+        if (count < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+
+            okay = false;
+            break;
+        }
+
+        if (count == 0)
+        {
+            okay = false;
+            break;
+        }
+
+        qsizetype written = 0;
+
+        while (written < count)
+        {
+            const ssize_t result = ::write(
+                destination, buffer.constData() + written,
+                static_cast<size_t>(count - written));
+
+            if (result < 0)
+            {
+                if (errno == EINTR)
+                {
+                    continue;
+                }
+
+                okay = false;
+                break;
+            }
+
+            written += result;
+        }
+
+        offset += count;
+    }
+
+    struct stat after = {};
+    okay = okay && (::fstat(source, &after) == 0) &&
+           (before.st_dev == after.st_dev) &&
+           (before.st_ino == after.st_ino) &&
+           (before.st_mode == after.st_mode) &&
+           (before.st_nlink == after.st_nlink) &&
+           (before.st_size == after.st_size) &&
+           (before.st_mtim.tv_sec == after.st_mtim.tv_sec) &&
+           (before.st_mtim.tv_nsec == after.st_mtim.tv_nsec) &&
+           (before.st_ctim.tv_sec == after.st_ctim.tv_sec) &&
+           (before.st_ctim.tv_nsec == after.st_ctim.tv_nsec);
+    ::close(source);
+    return okay;
+#endif
+}
+
 bool sameFact(const PrivacyJournalObjectFact& left,
               const PrivacyJournalObjectFact& right)
 {
@@ -389,6 +482,18 @@ const PrivacyItem* itemForUuid(const PrivacyRepositorySnapshot& snapshot,
                                      return (item.uuid == itemUuid);
                                  });
     return (it == snapshot.items.cend()) ? nullptr : &*it;
+}
+
+const PrivacyCategory* categoryForUuid(
+    const PrivacyRepositorySnapshot& snapshot, const QString& categoryUuid)
+{
+    const auto it = std::find_if(
+        snapshot.categories.cbegin(), snapshot.categories.cend(),
+        [&categoryUuid](const PrivacyCategory& category)
+        {
+            return (category.uuid == categoryUuid);
+        });
+    return (it == snapshot.categories.cend()) ? nullptr : &*it;
 }
 
 const PrivacyStorageRoot* storageRootFor(
@@ -705,6 +810,130 @@ bool decodePreparedPayload(const QByteArray& bytes,
         *preparedProxyBytes = proxyBytes;
     }
 
+    return true;
+}
+
+QByteArray encodeCompatibilityPayload(
+    const PrivacyJournalRecord& record, const QString& groupUuid,
+    const QString& sourceUnlockUuid = {},
+    const PrivacyJournalRecord* const sourceUnlockRecord = nullptr)
+{
+    const QByteArray journal = PrivacyTransactionJournalCodec::encode(record);
+    const bool unlock = (record.transactionType ==
+                         PrivacyTransactionType::CompatibilityUnlock);
+    const bool relock = (record.transactionType ==
+                         PrivacyTransactionType::CompatibilityRelock);
+    QByteArray sourceJournal;
+
+    if (sourceUnlockRecord)
+    {
+        sourceJournal = PrivacyTransactionJournalCodec::encode(
+            *sourceUnlockRecord);
+    }
+
+    if (journal.isEmpty() || !canonicalUuid(groupUuid) || (!unlock && !relock) ||
+        (unlock && (!sourceUnlockUuid.isEmpty() || sourceUnlockRecord)) ||
+        (relock &&
+         (!canonicalUuid(sourceUnlockUuid) || !sourceUnlockRecord ||
+          sourceJournal.isEmpty() ||
+          (sourceUnlockRecord->transactionUuid != sourceUnlockUuid) ||
+          (sourceUnlockRecord->transactionType !=
+           PrivacyTransactionType::CompatibilityUnlock) ||
+          (sourceUnlockRecord->categoryUuid != record.categoryUuid) ||
+          (sourceUnlockRecord->rootUuid != record.rootUuid))))
+    {
+        return {};
+    }
+
+    QJsonObject object;
+    object.insert(QStringLiteral("formatVersion"), 1);
+    object.insert(QStringLiteral("groupUuid"), groupUuid);
+    object.insert(QStringLiteral("journal"),
+                  QString::fromLatin1(journal.toBase64()));
+    object.insert(QStringLiteral("sourceUnlockJournal"),
+                  QString::fromLatin1(sourceJournal.toBase64()));
+    object.insert(QStringLiteral("sourceUnlockUuid"), sourceUnlockUuid);
+    return QJsonDocument(object).toJson(QJsonDocument::Compact);
+}
+
+bool decodeCompatibilityPayload(
+    const QByteArray& bytes, PrivacyJournalRecord* const record,
+    QString* const groupUuid, QString* const sourceUnlockUuid,
+    PrivacyJournalRecord* const sourceUnlockRecord)
+{
+    if (!record || !groupUuid || !sourceUnlockUuid || !sourceUnlockRecord ||
+        bytes.isEmpty())
+    {
+        return false;
+    }
+
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
+
+    if ((error.error != QJsonParseError::NoError) || !document.isObject())
+    {
+        return false;
+    }
+
+    const QJsonObject object = document.object();
+    const QStringList objectKeys = object.keys();
+    const QSet<QString> keys(objectKeys.cbegin(), objectKeys.cend());
+    const QSet<QString> expected = {
+        QStringLiteral("formatVersion"), QStringLiteral("groupUuid"),
+        QStringLiteral("journal"), QStringLiteral("sourceUnlockJournal"),
+        QStringLiteral("sourceUnlockUuid")
+    };
+
+    if ((keys != expected) ||
+        (object.value(QStringLiteral("formatVersion")).toInt(-1) != 1))
+    {
+        return false;
+    }
+
+    const QString decodedGroup =
+        object.value(QStringLiteral("groupUuid")).toString();
+    const QString decodedSourceUuid =
+        object.value(QStringLiteral("sourceUnlockUuid")).toString();
+    const QByteArray journal = QByteArray::fromBase64(
+        object.value(QStringLiteral("journal")).toString().toLatin1(),
+        QByteArray::AbortOnBase64DecodingErrors);
+    const QByteArray sourceJournal = QByteArray::fromBase64(
+        object.value(QStringLiteral("sourceUnlockJournal")).toString().toLatin1(),
+        QByteArray::AbortOnBase64DecodingErrors);
+    PrivacyJournalError journalError = PrivacyJournalError::None;
+
+    if (!canonicalUuid(decodedGroup) ||
+        !PrivacyTransactionJournalCodec::decode(journal, record, &journalError))
+    {
+        return false;
+    }
+
+    const bool unlock = (record->transactionType ==
+                         PrivacyTransactionType::CompatibilityUnlock);
+    const bool relock = (record->transactionType ==
+                         PrivacyTransactionType::CompatibilityRelock);
+
+    if ((!unlock && !relock) ||
+        (unlock && (!decodedSourceUuid.isEmpty() || !sourceJournal.isEmpty())))
+    {
+        return false;
+    }
+
+    if (relock &&
+        (!canonicalUuid(decodedSourceUuid) || sourceJournal.isEmpty() ||
+         !PrivacyTransactionJournalCodec::decode(
+             sourceJournal, sourceUnlockRecord, &journalError) ||
+         (sourceUnlockRecord->transactionUuid != decodedSourceUuid) ||
+         (sourceUnlockRecord->transactionType !=
+          PrivacyTransactionType::CompatibilityUnlock) ||
+         (sourceUnlockRecord->categoryUuid != record->categoryUuid) ||
+         (sourceUnlockRecord->rootUuid != record->rootUuid)))
+    {
+        return false;
+    }
+
+    *groupUuid = decodedGroup;
+    *sourceUnlockUuid = decodedSourceUuid;
     return true;
 }
 
@@ -1161,7 +1390,9 @@ bool verifyArchiveMember(const PrivacyCasualArchiveEngine& archive,
 bool PrivacyStillItemTransactionResult::succeeded() const
 {
     return ((status == PrivacyStillItemTransactionStatus::Protected) ||
-            (status == PrivacyStillItemTransactionStatus::Unprotected));
+            (status == PrivacyStillItemTransactionStatus::Unprotected) ||
+            (status == PrivacyStillItemTransactionStatus::CompatibilityUnlocked) ||
+            (status == PrivacyStillItemTransactionStatus::CompatibilityRelocked));
 }
 
 bool PrivacyCoreDbStillItemPersistence::loadSnapshot(
@@ -1190,6 +1421,22 @@ bool PrivacyCoreDbStillItemPersistence::beginUnprotection(
     const PrivacyTransactionJournal& journal)
 {
     return PrivacyRepository().beginItemUnprotection(transaction, journal);
+}
+
+bool PrivacyCoreDbStillItemPersistence::beginCompatibilityUnlock(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal)
+{
+    return PrivacyRepository().beginCompatibilityUnlock(transaction, journal);
+}
+
+bool PrivacyCoreDbStillItemPersistence::beginCompatibilityRelock(
+    const PrivacyTransaction& completedUnlock,
+    const PrivacyTransaction& relock,
+    const PrivacyTransactionJournal& journal)
+{
+    return PrivacyRepository().beginCompatibilityRelock(
+        completedUnlock, relock, journal);
 }
 
 bool PrivacyCoreDbStillItemPersistence::publishUnprotection(
@@ -3539,6 +3786,2024 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     return result;
 }
 
+PrivacyStillItemTransactionResult
+PrivacyStillItemTransactionEngine::compatibilityUnlock(
+    const PrivacyCompatibilityUnlockRequest& request,
+    const PrivacyPassword& password)
+{
+    const QString transactionUuid = normalizedUuid(request.transactionUuid);
+    const QString itemUuid = normalizedUuid(request.itemUuid);
+    const auto fail = [&](PrivacyStillItemTransactionStatus status,
+                          const QString& detail)
+    {
+        return failure(status, transactionUuid, itemUuid, detail);
+    };
+
+    if ((request.imageId <= 0) || !canonicalUuid(request.categoryUuid) ||
+        !canonicalUuid(request.itemUuid) ||
+        !canonicalUuid(request.transactionUuid) ||
+        !canonicalUuid(request.groupUuid) || !request.publicRoot.isValid() ||
+        (request.publicRoot.kind != PrivacyStorageRootKind::AlbumRoot) ||
+        !sameRootExpectation(request.publicRoot, request.rootExpectation) ||
+        !password.isValid() || d->durableReplay)
+    {
+        return fail(PrivacyStillItemTransactionStatus::InvalidRequest,
+                    QStringLiteral("Compatibility Unlock request is invalid"));
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->load(&snapshot))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot load Compatibility Unlock snapshot"));
+    }
+
+    const PrivacyItem* const item = itemForUuid(snapshot, itemUuid);
+    const PrivacyCategory* const category = categoryForUuid(
+        snapshot, request.categoryUuid);
+    const PrivacyContainer* const container = containerForItem(snapshot, itemUuid);
+    const QList<PrivacyAsset> assets = assetsForItem(snapshot, itemUuid);
+
+    if (!item || (item->imageId != request.imageId) ||
+        (item->categoryUuid != request.categoryUuid) || !category ||
+        (category->backend != PrivacyBackend::Casual) ||
+        (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
+        !container || (container->kind != PrivacyContainerKind::CasualArchive) ||
+        (container->state != PrivacyContainerState::Verified) ||
+        (container->rootUuid != request.publicRoot.uuid) || assets.isEmpty() ||
+        (assets.size() > PrivacyTransactionJournalCodec::MaximumAssetCount))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::AssociatedAssetSetUnsupported,
+            QStringLiteral("item is not one exact active Casual asset set"));
+    }
+
+    const QString archivePath = absolutePath(request.publicRoot,
+                                             container->objectRelativePath);
+    PrivacyJournalObjectFact archiveFact;
+
+    if (archivePath.isEmpty() ||
+        !stableFileFact(archivePath, nullptr, &archiveFact) ||
+        (archiveFact.linkCount != 1) ||
+        (archiveFact.size != container->protectedSize) ||
+        (container->protectedHashAlgorithm != QLatin1String("sha256")) ||
+        (archiveFact.sha256 !=
+         QByteArray::fromHex(container->protectedHash.toLatin1())))
+    {
+        return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                    QStringLiteral("verified Casual archive facts do not match"));
+    }
+
+    PrivacyJournalRecord created;
+    created.transactionUuid = transactionUuid;
+    created.categoryUuid = request.categoryUuid;
+    created.rootUuid = request.publicRoot.uuid;
+    created.rootDevice = request.rootExpectation.device;
+    created.rootInode = request.rootExpectation.inode;
+    created.rootIdentitySha256 = request.rootExpectation.identitySha256;
+    created.transactionType = PrivacyTransactionType::CompatibilityUnlock;
+    created.generation = item->generation;
+    created.credentialGeneration = container->credentialGeneration;
+    created.fromCredentialGeneration = container->credentialGeneration;
+    created.toCredentialGeneration = container->credentialGeneration;
+    created.stage = PrivacyJournalStage::Created;
+    bool foundPrimary = false;
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        mode_t portableMode = 0;
+
+        if ((asset.itemUuid != itemUuid) ||
+            (asset.containerUuid != container->uuid) ||
+            (asset.publicRootUuid != request.publicRoot.uuid) ||
+            (asset.hashAlgorithm != QLatin1String("sha256")) ||
+            (asset.originalSize < 0) ||
+            (QByteArray::fromHex(asset.originalHash.toLatin1()).size() != 32) ||
+            !decodePortableMode(asset.portableAttributes, &portableMode) ||
+            !asset.originalModificationDate.isValid())
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral("asset identity evidence is incomplete"));
+        }
+
+        const bool primary =
+            ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+             (asset.ordinal == 0));
+        PrivacyJournalAsset journalAsset;
+        journalAsset.itemUuid = itemUuid;
+        journalAsset.containerUuid = container->uuid;
+        journalAsset.role = asset.role;
+        journalAsset.ordinal = asset.ordinal;
+        journalAsset.publicRelativePath = asset.publicRelativePath;
+        journalAsset.stagedRelativePath =
+            parentPath(asset.publicRelativePath) +
+            (parentPath(asset.publicRelativePath).isEmpty()
+                ? QString() : QLatin1String("/")) +
+            PrivacyPublicTransitionEngine::expectedStageFileName(
+                transactionUuid, asset.role, asset.ordinal);
+        journalAsset.protectedRelativePath = asset.protectedRelativePath;
+        journalAsset.containerRelativePath = container->objectRelativePath;
+        journalAsset.original.presence = PrivacyJournalExpectedPresence::Present;
+        journalAsset.original.size = asset.originalSize;
+        journalAsset.original.linkCount = 1;
+        journalAsset.original.sha256 = QByteArray::fromHex(
+            asset.originalHash.toLatin1());
+        journalAsset.container = archiveFact;
+        const QString publicPath = absolutePath(request.publicRoot,
+                                                asset.publicRelativePath);
+
+        if (primary)
+        {
+            PrivacyJournalObjectFact proxyFact;
+
+            if (foundPrimary || (asset.proxySize < 0) ||
+                (asset.proxyHashAlgorithm != QLatin1String("sha256")) ||
+                !stableFileFact(publicPath, nullptr, &proxyFact) ||
+                (proxyFact.linkCount != 1) ||
+                (proxyFact.size != asset.proxySize) ||
+                (proxyFact.sha256 !=
+                 QByteArray::fromHex(asset.proxyHash.toLatin1())))
+            {
+                return fail(PrivacyStillItemTransactionStatus::SourceChanged,
+                            QStringLiteral("primary public proxy is not exact"));
+            }
+
+            foundPrimary = true;
+            journalAsset.proxy = proxyFact;
+        }
+        else
+        {
+            const QFileInfo publicInfo(publicPath);
+
+            if ((asset.proxySize >= 0) || publicInfo.exists() ||
+                publicInfo.isSymLink())
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::SourceChanged,
+                    QStringLiteral("associated public path is not absent"));
+            }
+
+            journalAsset.proxy.presence =
+                PrivacyJournalExpectedPresence::Absent;
+        }
+
+        created.assets << journalAsset;
+    }
+
+    if (!foundPrimary ||
+        !verifyArchiveMember(d->archive, created, archivePath, password))
+    {
+        return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                    QStringLiteral("archive/member/password verification failed"));
+    }
+
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    PrivacyTransaction transaction;
+    transaction.uuid = transactionUuid;
+    transaction.categoryUuid = request.categoryUuid;
+    transaction.itemUuid = itemUuid;
+    transaction.type = PrivacyTransactionType::CompatibilityUnlock;
+    transaction.state = PrivacyTransactionState::Created;
+    transaction.generation = 0;
+    transaction.fromCredentialGeneration = container->credentialGeneration;
+    transaction.toCredentialGeneration = container->credentialGeneration;
+    transaction.payloadFormatVersion = 1;
+    transaction.payloadData = encodeCompatibilityPayload(
+        created, request.groupUuid);
+    transaction.createdAt = now;
+    transaction.updatedAt = now;
+    PrivacyTransactionJournal databaseJournal;
+    databaseJournal.transactionUuid = transactionUuid;
+    databaseJournal.rootUuid = request.publicRoot.uuid;
+    databaseJournal.journalRelativePath =
+        PrivacyTransactionJournalCodec::relativeJournalPath(transactionUuid);
+    databaseJournal.journalFormatVersion =
+        PrivacyTransactionJournalCodec::FormatVersion;
+    databaseJournal.stage = static_cast<int>(PrivacyJournalStage::Created);
+    databaseJournal.updatedAt = now;
+
+    if (transaction.payloadData.isEmpty() ||
+        !d->persistence.beginCompatibilityUnlock(transaction, databaseJournal))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot atomically begin Compatibility Unlock"));
+    }
+
+    if (d->fault(
+            PrivacyStillItemFaultPoint::AfterCompatibilityUnlockDatabaseBegin))
+    {
+        return fail(PrivacyStillItemTransactionStatus::FaultInjected,
+                    QStringLiteral("fault after Compatibility Unlock DB begin"));
+    }
+
+    QByteArray journalHash;
+    QString detail;
+
+    if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           created, created, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    const PrivacyJournalRecord prepared = recordAt(
+        created, PrivacyJournalStage::Prepared);
+    PrivacyTransaction preparedTransaction = transaction;
+    preparedTransaction.state = PrivacyTransactionState::Prepared;
+    preparedTransaction.generation = 1;
+    preparedTransaction.payloadData = encodeCompatibilityPayload(
+        prepared, request.groupUuid);
+    preparedTransaction.updatedAt = QDateTime::currentDateTimeUtc();
+
+    if (preparedTransaction.payloadData.isEmpty() ||
+        !d->persistence.compareAndUpdateTransaction(
+            preparedTransaction, PrivacyTransactionState::Created, 0) ||
+        !d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           created, prepared, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    detail.isEmpty()
+                        ? QStringLiteral("cannot prepare Compatibility Unlock")
+                        : detail);
+    }
+
+    for (const PrivacyJournalAsset& journalAsset : prepared.assets)
+    {
+        const auto assetIt = std::find_if(
+            assets.cbegin(), assets.cend(),
+            [&journalAsset](const PrivacyAsset& asset)
+            {
+                return ((asset.role == journalAsset.role) &&
+                        (asset.ordinal == journalAsset.ordinal));
+            });
+
+        if (assetIt == assets.cend())
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral("asset mapping disappeared"));
+        }
+
+        PrivacyCasualArchiveRestoreRequest restore;
+        restore.archivePath = archivePath;
+        restore.categoryUuid = request.categoryUuid;
+        restore.containerUuid = container->uuid;
+        restore.itemUuid = itemUuid;
+        restore.protectedRelativePath = assetIt->protectedRelativePath;
+        restore.originalName = assetIt->originalName;
+        restore.role = assetIt->role;
+        restore.ordinal = assetIt->ordinal;
+        restore.expectedArchiveSize = archiveFact.size;
+        restore.expectedArchiveSha256 = archiveFact.sha256;
+        restore.expectedMemberSize = assetIt->originalSize;
+        restore.expectedMemberSha256 = journalAsset.original.sha256;
+        PrivacyPublicReplacementStageRequest stageRequest;
+        stageRequest.absoluteRootPath = request.publicRoot.configuredPath;
+        stageRequest.rootExpectation = request.rootExpectation;
+        stageRequest.journalRecord = prepared;
+        stageRequest.authoritativeJournalSha256 = journalHash;
+        stageRequest.itemUuid = itemUuid;
+        stageRequest.role = journalAsset.role;
+        stageRequest.ordinal = journalAsset.ordinal;
+        const PrivacyPublicReplacementStageResult staged =
+            d->transition.stageReplacement(
+                stageRequest,
+                [&](int descriptor, QString*)
+                {
+                    QFile destination;
+
+                    if (!destination.open(descriptor, QIODevice::WriteOnly,
+                                          QFileDevice::DontCloseHandle))
+                    {
+                        return false;
+                    }
+
+                    const bool restored = d->archive.restoreMember(
+                        restore, password, &destination);
+                    destination.close();
+                    return restored;
+                });
+
+        if (!staged.succeeded())
+        {
+            return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                        staged.detail);
+        }
+    }
+
+    const PrivacyJournalRecord staged = recordAt(
+        prepared, PrivacyJournalStage::Staged);
+    const PrivacyJournalRecord protectedCopy = recordAt(
+        prepared, PrivacyJournalStage::ProtectedCopyVerified);
+
+    if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           prepared, staged, &journalHash, &detail) ||
+        !d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           staged, protectedCopy, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    if (d->fault(PrivacyStillItemFaultPoint::AfterCompatibilityUnlockStages))
+    {
+        return fail(PrivacyStillItemTransactionStatus::FaultInjected,
+                    QStringLiteral("fault after Compatibility Unlock stages"));
+    }
+
+    PrivacyTransaction applying = preparedTransaction;
+    applying.state = PrivacyTransactionState::Applying;
+    applying.generation = 2;
+    applying.payloadData = encodeCompatibilityPayload(
+        protectedCopy, request.groupUuid);
+    applying.updatedAt = QDateTime::currentDateTimeUtc();
+
+    if (applying.payloadData.isEmpty() ||
+        !d->persistence.compareAndUpdateTransaction(
+            applying, PrivacyTransactionState::Prepared, 1))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot publish applying Compatibility Unlock"));
+    }
+
+    if (!d->runtime.publishCompatibilityExposure(request.imageId, itemUuid,
+                                                  true))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::RuntimePublicationFailure,
+                    QStringLiteral("cannot conservatively gate Compatibility exposure"));
+    }
+
+    if (d->fault(PrivacyStillItemFaultPoint::AfterCompatibilityUnlockApplying))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::FaultInjected,
+            QStringLiteral("fault before Compatibility Unlock public transition"));
+    }
+
+    QList<PrivacyPublicTransitionRequest> transitions;
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        mode_t installedMode = 0;
+
+        if (!decodePortableMode(asset.portableAttributes, &installedMode))
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral("asset mode evidence disappeared"));
+        }
+
+        const auto journalIt = std::find_if(
+            protectedCopy.assets.cbegin(), protectedCopy.assets.cend(),
+            [&asset](const PrivacyJournalAsset& candidate)
+            {
+                return ((candidate.role == asset.role) &&
+                        (candidate.ordinal == asset.ordinal));
+            });
+
+        if (journalIt == protectedCopy.assets.cend())
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral("journal asset mapping disappeared"));
+        }
+
+        PrivacyPublicTransitionRequest transition;
+        transition.absoluteRootPath = request.publicRoot.configuredPath;
+        transition.rootExpectation = request.rootExpectation;
+        transition.journalRecord = protectedCopy;
+        transition.authoritativeJournalSha256 = journalHash;
+        transition.itemUuid = itemUuid;
+        transition.role = asset.role;
+        transition.ordinal = asset.ordinal;
+        transition.mode =
+            (journalIt->proxy.presence ==
+             PrivacyJournalExpectedPresence::Present)
+                ? PrivacyPublicTransitionMode::ExchangePresent
+                : PrivacyPublicTransitionMode::InstallAbsent;
+        transition.currentFact = PrivacyPublicTransitionFactKind::Proxy;
+        transition.installedFact = PrivacyPublicTransitionFactKind::Original;
+        transition.installedUnixMode = static_cast<int>(installedMode);
+        transitions << transition;
+    }
+
+    const auto primaryTransitionAsset = std::find_if(
+        protectedCopy.assets.cbegin(), protectedCopy.assets.cend(),
+        [](const PrivacyJournalAsset& asset)
+        {
+            return ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                    (asset.ordinal == 0));
+        });
+    const QString primaryPublicPath =
+        (primaryTransitionAsset == protectedCopy.assets.cend())
+            ? QString()
+            : absolutePath(request.publicRoot,
+                           primaryTransitionAsset->publicRelativePath);
+    PrivacyJournalObjectFact transitionArchiveFact;
+
+    if (!stableFileFact(archivePath, nullptr, &transitionArchiveFact) ||
+        !sameFact(transitionArchiveFact, archiveFact))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::ArchiveFailure,
+            QStringLiteral(
+                "protected archive changed before Compatibility exposure"));
+    }
+
+    if (primaryPublicPath.isEmpty() ||
+        !d->cache.begin(request.imageId, primaryPublicPath, false, false))
+    {
+        return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
+                    QStringLiteral("cannot begin Compatibility Unlock cache gate"));
+    }
+
+    const PrivacyPublicTransitionResult transitioned =
+        d->transition.executeBatch(transitions);
+    const PrivacyJournalRecord publicVerified = recordAt(
+        prepared, PrivacyJournalStage::PublicStateVerified);
+
+    if (!transitioned.succeeded() ||
+        !d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           protectedCopy, publicVerified, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PublicTransitionFailure,
+                    transitioned.succeeded() ? detail : transitioned.detail);
+    }
+
+    if (d->fault(
+            PrivacyStillItemFaultPoint::AfterCompatibilityUnlockPublicTransition))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::FaultInjected,
+            QStringLiteral("fault after Compatibility Unlock public transition"));
+    }
+
+    if (!d->cache.finish(request.imageId, primaryPublicPath, false, true))
+    {
+        return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
+                    QStringLiteral("cannot finish Compatibility Unlock cache gate"));
+    }
+
+    PrivacyTransaction exposed = applying;
+    exposed.state = PrivacyTransactionState::Exposed;
+    exposed.generation = 3;
+    exposed.payloadData = encodeCompatibilityPayload(
+        publicVerified, request.groupUuid);
+    exposed.updatedAt = QDateTime::currentDateTimeUtc();
+
+    if (exposed.payloadData.isEmpty() ||
+        !d->persistence.compareAndUpdateTransaction(
+            exposed, PrivacyTransactionState::Applying, 2))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot publish Compatibility Unlock exposure"));
+    }
+
+    PrivacyStillItemTransactionResult result;
+    result.status = PrivacyStillItemTransactionStatus::CompatibilityUnlocked;
+    result.transactionUuid = transactionUuid;
+    result.itemUuid = itemUuid;
+    return result;
+}
+
+PrivacyStillItemTransactionResult
+PrivacyStillItemTransactionEngine::compatibilityRelock(
+    const PrivacyCompatibilityRelockRequest& request)
+{
+    const QString relockUuid = normalizedUuid(request.relockTransactionUuid);
+    const QString unlockUuid = normalizedUuid(request.unlockTransactionUuid);
+    const QString itemUuid = normalizedUuid(request.itemUuid);
+    const auto fail = [&](PrivacyStillItemTransactionStatus status,
+                          const QString& detail)
+    {
+        return failure(status, relockUuid, itemUuid, detail);
+    };
+
+    if ((request.imageId <= 0) || !canonicalUuid(request.categoryUuid) ||
+        !canonicalUuid(request.itemUuid) ||
+        !canonicalUuid(request.unlockTransactionUuid) ||
+        !canonicalUuid(request.relockTransactionUuid) ||
+        (unlockUuid == relockUuid) || !request.publicRoot.isValid() ||
+        (request.publicRoot.kind != PrivacyStorageRootKind::AlbumRoot) ||
+        !sameRootExpectation(request.publicRoot, request.rootExpectation) ||
+        d->durableReplay)
+    {
+        return fail(PrivacyStillItemTransactionStatus::InvalidRequest,
+                    QStringLiteral("Compatibility Relock request is invalid"));
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->load(&snapshot))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot load Compatibility Relock snapshot"));
+    }
+
+    const PrivacyItem* const item = itemForUuid(snapshot, itemUuid);
+    const PrivacyContainer* const container = containerForItem(snapshot, itemUuid);
+    const QList<PrivacyAsset> assets = assetsForItem(snapshot, itemUuid);
+    const PrivacyTransaction* const unlock = transactionFor(snapshot, unlockUuid);
+    PrivacyJournalRecord sourceRecord;
+    PrivacyJournalRecord unusedSourceRecord;
+    QString groupUuid;
+    QString unusedSourceUuid;
+
+    if (!item || (item->imageId != request.imageId) ||
+        (item->categoryUuid != request.categoryUuid) || !container ||
+        (container->kind != PrivacyContainerKind::CasualArchive) ||
+        (container->state != PrivacyContainerState::Verified) ||
+        (container->rootUuid != request.publicRoot.uuid) || assets.isEmpty() ||
+        !unlock ||
+        (unlock->type != PrivacyTransactionType::CompatibilityUnlock) ||
+        (unlock->state != PrivacyTransactionState::Exposed) ||
+        (unlock->categoryUuid != request.categoryUuid) ||
+        (unlock->itemUuid != itemUuid) ||
+        !decodeCompatibilityPayload(
+            unlock->payloadData, &sourceRecord, &groupUuid, &unusedSourceUuid,
+            &unusedSourceRecord) || !unusedSourceUuid.isEmpty() ||
+        (sourceRecord.transactionUuid != unlockUuid) ||
+        (sourceRecord.stage != PrivacyJournalStage::PublicStateVerified) ||
+        (sourceRecord.rootUuid != request.publicRoot.uuid) ||
+        (sourceRecord.assets.size() != assets.size()))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral("exact Exposed unlock evidence is missing"));
+    }
+
+    PrivacyJournalRecord created = sourceRecord;
+    created.transactionUuid = relockUuid;
+    created.transactionType = PrivacyTransactionType::CompatibilityRelock;
+    created.stage = PrivacyJournalStage::Created;
+
+    for (PrivacyJournalAsset& asset : created.assets)
+    {
+        asset.stagedRelativePath =
+            parentPath(asset.publicRelativePath) +
+            (parentPath(asset.publicRelativePath).isEmpty()
+                ? QString() : QLatin1String("/")) +
+            PrivacyPublicTransitionEngine::expectedStageFileName(
+                relockUuid, asset.role, asset.ordinal);
+    }
+
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    PrivacyTransaction completedUnlock = *unlock;
+    completedUnlock.state = PrivacyTransactionState::Complete;
+    completedUnlock.generation = unlock->generation + 1;
+    completedUnlock.payloadData = encodeCompatibilityPayload(
+        recordAt(sourceRecord, PrivacyJournalStage::Complete), groupUuid);
+    completedUnlock.updatedAt = now;
+    PrivacyTransaction relock;
+    relock.uuid = relockUuid;
+    relock.categoryUuid = request.categoryUuid;
+    relock.itemUuid = itemUuid;
+    relock.type = PrivacyTransactionType::CompatibilityRelock;
+    relock.state = PrivacyTransactionState::Created;
+    relock.generation = 0;
+    relock.fromCredentialGeneration = unlock->fromCredentialGeneration;
+    relock.toCredentialGeneration = unlock->toCredentialGeneration;
+    relock.payloadFormatVersion = 1;
+    relock.payloadData = encodeCompatibilityPayload(
+        created, groupUuid, unlockUuid, &sourceRecord);
+    relock.createdAt = now;
+    relock.updatedAt = now;
+    PrivacyTransactionJournal databaseJournal;
+    databaseJournal.transactionUuid = relockUuid;
+    databaseJournal.rootUuid = request.publicRoot.uuid;
+    databaseJournal.journalRelativePath =
+        PrivacyTransactionJournalCodec::relativeJournalPath(relockUuid);
+    databaseJournal.journalFormatVersion =
+        PrivacyTransactionJournalCodec::FormatVersion;
+    databaseJournal.stage = static_cast<int>(PrivacyJournalStage::Created);
+    databaseJournal.updatedAt = now;
+
+    if (completedUnlock.payloadData.isEmpty() || relock.payloadData.isEmpty() ||
+        !d->persistence.beginCompatibilityRelock(
+            completedUnlock, relock, databaseJournal))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot atomically begin Compatibility Relock"));
+    }
+
+    if (d->fault(
+            PrivacyStillItemFaultPoint::AfterCompatibilityRelockDatabaseBegin))
+    {
+        return fail(PrivacyStillItemTransactionStatus::FaultInjected,
+                    QStringLiteral("fault after Compatibility Relock DB begin"));
+    }
+
+    QByteArray journalHash;
+    QString detail;
+    const PrivacyJournalRecord completedSource = recordAt(
+        sourceRecord, PrivacyJournalStage::Complete);
+
+    if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           sourceRecord, completedSource, &journalHash, &detail) ||
+        !d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           created, created, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    const auto reconcile = [&](const PrivacyJournalRecord& predecessor,
+                               PrivacyTransactionState expectedState,
+                               qlonglong expectedGeneration,
+                               const QString& reason)
+    {
+        const PrivacyJournalRecord reconciliation = recordAt(
+            created, PrivacyJournalStage::ReconciliationRequired);
+        QByteArray reconciliationHash;
+        QString reconciliationDetail;
+
+        if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
+                               predecessor, reconciliation,
+                               &reconciliationHash, &reconciliationDetail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                        reconciliationDetail);
+        }
+
+        PrivacyTransaction pending = relock;
+        pending.state = PrivacyTransactionState::NeedsReconciliation;
+        pending.generation = expectedGeneration + 1;
+        pending.payloadData = encodeCompatibilityPayload(
+            reconciliation, groupUuid, unlockUuid, &sourceRecord);
+        pending.updatedAt = QDateTime::currentDateTimeUtc();
+
+        if (pending.payloadData.isEmpty() ||
+            !d->persistence.compareAndUpdateTransaction(
+                pending, expectedState, expectedGeneration))
+        {
+            return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                        QStringLiteral("cannot publish reconciliation state"));
+        }
+
+        return fail(PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                    reason);
+    };
+
+    const QString archivePath = absolutePath(request.publicRoot,
+                                             container->objectRelativePath);
+    PrivacyJournalObjectFact archiveFact;
+    bool exactForRelock = !archivePath.isEmpty() &&
+                          stableFileFact(archivePath, nullptr, &archiveFact) &&
+                          sameFact(archiveFact,
+                                   sourceRecord.assets.constFirst().container);
+
+    for (const PrivacyJournalAsset& sourceAsset : sourceRecord.assets)
+    {
+        PrivacyJournalObjectFact current;
+        const QString publicPath = absolutePath(request.publicRoot,
+                                                sourceAsset.publicRelativePath);
+        exactForRelock = exactForRelock &&
+                         stableFileFact(publicPath, nullptr, &current) &&
+                         sameFact(current, sourceAsset.original);
+
+        if (sourceAsset.proxy.presence ==
+            PrivacyJournalExpectedPresence::Present)
+        {
+            PrivacyJournalObjectFact retainedProxy;
+            const QString retainedPath = absolutePath(
+                request.publicRoot, sourceAsset.stagedRelativePath);
+            exactForRelock = exactForRelock &&
+                             stableFileFact(retainedPath, nullptr,
+                                            &retainedProxy) &&
+                             sameFact(retainedProxy, sourceAsset.proxy);
+        }
+    }
+
+    if (!exactForRelock)
+    {
+        return reconcile(
+            created, PrivacyTransactionState::Created, 0,
+            QStringLiteral(
+                "exposed content, retained proxy, or protected copy changed"));
+    }
+
+    const PrivacyJournalRecord prepared = recordAt(
+        created, PrivacyJournalStage::Prepared);
+    PrivacyTransaction preparedTransaction = relock;
+    preparedTransaction.state = PrivacyTransactionState::Prepared;
+    preparedTransaction.generation = 1;
+    preparedTransaction.payloadData = encodeCompatibilityPayload(
+        prepared, groupUuid, unlockUuid, &sourceRecord);
+    preparedTransaction.updatedAt = QDateTime::currentDateTimeUtc();
+
+    if (preparedTransaction.payloadData.isEmpty() ||
+        !d->persistence.compareAndUpdateTransaction(
+            preparedTransaction, PrivacyTransactionState::Created, 0) ||
+        !d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           created, prepared, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    detail.isEmpty()
+                        ? QStringLiteral("cannot prepare Compatibility Relock")
+                        : detail);
+    }
+
+    for (const PrivacyJournalAsset& relockAsset : prepared.assets)
+    {
+        if (relockAsset.proxy.presence !=
+            PrivacyJournalExpectedPresence::Present)
+        {
+            continue;
+        }
+
+        const auto sourceIt = std::find_if(
+            sourceRecord.assets.cbegin(), sourceRecord.assets.cend(),
+            [&relockAsset](const PrivacyJournalAsset& candidate)
+            {
+                return ((candidate.role == relockAsset.role) &&
+                        (candidate.ordinal == relockAsset.ordinal));
+            });
+
+        if (sourceIt == sourceRecord.assets.cend())
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral("retained proxy mapping disappeared"));
+        }
+
+        const QString retainedPath = absolutePath(
+            request.publicRoot, sourceIt->stagedRelativePath);
+        PrivacyPublicReplacementStageRequest stageRequest;
+        stageRequest.absoluteRootPath = request.publicRoot.configuredPath;
+        stageRequest.rootExpectation = request.rootExpectation;
+        stageRequest.journalRecord = prepared;
+        stageRequest.authoritativeJournalSha256 = journalHash;
+        stageRequest.itemUuid = itemUuid;
+        stageRequest.role = relockAsset.role;
+        stageRequest.ordinal = relockAsset.ordinal;
+        const PrivacyPublicReplacementStageResult stagedProxy =
+            d->transition.stageReplacement(
+                stageRequest,
+                [&retainedPath](int descriptor, QString*)
+                {
+                    return copyRegularFileToDescriptor(retainedPath, descriptor);
+                });
+
+        if (!stagedProxy.succeeded())
+        {
+            return fail(PrivacyStillItemTransactionStatus::PublicTransitionFailure,
+                        stagedProxy.detail);
+        }
+    }
+
+    const PrivacyJournalRecord staged = recordAt(
+        prepared, PrivacyJournalStage::Staged);
+    const PrivacyJournalRecord protectedCopy = recordAt(
+        prepared, PrivacyJournalStage::ProtectedCopyVerified);
+
+    if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           prepared, staged, &journalHash, &detail) ||
+        !d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           staged, protectedCopy, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    if (d->fault(PrivacyStillItemFaultPoint::AfterCompatibilityRelockStages))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::FaultInjected,
+            QStringLiteral("fault after Compatibility Relock stages"));
+    }
+
+    PrivacyTransaction applying = preparedTransaction;
+    applying.state = PrivacyTransactionState::Applying;
+    applying.generation = 2;
+    applying.payloadData = encodeCompatibilityPayload(
+        protectedCopy, groupUuid, unlockUuid, &sourceRecord);
+    applying.updatedAt = QDateTime::currentDateTimeUtc();
+
+    if (applying.payloadData.isEmpty() ||
+        !d->persistence.compareAndUpdateTransaction(
+            applying, PrivacyTransactionState::Prepared, 1))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot publish applying Compatibility Relock"));
+    }
+
+    if (d->fault(PrivacyStillItemFaultPoint::AfterCompatibilityRelockApplying))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::FaultInjected,
+            QStringLiteral("fault before Compatibility Relock public transition"));
+    }
+
+    QList<PrivacyPublicTransitionRequest> transitions;
+
+    for (const PrivacyJournalAsset& asset : protectedCopy.assets)
+    {
+        PrivacyPublicTransitionRequest transition;
+        transition.absoluteRootPath = request.publicRoot.configuredPath;
+        transition.rootExpectation = request.rootExpectation;
+        transition.journalRecord = protectedCopy;
+        transition.authoritativeJournalSha256 = journalHash;
+        transition.itemUuid = itemUuid;
+        transition.role = asset.role;
+        transition.ordinal = asset.ordinal;
+        transition.mode =
+            (asset.proxy.presence == PrivacyJournalExpectedPresence::Present)
+                ? PrivacyPublicTransitionMode::ExchangePresent
+                : PrivacyPublicTransitionMode::RemovePresent;
+        transition.currentFact = PrivacyPublicTransitionFactKind::Original;
+        transition.installedFact = PrivacyPublicTransitionFactKind::Proxy;
+        transitions << transition;
+    }
+
+    const auto primaryTransitionAsset = std::find_if(
+        protectedCopy.assets.cbegin(), protectedCopy.assets.cend(),
+        [](const PrivacyJournalAsset& asset)
+        {
+            return ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                    (asset.ordinal == 0));
+        });
+    const QString primaryPublicPath =
+        (primaryTransitionAsset == protectedCopy.assets.cend())
+            ? QString()
+            : absolutePath(request.publicRoot,
+                           primaryTransitionAsset->publicRelativePath);
+    PrivacyJournalObjectFact transitionArchiveFact;
+
+    if (!stableFileFact(archivePath, nullptr, &transitionArchiveFact) ||
+        !sameFact(transitionArchiveFact,
+                  sourceRecord.assets.constFirst().container))
+    {
+        return reconcile(
+            protectedCopy, PrivacyTransactionState::Applying, 2,
+            QStringLiteral(
+                "protected copy changed before Compatibility Relock"));
+    }
+
+    if (primaryPublicPath.isEmpty() ||
+        !d->cache.begin(request.imageId, primaryPublicPath, true, true))
+    {
+        return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
+                    QStringLiteral("cannot begin Compatibility Relock cache gate"));
+    }
+
+    const PrivacyPublicTransitionResult transitioned =
+        d->transition.executeBatch(transitions);
+
+    if (!transitioned.succeeded())
+    {
+        const PrivacyJournalRecord applyingRecord = recordAt(
+            created, PrivacyJournalStage::Applying);
+
+        if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
+                               protectedCopy, applyingRecord,
+                               &journalHash, &detail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                        detail);
+        }
+
+        return reconcile(
+            applyingRecord, PrivacyTransactionState::Applying, 2,
+            transitioned.detail.isEmpty()
+                ? QStringLiteral("public content changed during relock")
+                : transitioned.detail);
+    }
+
+    const PrivacyJournalRecord publicVerified = recordAt(
+        prepared, PrivacyJournalStage::PublicStateVerified);
+
+    if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           protectedCopy, publicVerified, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    if (d->fault(
+            PrivacyStillItemFaultPoint::AfterCompatibilityRelockPublicTransition))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::FaultInjected,
+            QStringLiteral("fault after Compatibility Relock public transition"));
+    }
+
+    PrivacyJournalObjectFact cleanupArchiveFact;
+
+    if (!stableFileFact(archivePath, nullptr, &cleanupArchiveFact) ||
+        !sameFact(cleanupArchiveFact,
+                  sourceRecord.assets.constFirst().container))
+    {
+        return reconcile(
+            publicVerified, PrivacyTransactionState::Applying, 2,
+            QStringLiteral(
+                "protected copy changed before Compatibility Relock cleanup"));
+    }
+
+    if (!d->cache.finish(request.imageId, primaryPublicPath, true, true))
+    {
+        return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
+                    QStringLiteral("cannot finish Compatibility Relock cache gate"));
+    }
+
+    for (const PrivacyJournalAsset& relockAsset : publicVerified.assets)
+    {
+        if (!removeExactFile(request.publicRoot, request.rootExpectation,
+                             relockAsset.stagedRelativePath,
+                             relockAsset.original, true))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        QStringLiteral("displaced original cleanup is pending"));
+        }
+
+        const auto sourceIt = std::find_if(
+            sourceRecord.assets.cbegin(), sourceRecord.assets.cend(),
+            [&relockAsset](const PrivacyJournalAsset& candidate)
+            {
+                return ((candidate.role == relockAsset.role) &&
+                        (candidate.ordinal == relockAsset.ordinal));
+            });
+
+        if ((sourceIt != sourceRecord.assets.cend()) &&
+            (sourceIt->proxy.presence ==
+             PrivacyJournalExpectedPresence::Present) &&
+            !removeExactFile(request.publicRoot, request.rootExpectation,
+                             sourceIt->stagedRelativePath,
+                             sourceIt->proxy, true))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        QStringLiteral("retained proxy cleanup is pending"));
+        }
+    }
+
+    const PrivacyJournalRecord complete = recordAt(
+        prepared, PrivacyJournalStage::Complete);
+
+    if (!d->advanceJournal(request.publicRoot, request.rootExpectation,
+                           publicVerified, complete, &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    PrivacyTransaction completed = applying;
+    completed.state = PrivacyTransactionState::Complete;
+    completed.generation = 3;
+    completed.payloadData = encodeCompatibilityPayload(
+        complete, groupUuid, unlockUuid, &sourceRecord);
+    completed.updatedAt = QDateTime::currentDateTimeUtc();
+
+    if (completed.payloadData.isEmpty() ||
+        !d->persistence.compareAndUpdateTransaction(
+            completed, PrivacyTransactionState::Applying, 2))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot complete Compatibility Relock"));
+    }
+
+    if (!d->runtime.publishCompatibilityExposure(request.imageId, itemUuid,
+                                                  false))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::RuntimePublicationFailure,
+            QStringLiteral("cannot clear completed Compatibility exposure"));
+    }
+
+    PrivacyStillItemTransactionResult result;
+    result.status = PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+    result.transactionUuid = relockUuid;
+    result.itemUuid = itemUuid;
+    return result;
+}
+
+PrivacyStillItemTransactionResult
+PrivacyStillItemTransactionEngine::recoverCompatibility(
+    const PrivacyStorageRoot& publicRoot,
+    const PrivacyTransaction& transaction)
+{
+    const auto fail = [&](PrivacyStillItemTransactionStatus status,
+                          const QString& detail)
+    {
+        return failure(status, transaction.uuid, transaction.itemUuid, detail);
+    };
+    PrivacyJournalRecord record;
+    PrivacyJournalRecord sourceRecord;
+    QString groupUuid;
+    QString sourceUnlockUuid;
+
+    if (!decodeCompatibilityPayload(
+            transaction.payloadData, &record, &groupUuid, &sourceUnlockUuid,
+            &sourceRecord) ||
+        (record.transactionUuid != transaction.uuid) ||
+        (record.transactionType != transaction.type) ||
+        (record.categoryUuid != transaction.categoryUuid) ||
+        (record.rootUuid != publicRoot.uuid) || record.assets.isEmpty())
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral("Compatibility recovery payload is not exact"));
+    }
+
+    PrivacyJournalRootExpectation expectation;
+    expectation.rootUuid = record.rootUuid;
+    expectation.markerUuid = publicRoot.markerUuid;
+    expectation.identitySha256 = record.rootIdentitySha256;
+    expectation.device = record.rootDevice;
+    expectation.inode = record.rootInode;
+
+    if (!sameRootExpectation(publicRoot, expectation))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RootUnavailable,
+                    QStringLiteral("Compatibility recovery root is not exact"));
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->load(&snapshot))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot load Compatibility recovery snapshot"));
+    }
+
+    const PrivacyItem* const item = itemForUuid(snapshot, transaction.itemUuid);
+
+    if (!item || (item->categoryUuid != transaction.categoryUuid))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral("Compatibility recovery item is missing"));
+    }
+
+    QByteArray journalHash;
+    QString detail;
+
+    if (transaction.type == PrivacyTransactionType::CompatibilityUnlock)
+    {
+        if ((transaction.state == PrivacyTransactionState::Created) ||
+            (transaction.state == PrivacyTransactionState::Prepared))
+        {
+            for (const PrivacyJournalAsset& asset : record.assets)
+            {
+                const QString publicPath = absolutePath(
+                    publicRoot, asset.publicRelativePath);
+
+                if (asset.proxy.presence ==
+                    PrivacyJournalExpectedPresence::Present)
+                {
+                    PrivacyJournalObjectFact current;
+
+                    if (!stableFileFact(publicPath, nullptr, &current) ||
+                        !sameFact(current, asset.proxy))
+                    {
+                        return fail(
+                            PrivacyStillItemTransactionStatus::RecoveryRequired,
+                            QStringLiteral(
+                                "pre-exposure public proxy is not exact"));
+                    }
+                }
+                else
+                {
+                    const QFileInfo info(publicPath);
+
+                    if (info.exists() || info.isSymLink())
+                    {
+                        return fail(
+                            PrivacyStillItemTransactionStatus::RecoveryRequired,
+                            QStringLiteral(
+                                "pre-exposure associated path is not absent"));
+                    }
+                }
+
+                if (!removeExactFile(publicRoot, expectation,
+                                     asset.stagedRelativePath,
+                                     asset.original, true))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::CleanupPending,
+                        QStringLiteral(
+                            "cancelled exposure stage cleanup is pending"));
+                }
+            }
+
+            const PrivacyTransactionJournal* databaseJournal =
+                databaseJournalFor(snapshot, transaction.uuid, record.rootUuid);
+
+            if (!databaseJournal)
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::JournalFailure,
+                    QStringLiteral("Compatibility database journal is missing"));
+            }
+
+            PrivacyJournalRecord predecessor = recordAt(
+                record, static_cast<PrivacyJournalStage>(databaseJournal->stage));
+
+            if (databaseJournal->stage ==
+                static_cast<int>(PrivacyJournalStage::Created))
+            {
+                const PrivacyJournalRecord created = recordAt(
+                    record, PrivacyJournalStage::Created);
+
+                if (!d->advanceJournal(publicRoot, expectation, created, created,
+                                       &journalHash, &detail))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::JournalFailure,
+                        detail);
+                }
+
+                predecessor = created;
+            }
+
+            const PrivacyJournalRecord complete = recordAt(
+                record, PrivacyJournalStage::Complete);
+
+            if (!d->advanceJournal(publicRoot, expectation, predecessor,
+                                   complete, &journalHash, &detail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            PrivacyTransaction completed = transaction;
+            completed.state = PrivacyTransactionState::Complete;
+            completed.generation = transaction.generation + 1;
+            completed.payloadData = encodeCompatibilityPayload(
+                complete, groupUuid);
+            completed.updatedAt = QDateTime::currentDateTimeUtc();
+
+            if (completed.payloadData.isEmpty() ||
+                !d->persistence.compareAndUpdateTransaction(
+                    completed, transaction.state, transaction.generation))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot cancel pre-exposure transaction"));
+            }
+
+            if (!d->runtime.publishCompatibilityExposure(
+                    item->imageId, item->uuid, false))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RuntimePublicationFailure,
+                    QStringLiteral("cannot clear cancelled exposure gate"));
+            }
+
+            PrivacyStillItemTransactionResult result;
+            result.status =
+                PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+            result.transactionUuid = transaction.uuid;
+            result.itemUuid = transaction.itemUuid;
+            return result;
+        }
+
+        PrivacyTransaction exposed = transaction;
+        PrivacyJournalRecord publicVerified = recordAt(
+            record, PrivacyJournalStage::PublicStateVerified);
+
+        if ((transaction.state == PrivacyTransactionState::Applying) &&
+            (record.stage != PrivacyJournalStage::ProtectedCopyVerified))
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::RecoveryRequired,
+                QStringLiteral("Compatibility Unlock Applying payload is not exact"));
+        }
+
+        if ((transaction.state != PrivacyTransactionState::Applying) &&
+            (transaction.state != PrivacyTransactionState::Exposed))
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::RecoveryRequired,
+                QStringLiteral(
+                    "Compatibility Unlock has not reached password-free recovery"));
+        }
+
+        if (!d->runtime.publishCompatibilityExposure(item->imageId,
+                                                      item->uuid, true))
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::RuntimePublicationFailure,
+                QStringLiteral("cannot publish recovered exposure gate"));
+        }
+
+        if (transaction.state == PrivacyTransactionState::Applying)
+        {
+            PrivacyJournalError loadError = PrivacyJournalError::None;
+            std::unique_ptr<PrivacyTransactionJournalStore> journalStore =
+                PrivacyTransactionJournalStore::open(
+                    publicRoot.configuredPath, expectation, &loadError,
+                    &detail);
+
+            if (!journalStore)
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            const PrivacyJournalLoadResult loaded = journalStore->load(
+                transaction.uuid);
+
+            if (!transitionJournalBoundToPayload(snapshot, record, loaded))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::JournalFailure,
+                    QStringLiteral(
+                        "Compatibility Unlock transition journal is not authoritative"));
+            }
+
+            const QList<PrivacyAsset> mappedAssets = assetsForItem(
+                snapshot, item->uuid);
+            QList<PrivacyPublicTransitionRequest> transitions;
+            QString primaryPublicPath;
+
+            if (mappedAssets.size() != loaded.record.assets.size())
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral("Compatibility Unlock asset set changed"));
+            }
+
+            for (const PrivacyJournalAsset& journalAsset : loaded.record.assets)
+            {
+                const auto mappedIt = std::find_if(
+                    mappedAssets.cbegin(), mappedAssets.cend(),
+                    [&journalAsset](const PrivacyAsset& candidate)
+                    {
+                        return ((candidate.role == journalAsset.role) &&
+                                (candidate.ordinal == journalAsset.ordinal));
+                    });
+                mode_t installedMode = 0;
+
+                if ((mappedIt == mappedAssets.cend()) ||
+                    !decodePortableMode(mappedIt->portableAttributes,
+                                        &installedMode))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral(
+                            "Compatibility Unlock mode evidence is missing"));
+                }
+
+                PrivacyPublicTransitionRequest transition;
+                transition.absoluteRootPath = publicRoot.configuredPath;
+                transition.rootExpectation = expectation;
+                transition.journalRecord = loaded.record;
+                transition.authoritativeJournalSha256 = loaded.sha256;
+                transition.itemUuid = item->uuid;
+                transition.role = journalAsset.role;
+                transition.ordinal = journalAsset.ordinal;
+                transition.mode =
+                    (journalAsset.proxy.presence ==
+                     PrivacyJournalExpectedPresence::Present)
+                        ? PrivacyPublicTransitionMode::ExchangePresent
+                        : PrivacyPublicTransitionMode::InstallAbsent;
+                transition.currentFact =
+                    PrivacyPublicTransitionFactKind::Proxy;
+                transition.installedFact =
+                    PrivacyPublicTransitionFactKind::Original;
+                transition.installedUnixMode = static_cast<int>(installedMode);
+                transitions << transition;
+
+                if ((journalAsset.role == PrivacyAsset::PrimaryMediaRole) &&
+                    (journalAsset.ordinal == 0))
+                {
+                    primaryPublicPath = absolutePath(
+                        publicRoot, journalAsset.publicRelativePath);
+                }
+            }
+
+            if (primaryPublicPath.isEmpty() ||
+                !d->cache.begin(item->imageId, primaryPublicPath, false, false))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::CacheTransitionFailure,
+                    QStringLiteral(
+                        "cannot begin recovered Compatibility Unlock cache gate"));
+            }
+
+            const PrivacyPublicTransitionResult transitioned =
+                d->transition.executeBatch(transitions);
+
+            if (!transitioned.succeeded())
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::PublicTransitionFailure,
+                    transitioned.detail);
+            }
+
+            if (!d->advanceJournal(publicRoot, expectation, record,
+                                   publicVerified, &journalHash, &detail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            for (const PrivacyJournalAsset& asset : publicVerified.assets)
+            {
+                PrivacyJournalObjectFact current;
+
+                if (!stableFileFact(
+                        absolutePath(publicRoot, asset.publicRelativePath),
+                        nullptr, &current) || !sameFact(current, asset.original))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral(
+                            "Compatibility exposure is mixed or changed"));
+                }
+            }
+
+            if (!d->cache.finish(item->imageId, primaryPublicPath, false, true))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::CacheTransitionFailure,
+                    QStringLiteral(
+                        "cannot finish recovered Compatibility Unlock cache gate"));
+            }
+
+            exposed.state = PrivacyTransactionState::Exposed;
+            exposed.generation = transaction.generation + 1;
+            exposed.payloadData = encodeCompatibilityPayload(
+                publicVerified, groupUuid);
+            exposed.updatedAt = QDateTime::currentDateTimeUtc();
+
+            if (exposed.payloadData.isEmpty() ||
+                !d->persistence.compareAndUpdateTransaction(
+                    exposed, PrivacyTransactionState::Applying,
+                    transaction.generation))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot publish recovered exposure"));
+            }
+        }
+
+        PrivacyCompatibilityRelockRequest relock;
+        relock.imageId = item->imageId;
+        relock.categoryUuid = transaction.categoryUuid;
+        relock.itemUuid = transaction.itemUuid;
+        relock.unlockTransactionUuid = transaction.uuid;
+        relock.relockTransactionUuid = normalizedUuid(
+            QUuid::createUuid().toString(QUuid::WithoutBraces));
+        relock.publicRoot = publicRoot;
+        relock.rootExpectation = expectation;
+        return compatibilityRelock(relock);
+    }
+
+    if ((transaction.type != PrivacyTransactionType::CompatibilityRelock) ||
+        !canonicalUuid(sourceUnlockUuid) ||
+        (sourceRecord.stage != PrivacyJournalStage::PublicStateVerified))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral(
+                        "Compatibility Relock has not reached automatic recovery"));
+    }
+
+    const bool createdRelock =
+        ((transaction.state == PrivacyTransactionState::Created) &&
+         (record.stage == PrivacyJournalStage::Created));
+    const bool preparedRelock =
+        ((transaction.state == PrivacyTransactionState::Prepared) &&
+         (record.stage == PrivacyJournalStage::Prepared));
+
+    if (createdRelock || preparedRelock)
+    {
+        const PrivacyJournalRecord created = recordAt(
+            record, PrivacyJournalStage::Created);
+        const PrivacyJournalRecord completedSource = recordAt(
+            sourceRecord, PrivacyJournalStage::Complete);
+
+        if (!d->advanceJournal(publicRoot, expectation, sourceRecord,
+                               completedSource, &journalHash, &detail) ||
+            (createdRelock &&
+             !d->advanceJournal(publicRoot, expectation, created, created,
+                                &journalHash, &detail)))
+        {
+            return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                        detail);
+        }
+
+        const auto loadBoundRelockRecord =
+            [&](PrivacyJournalRecord* const current) -> bool
+        {
+            if (!current || !d->load(&snapshot))
+            {
+                detail = QStringLiteral(
+                    "cannot load recovered Compatibility Relock journal");
+                return false;
+            }
+
+            const PrivacyTransactionJournal* const databaseJournal =
+                databaseJournalFor(snapshot, transaction.uuid, record.rootUuid);
+            const int createdStage = static_cast<int>(
+                PrivacyJournalStage::Created);
+            const int protectedStage = static_cast<int>(
+                PrivacyJournalStage::ProtectedCopyVerified);
+
+            if (!databaseJournal || (databaseJournal->stage < createdStage) ||
+                (databaseJournal->stage > protectedStage))
+            {
+                detail = QStringLiteral(
+                    "recovered Compatibility Relock DB journal is invalid");
+                return false;
+            }
+
+            PrivacyJournalError loadError = PrivacyJournalError::None;
+            std::unique_ptr<PrivacyTransactionJournalStore> journalStore =
+                PrivacyTransactionJournalStore::open(
+                    publicRoot.configuredPath, expectation, &loadError,
+                    &detail);
+
+            if (!journalStore)
+            {
+                return false;
+            }
+
+            const PrivacyJournalLoadResult loaded = journalStore->load(
+                transaction.uuid);
+            const int loadedStage = loaded.hasRecord
+                ? static_cast<int>(loaded.record.stage)
+                : -1;
+
+            if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+                !loaded.authoritative || !loaded.hasRecord ||
+                (loadedStage < databaseJournal->stage) ||
+                (loadedStage < createdStage) ||
+                (loadedStage > protectedStage))
+            {
+                detail = QStringLiteral(
+                    "recovered Compatibility Relock filesystem journal is invalid");
+                return false;
+            }
+
+            const PrivacyJournalRecord expectedLoaded = recordAt(
+                created, loaded.record.stage);
+            const QByteArray expectedBytes =
+                PrivacyTransactionJournalCodec::encode(expectedLoaded);
+
+            if (expectedBytes.isEmpty() ||
+                (loaded.canonicalBytes != expectedBytes) ||
+                (loaded.sha256 !=
+                 PrivacyTransactionJournalCodec::sha256(expectedBytes)))
+            {
+                detail = QStringLiteral(
+                    "recovered Compatibility Relock journal facts changed");
+                return false;
+            }
+
+            const PrivacyJournalRecord databaseRecord = recordAt(
+                created,
+                static_cast<PrivacyJournalStage>(databaseJournal->stage));
+
+            if (!d->advanceJournal(publicRoot, expectation, databaseRecord,
+                                   expectedLoaded, &journalHash, &detail))
+            {
+                return false;
+            }
+
+            *current = expectedLoaded;
+            return true;
+        };
+
+        bool exact = true;
+        PrivacyJournalObjectFact archiveFact;
+        exact = stableFileFact(
+                    absolutePath(publicRoot,
+                                 record.assets.constFirst().containerRelativePath),
+                    nullptr, &archiveFact) &&
+                sameFact(archiveFact,
+                         record.assets.constFirst().container);
+
+        for (const PrivacyJournalAsset& asset : record.assets)
+        {
+            PrivacyJournalObjectFact current;
+            exact = exact &&
+                    stableFileFact(
+                        absolutePath(publicRoot, asset.publicRelativePath),
+                        nullptr, &current) && sameFact(current, asset.original);
+            const auto sourceIt = std::find_if(
+                sourceRecord.assets.cbegin(), sourceRecord.assets.cend(),
+                [&asset](const PrivacyJournalAsset& candidate)
+                {
+                    return ((candidate.role == asset.role) &&
+                            (candidate.ordinal == asset.ordinal));
+                });
+
+            if ((sourceIt == sourceRecord.assets.cend()) ||
+                !sameFact(sourceIt->original, asset.original) ||
+                !sameFact(sourceIt->proxy, asset.proxy))
+            {
+                exact = false;
+                continue;
+            }
+
+            if (asset.proxy.presence ==
+                PrivacyJournalExpectedPresence::Present)
+            {
+                PrivacyJournalObjectFact retained;
+                exact = exact && stableFileFact(
+                    absolutePath(publicRoot, sourceIt->stagedRelativePath),
+                    nullptr, &retained) && sameFact(retained, asset.proxy);
+            }
+        }
+
+        if (!exact)
+        {
+            PrivacyJournalRecord current;
+
+            if (!loadBoundRelockRecord(&current))
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            const PrivacyJournalRecord reconciliation = recordAt(
+                created, PrivacyJournalStage::ReconciliationRequired);
+
+            if (!d->advanceJournal(publicRoot, expectation, current,
+                                   reconciliation, &journalHash, &detail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            PrivacyTransaction pending = transaction;
+            pending.state = PrivacyTransactionState::NeedsReconciliation;
+            pending.generation = transaction.generation + 1;
+            pending.payloadData = encodeCompatibilityPayload(
+                reconciliation, groupUuid, sourceUnlockUuid, &sourceRecord);
+            pending.updatedAt = QDateTime::currentDateTimeUtc();
+
+            if (pending.payloadData.isEmpty() ||
+                !d->persistence.compareAndUpdateTransaction(
+                    pending, transaction.state,
+                    transaction.generation))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot publish recovered reconciliation"));
+            }
+
+            return fail(
+                PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                QStringLiteral("exposed content or retained proxy changed"));
+        }
+
+        const PrivacyJournalRecord prepared = recordAt(
+            created, PrivacyJournalStage::Prepared);
+        PrivacyTransaction preparedTransaction = transaction;
+
+        if (createdRelock)
+        {
+            preparedTransaction.state = PrivacyTransactionState::Prepared;
+            preparedTransaction.generation = transaction.generation + 1;
+            preparedTransaction.payloadData = encodeCompatibilityPayload(
+                prepared, groupUuid, sourceUnlockUuid, &sourceRecord);
+            preparedTransaction.updatedAt = QDateTime::currentDateTimeUtc();
+
+            if (preparedTransaction.payloadData.isEmpty() ||
+                !d->persistence.compareAndUpdateTransaction(
+                    preparedTransaction, PrivacyTransactionState::Created,
+                    transaction.generation))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot prepare recovered relock"));
+            }
+        }
+
+        PrivacyJournalRecord current;
+
+        if (!loadBoundRelockRecord(&current))
+        {
+            return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                        detail);
+        }
+
+        if (current.stage == PrivacyJournalStage::Created)
+        {
+            if (!d->advanceJournal(publicRoot, expectation, current, prepared,
+                                   &journalHash, &detail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            current = prepared;
+        }
+
+        if (current.stage == PrivacyJournalStage::Prepared)
+        {
+            for (const PrivacyJournalAsset& asset : prepared.assets)
+            {
+                if (asset.proxy.presence !=
+                    PrivacyJournalExpectedPresence::Present)
+                {
+                    continue;
+                }
+
+                const auto sourceIt = std::find_if(
+                    sourceRecord.assets.cbegin(), sourceRecord.assets.cend(),
+                    [&asset](const PrivacyJournalAsset& candidate)
+                    {
+                        return ((candidate.role == asset.role) &&
+                                (candidate.ordinal == asset.ordinal));
+                    });
+
+                if (sourceIt == sourceRecord.assets.cend())
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral("recovered retained proxy is missing"));
+                }
+
+                PrivacyPublicReplacementStageRequest stageRequest;
+                stageRequest.absoluteRootPath = publicRoot.configuredPath;
+                stageRequest.rootExpectation = expectation;
+                stageRequest.journalRecord = prepared;
+                stageRequest.authoritativeJournalSha256 = journalHash;
+                stageRequest.itemUuid = transaction.itemUuid;
+                stageRequest.role = asset.role;
+                stageRequest.ordinal = asset.ordinal;
+                const QString retainedPath = absolutePath(
+                    publicRoot, sourceIt->stagedRelativePath);
+                const PrivacyPublicReplacementStageResult stagedProxy =
+                    d->transition.stageReplacement(
+                        stageRequest,
+                        [&retainedPath](int descriptor, QString*)
+                        {
+                            return copyRegularFileToDescriptor(retainedPath,
+                                                               descriptor);
+                        });
+
+                PrivacyJournalObjectFact replayFact;
+
+                if (!stagedProxy.succeeded() &&
+                    ((stagedProxy.error !=
+                      PrivacyPublicTransitionError::UnexpectedExistingFile) ||
+                     !stableFileFact(
+                         absolutePath(publicRoot, asset.stagedRelativePath),
+                         nullptr, &replayFact) ||
+                     !sameFact(replayFact, asset.proxy)))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::PublicTransitionFailure,
+                        stagedProxy.detail);
+                }
+            }
+
+            const PrivacyJournalRecord staged = recordAt(
+                prepared, PrivacyJournalStage::Staged);
+
+            if (!d->advanceJournal(publicRoot, expectation, prepared, staged,
+                                   &journalHash, &detail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            current = staged;
+        }
+
+        const PrivacyJournalRecord staged = recordAt(
+            prepared, PrivacyJournalStage::Staged);
+        const PrivacyJournalRecord protectedCopy = recordAt(
+            prepared, PrivacyJournalStage::ProtectedCopyVerified);
+
+        if (current.stage == PrivacyJournalStage::Staged)
+        {
+            if (!d->advanceJournal(publicRoot, expectation, staged,
+                                   protectedCopy, &journalHash, &detail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            current = protectedCopy;
+        }
+
+        if (current.stage != PrivacyJournalStage::ProtectedCopyVerified)
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::RecoveryRequired,
+                QStringLiteral("recovered Compatibility Relock stage is invalid"));
+        }
+
+        PrivacyTransaction applying = preparedTransaction;
+        applying.state = PrivacyTransactionState::Applying;
+        applying.generation = preparedTransaction.generation + 1;
+        applying.payloadData = encodeCompatibilityPayload(
+            protectedCopy, groupUuid, sourceUnlockUuid, &sourceRecord);
+        applying.updatedAt = QDateTime::currentDateTimeUtc();
+
+        if (applying.payloadData.isEmpty() ||
+            !d->persistence.compareAndUpdateTransaction(
+                applying, PrivacyTransactionState::Prepared,
+                preparedTransaction.generation))
+        {
+            return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                        QStringLiteral("cannot apply recovered relock"));
+        }
+
+        QList<PrivacyPublicTransitionRequest> transitions;
+
+        for (const PrivacyJournalAsset& asset : protectedCopy.assets)
+        {
+            PrivacyPublicTransitionRequest transition;
+            transition.absoluteRootPath = publicRoot.configuredPath;
+            transition.rootExpectation = expectation;
+            transition.journalRecord = protectedCopy;
+            transition.authoritativeJournalSha256 = journalHash;
+            transition.itemUuid = transaction.itemUuid;
+            transition.role = asset.role;
+            transition.ordinal = asset.ordinal;
+            transition.mode =
+                (asset.proxy.presence ==
+                 PrivacyJournalExpectedPresence::Present)
+                    ? PrivacyPublicTransitionMode::ExchangePresent
+                    : PrivacyPublicTransitionMode::RemovePresent;
+            transition.currentFact = PrivacyPublicTransitionFactKind::Original;
+            transition.installedFact = PrivacyPublicTransitionFactKind::Proxy;
+            transitions << transition;
+        }
+
+        const PrivacyPublicTransitionResult transitioned =
+            d->transition.executeBatch(transitions);
+
+        if (!transitioned.succeeded())
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::RecoveryRequired,
+                transitioned.detail);
+        }
+
+        const PrivacyJournalRecord publicState = recordAt(
+            prepared, PrivacyJournalStage::PublicStateVerified);
+
+        if (!d->advanceJournal(publicRoot, expectation, protectedCopy,
+                               publicState, &journalHash, &detail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                        detail);
+        }
+
+        return recoverCompatibility(publicRoot, applying);
+    }
+
+    if ((transaction.state != PrivacyTransactionState::Applying) ||
+        (record.stage != PrivacyJournalStage::ProtectedCopyVerified))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral(
+                    "Compatibility Relock has not reached automatic recovery"));
+    }
+
+    PrivacyJournalError loadError = PrivacyJournalError::None;
+    std::unique_ptr<PrivacyTransactionJournalStore> journalStore =
+        PrivacyTransactionJournalStore::open(
+            publicRoot.configuredPath, expectation, &loadError, &detail);
+
+    if (!journalStore)
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    const PrivacyJournalLoadResult loaded = journalStore->load(transaction.uuid);
+
+    if (!transitionJournalBoundToPayload(snapshot, record, loaded))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::JournalFailure,
+            QStringLiteral(
+                "Compatibility Relock transition journal is not authoritative"));
+    }
+
+    QList<PrivacyPublicTransitionRequest> transitions;
+    QString primaryPath;
+
+    for (const PrivacyJournalAsset& journalAsset : loaded.record.assets)
+    {
+        PrivacyPublicTransitionRequest transition;
+        transition.absoluteRootPath = publicRoot.configuredPath;
+        transition.rootExpectation = expectation;
+        transition.journalRecord = loaded.record;
+        transition.authoritativeJournalSha256 = loaded.sha256;
+        transition.itemUuid = item->uuid;
+        transition.role = journalAsset.role;
+        transition.ordinal = journalAsset.ordinal;
+        transition.mode =
+            (journalAsset.proxy.presence ==
+             PrivacyJournalExpectedPresence::Present)
+                ? PrivacyPublicTransitionMode::ExchangePresent
+                : PrivacyPublicTransitionMode::RemovePresent;
+        transition.currentFact = PrivacyPublicTransitionFactKind::Original;
+        transition.installedFact = PrivacyPublicTransitionFactKind::Proxy;
+        transitions << transition;
+
+        if ((journalAsset.role == PrivacyAsset::PrimaryMediaRole) &&
+            (journalAsset.ordinal == 0))
+        {
+            primaryPath = absolutePath(publicRoot,
+                                       journalAsset.publicRelativePath);
+        }
+    }
+
+    const auto reconcileApplying =
+        [&](const PrivacyJournalRecord& predecessor,
+            const QString& reason) -> PrivacyStillItemTransactionResult
+    {
+        if (!d->advanceJournal(publicRoot, expectation, record, predecessor,
+                               &journalHash, &detail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        reason.isEmpty() ? detail : reason);
+        }
+
+        const PrivacyJournalRecord reconciliation = recordAt(
+            record, PrivacyJournalStage::ReconciliationRequired);
+
+        if (!d->advanceJournal(publicRoot, expectation, predecessor,
+                               reconciliation, &journalHash, &detail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                        detail);
+        }
+
+        PrivacyTransaction pending = transaction;
+        pending.state = PrivacyTransactionState::NeedsReconciliation;
+        pending.generation = transaction.generation + 1;
+        pending.payloadData = encodeCompatibilityPayload(
+            reconciliation, groupUuid, sourceUnlockUuid, &sourceRecord);
+        pending.updatedAt = QDateTime::currentDateTimeUtc();
+
+        if (pending.payloadData.isEmpty() ||
+            !d->persistence.compareAndUpdateTransaction(
+                pending, PrivacyTransactionState::Applying,
+                transaction.generation))
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::PersistenceFailure,
+                QStringLiteral("cannot publish recovered relock reconciliation"));
+        }
+
+        return fail(PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                    reason);
+    };
+
+    const QString archivePath = absolutePath(
+        publicRoot, record.assets.constFirst().containerRelativePath);
+    PrivacyJournalObjectFact transitionArchiveFact;
+
+    if (!stableFileFact(archivePath, nullptr, &transitionArchiveFact) ||
+        !sameFact(transitionArchiveFact,
+                  record.assets.constFirst().container))
+    {
+        return reconcileApplying(
+            loaded.record,
+            QStringLiteral(
+                "protected copy changed before recovered Compatibility Relock"));
+    }
+
+    if (primaryPath.isEmpty() ||
+        !d->cache.begin(item->imageId, primaryPath, true, true))
+    {
+        return fail(
+            PrivacyStillItemTransactionStatus::CacheTransitionFailure,
+            QStringLiteral("cannot begin recovered Compatibility Relock cache gate"));
+    }
+
+    const PrivacyPublicTransitionResult transitioned =
+        d->transition.executeBatch(transitions);
+
+    if (!transitioned.succeeded())
+    {
+        const PrivacyJournalLoadResult failedJournal = journalStore->load(
+            transaction.uuid);
+
+        if (!transitionJournalBoundToPayload(snapshot, record, failedJournal))
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::RecoveryRequired,
+                transitioned.detail.isEmpty() ? detail : transitioned.detail);
+        }
+
+        return reconcileApplying(
+            failedJournal.record,
+            transitioned.detail.isEmpty()
+                ? QStringLiteral("public content changed during recovered relock")
+                : transitioned.detail);
+    }
+
+    const PrivacyJournalRecord publicVerified = recordAt(
+        record, PrivacyJournalStage::PublicStateVerified);
+
+    if (!d->advanceJournal(publicRoot, expectation, record, publicVerified,
+                           &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    PrivacyJournalObjectFact cleanupArchiveFact;
+
+    if (!stableFileFact(archivePath, nullptr, &cleanupArchiveFact) ||
+        !sameFact(cleanupArchiveFact,
+                  record.assets.constFirst().container))
+    {
+        return reconcileApplying(
+            publicVerified,
+            QStringLiteral(
+                "protected copy changed before recovered Compatibility cleanup"));
+    }
+
+    for (const PrivacyJournalAsset& asset : publicVerified.assets)
+    {
+        const QString publicPath = absolutePath(publicRoot,
+                                                asset.publicRelativePath);
+
+        if (asset.proxy.presence == PrivacyJournalExpectedPresence::Present)
+        {
+            PrivacyJournalObjectFact current;
+
+            if (!stableFileFact(publicPath, nullptr, &current) ||
+                !sameFact(current, asset.proxy))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral("relocked public proxy is not exact"));
+            }
+        }
+        else
+        {
+            const QFileInfo info(publicPath);
+
+            if (info.exists() || info.isSymLink())
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral("relocked associated path is not absent"));
+            }
+        }
+
+        if (!removeExactFile(publicRoot, expectation,
+                             asset.stagedRelativePath, asset.original, true))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        QStringLiteral("recovered original cleanup is pending"));
+        }
+
+        const auto sourceIt = std::find_if(
+            sourceRecord.assets.cbegin(), sourceRecord.assets.cend(),
+            [&asset](const PrivacyJournalAsset& candidate)
+            {
+                return ((candidate.role == asset.role) &&
+                        (candidate.ordinal == asset.ordinal));
+            });
+
+        if ((sourceIt != sourceRecord.assets.cend()) &&
+            (sourceIt->proxy.presence ==
+             PrivacyJournalExpectedPresence::Present) &&
+            !removeExactFile(publicRoot, expectation,
+                             sourceIt->stagedRelativePath,
+                             sourceIt->proxy, true))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        QStringLiteral("recovered proxy cleanup is pending"));
+        }
+    }
+
+    if (!d->cache.finish(item->imageId, primaryPath, true, true))
+    {
+        return fail(PrivacyStillItemTransactionStatus::CacheTransitionFailure,
+                    QStringLiteral("cannot finish recovered relock cache gate"));
+    }
+
+    const PrivacyJournalRecord complete = recordAt(
+        record, PrivacyJournalStage::Complete);
+
+    if (!d->advanceJournal(publicRoot, expectation, publicVerified, complete,
+                           &journalHash, &detail))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure, detail);
+    }
+
+    PrivacyTransaction completed = transaction;
+    completed.state = PrivacyTransactionState::Complete;
+    completed.generation = transaction.generation + 1;
+    completed.payloadData = encodeCompatibilityPayload(
+        complete, groupUuid, sourceUnlockUuid, &sourceRecord);
+    completed.updatedAt = QDateTime::currentDateTimeUtc();
+
+    if (completed.payloadData.isEmpty() ||
+        !d->persistence.compareAndUpdateTransaction(
+            completed, PrivacyTransactionState::Applying,
+            transaction.generation))
+    {
+        return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral("cannot complete recovered relock"));
+    }
+
+    if (!d->runtime.publishCompatibilityExposure(item->imageId, item->uuid,
+                                                  false))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RuntimePublicationFailure,
+                    QStringLiteral("cannot clear recovered exposure gate"));
+    }
+
+    PrivacyStillItemTransactionResult result;
+    result.status = PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+    result.transactionUuid = transaction.uuid;
+    result.itemUuid = transaction.itemUuid;
+    return result;
+}
+
 PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::recover(
     const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText)
 {
@@ -3587,9 +5852,20 @@ PrivacyStillItemTransactionEngine::recoverInternal(
                                                                   transactionUuid);
 
     if (!transaction || !transaction->isValid() ||
-        (transaction->payloadFormatVersion != 1) ||
-        ((transaction->type != PrivacyTransactionType::ProtectItem) &&
-         (transaction->type != PrivacyTransactionType::UnprotectItem)))
+        (transaction->payloadFormatVersion != 1))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired, {},
+                    QStringLiteral("recoverable still transaction is missing"));
+    }
+
+    if ((transaction->type == PrivacyTransactionType::CompatibilityUnlock) ||
+        (transaction->type == PrivacyTransactionType::CompatibilityRelock))
+    {
+        return recoverCompatibility(publicRoot, *transaction);
+    }
+
+    if ((transaction->type != PrivacyTransactionType::ProtectItem) &&
+        (transaction->type != PrivacyTransactionType::UnprotectItem))
     {
         return fail(PrivacyStillItemTransactionStatus::RecoveryRequired, {},
                     QStringLiteral("recoverable still transaction is missing"));

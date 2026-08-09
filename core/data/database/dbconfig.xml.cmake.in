@@ -463,6 +463,7 @@
                 <statement mode="plain">CREATE INDEX privacyassets_item_index ON PrivacyAssets (itemUuid);</statement>
                 <statement mode="plain">CREATE INDEX privacyderivatives_item_index ON PrivacyDerivatives (itemUuid);</statement>
                 <statement mode="plain">CREATE INDEX privacytransactions_category_state_index ON PrivacyTransactions (categoryUuid, state);</statement>
+                <statement mode="plain">CREATE INDEX privacytransactions_state_type_index ON PrivacyTransactions (state, type, createdAt, uuid);</statement>
                 <statement mode="plain">CREATE INDEX privacytransactionjournals_root_index ON PrivacyTransactionJournals (rootUuid);</statement>
             </dbaction>
 
@@ -1626,6 +1627,7 @@
                 <statement mode="plain">CREATE INDEX privacyassets_item_index ON PrivacyAssets (itemUuid);</statement>
                 <statement mode="plain">CREATE INDEX privacyderivatives_item_index ON PrivacyDerivatives (itemUuid);</statement>
                 <statement mode="plain">CREATE INDEX privacytransactions_category_state_index ON PrivacyTransactions (categoryUuid, state);</statement>
+                <statement mode="plain">CREATE INDEX privacytransactions_state_type_index ON PrivacyTransactions (state, type, createdAt, uuid);</statement>
                 <statement mode="plain">CREATE INDEX privacytransactionjournals_root_index ON PrivacyTransactionJournals (rootUuid);</statement>
                 <statement mode="plain">CREATE TRIGGER privacy_image_delete_guard BEFORE DELETE ON Images
                     WHEN EXISTS (SELECT 1 FROM PrivacyItems WHERE imageId=OLD.id)
@@ -2219,6 +2221,7 @@
                     createdAt DATETIME NOT NULL,
                     updatedAt DATETIME NOT NULL,
                     INDEX PrivacyTransactions_CategoryState (categoryUuid, state),
+                    INDEX PrivacyTransactions_StateType (state, type, createdAt, uuid),
                     CONSTRAINT PrivacyTransactions_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
                     CONSTRAINT PrivacyTransactions_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
                     ENGINE InnoDB;
@@ -4009,6 +4012,7 @@
                     createdAt DATETIME NOT NULL,
                     updatedAt DATETIME NOT NULL,
                     INDEX PrivacyTransactions_CategoryState (categoryUuid, state),
+                    INDEX PrivacyTransactions_StateType (state, type, createdAt, uuid),
                     CONSTRAINT PrivacyTransactions_Categories FOREIGN KEY (categoryUuid) REFERENCES PrivacyCategories (uuid) ON DELETE RESTRICT ON UPDATE CASCADE,
                     CONSTRAINT PrivacyTransactions_Items FOREIGN KEY (itemUuid) REFERENCES PrivacyItems (uuid) ON DELETE RESTRICT ON UPDATE CASCADE)
                     ENGINE InnoDB;

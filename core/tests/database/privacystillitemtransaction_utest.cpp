@@ -38,6 +38,12 @@ const QString ItemUuid = QLatin1String("30000000-0000-0000-0000-000000000001");
 const QString ContainerUuid = QLatin1String("40000000-0000-0000-0000-000000000001");
 const QString ProtectUuid = QLatin1String("50000000-0000-0000-0000-000000000001");
 const QString UnprotectUuid = QLatin1String("60000000-0000-0000-0000-000000000001");
+const QString CompatibilityUnlockUuid =
+    QLatin1String("70000000-0000-0000-0000-000000000001");
+const QString CompatibilityRelockUuid =
+    QLatin1String("80000000-0000-0000-0000-000000000001");
+const QString CompatibilityGroupUuid =
+    QLatin1String("90000000-0000-0000-0000-000000000001");
 
 class VerifiedRoot final : public PrivacyRootVerifier
 {
@@ -159,6 +165,57 @@ public:
         snapshot.transactions << transaction;
         snapshot.transactionJournals << journal;
         return true;
+    }
+
+    bool beginCompatibilityUnlock(
+        const PrivacyTransaction& transaction,
+        const PrivacyTransactionJournal& journal) override
+    {
+        if (std::any_of(snapshot.transactions.cbegin(),
+                        snapshot.transactions.cend(),
+                        [&transaction](const PrivacyTransaction& candidate)
+                        {
+                            return ((candidate.uuid == transaction.uuid) ||
+                                    ((candidate.itemUuid == transaction.itemUuid) &&
+                                     candidate.isActive()));
+                        }))
+        {
+            return false;
+        }
+
+        snapshot.transactions << transaction;
+        snapshot.transactionJournals << journal;
+        return true;
+    }
+
+    bool beginCompatibilityRelock(
+        const PrivacyTransaction& completedUnlock,
+        const PrivacyTransaction& relock,
+        const PrivacyTransactionJournal& journal) override
+    {
+        for (PrivacyTransaction& candidate : snapshot.transactions)
+        {
+            if (candidate.uuid != completedUnlock.uuid)
+            {
+                continue;
+            }
+
+            if ((candidate.type != PrivacyTransactionType::CompatibilityUnlock) ||
+                (candidate.state != PrivacyTransactionState::Exposed) ||
+                (candidate.generation + 1 != completedUnlock.generation) ||
+                (candidate.itemUuid != relock.itemUuid) ||
+                (candidate.categoryUuid != relock.categoryUuid))
+            {
+                return false;
+            }
+
+            candidate = completedUnlock;
+            snapshot.transactions << relock;
+            snapshot.transactionJournals << journal;
+            return true;
+        }
+
+        return false;
     }
 
     bool publishUnprotection(qlonglong imageId, const QString& itemUuid,
@@ -460,6 +517,8 @@ private Q_SLOTS:
     void protectUnprotectAndReplayFinalCleanup();
     void associatedAssetsProtectUnprotectRoundTrip();
     void videoPreparedReplayRetainsExactProxy();
+    void compatibilityUnlockRelockAndPreserveChanges();
+    void compatibilityPublicTransitionRecovery();
     void rejectsUnsafeReplayInputs();
 };
 
@@ -1115,6 +1174,396 @@ void PrivacyStillItemTransactionTest::videoPreparedReplayRetainsExactProxy()
              qPrintable(restored.detail));
     QVERIFY(source.open(QIODevice::ReadOnly));
     QCOMPARE(source.readAll(), originalBytes);
+}
+
+void PrivacyStillItemTransactionTest::compatibilityUnlockRelockAndPreserveChanges()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString sourcePath;
+    PrivacyStorageRoot root;
+    PrivacyJournalRootExpectation expectation;
+    PrivacyStillProtectRequest protect;
+    QVERIFY(prepareSyntheticStill(directory, &sourcePath, &root, &expectation,
+                                  &protect));
+    QFile originalFile(sourcePath);
+    QVERIFY(originalFile.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = originalFile.readAll();
+    QVERIFY(!originalBytes.isEmpty());
+    originalFile.close();
+
+    FakePersistence persistence;
+    persistence.snapshot.categories << category();
+    persistence.snapshot.storageRoots << root;
+    QSharedPointer<VerifiedRoot> verifier(new VerifiedRoot);
+    QSharedPointer<VerifiedIntegrity> inspector(new VerifiedIntegrity);
+    PrivacyRuntimeCoordinator runtime;
+    runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+    QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+    FakeCache cache;
+    PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+    const PrivacyPassword password = PrivacyPassword::fromUnicode(
+        QString::fromUtf8("compatibility synthetic password"));
+    QVERIFY(password.isValid());
+    const PrivacyStillItemTransactionResult protectedResult =
+        engine.protect(protect, password);
+    QCOMPARE(protectedResult.status,
+             PrivacyStillItemTransactionStatus::Protected);
+    QFile proxyFile(sourcePath);
+    QVERIFY(proxyFile.open(QIODevice::ReadOnly));
+    const QByteArray proxyBytes = proxyFile.readAll();
+    QVERIFY(!proxyBytes.isEmpty());
+    QVERIFY(proxyBytes != originalBytes);
+    proxyFile.close();
+
+    PrivacyCompatibilityUnlockRequest unlock;
+    unlock.imageId = protect.imageId;
+    unlock.categoryUuid = CategoryUuid;
+    unlock.itemUuid = ItemUuid;
+    unlock.transactionUuid = CompatibilityUnlockUuid;
+    unlock.groupUuid = CompatibilityGroupUuid;
+    unlock.publicRoot = root;
+    unlock.rootExpectation = expectation;
+    const PrivacyStillItemTransactionResult unlocked =
+        engine.compatibilityUnlock(unlock, password);
+    QVERIFY2(unlocked.status ==
+                 PrivacyStillItemTransactionStatus::CompatibilityUnlocked,
+             qPrintable(unlocked.detail));
+    QFile exposedFile(sourcePath);
+    QVERIFY(exposedFile.open(QIODevice::ReadOnly));
+    QCOMPARE(exposedFile.readAll(), originalBytes);
+    exposedFile.close();
+
+    const auto transactionState = [&persistence](const QString& uuid)
+    {
+        for (const PrivacyTransaction& transaction :
+             persistence.snapshot.transactions)
+        {
+            if (transaction.uuid == uuid)
+            {
+                return transaction.state;
+            }
+        }
+
+        return static_cast<PrivacyTransactionState>(0);
+    };
+    QCOMPARE(transactionState(CompatibilityUnlockUuid),
+             PrivacyTransactionState::Exposed);
+    QCOMPARE(runtime.publicSourceDisposition(protect.imageId),
+             PrivacyPublicSourceDisposition::Denied);
+
+    PrivacyCompatibilityRelockRequest relock;
+    relock.imageId = protect.imageId;
+    relock.categoryUuid = CategoryUuid;
+    relock.itemUuid = ItemUuid;
+    relock.unlockTransactionUuid = CompatibilityUnlockUuid;
+    relock.relockTransactionUuid = CompatibilityRelockUuid;
+    relock.publicRoot = root;
+    relock.rootExpectation = expectation;
+    const PrivacyStillItemTransactionResult relocked =
+        engine.compatibilityRelock(relock);
+    QVERIFY2(relocked.status ==
+                 PrivacyStillItemTransactionStatus::CompatibilityRelocked,
+             qPrintable(relocked.detail));
+    QFile relockedFile(sourcePath);
+    QVERIFY(relockedFile.open(QIODevice::ReadOnly));
+    QCOMPARE(relockedFile.readAll(), proxyBytes);
+    relockedFile.close();
+    QCOMPARE(transactionState(CompatibilityUnlockUuid),
+             PrivacyTransactionState::Complete);
+    QCOMPARE(transactionState(CompatibilityRelockUuid),
+             PrivacyTransactionState::Complete);
+    QCOMPARE(runtime.publicSourceDisposition(protect.imageId),
+             PrivacyPublicSourceDisposition::LockedProxy);
+
+    const QString secondUnlockUuid =
+        QLatin1String("70000000-0000-0000-0000-000000000002");
+    const QString secondRelockUuid =
+        QLatin1String("80000000-0000-0000-0000-000000000002");
+    unlock.transactionUuid = secondUnlockUuid;
+    unlock.groupUuid =
+        QLatin1String("90000000-0000-0000-0000-000000000002");
+    const PrivacyStillItemTransactionResult secondUnlocked =
+        engine.compatibilityUnlock(unlock, password);
+    QVERIFY2(secondUnlocked.status ==
+                 PrivacyStillItemTransactionStatus::CompatibilityUnlocked,
+             qPrintable(secondUnlocked.detail));
+    QFile changedFile(sourcePath);
+    QVERIFY(changedFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray changedBytes("synthetic external edit\n");
+    QCOMPARE(changedFile.write(changedBytes),
+             static_cast<qint64>(changedBytes.size()));
+    changedFile.close();
+    relock.unlockTransactionUuid = secondUnlockUuid;
+    relock.relockTransactionUuid = secondRelockUuid;
+    const PrivacyStillItemTransactionResult pending =
+        engine.compatibilityRelock(relock);
+    QVERIFY2(pending.status ==
+                 PrivacyStillItemTransactionStatus::ReconciliationRequired,
+             qPrintable(pending.detail));
+    QFile preservedFile(sourcePath);
+    QVERIFY(preservedFile.open(QIODevice::ReadOnly));
+    QCOMPARE(preservedFile.readAll(), changedBytes);
+    preservedFile.close();
+    QCOMPARE(transactionState(secondUnlockUuid),
+             PrivacyTransactionState::Complete);
+    QCOMPARE(transactionState(secondRelockUuid),
+             PrivacyTransactionState::NeedsReconciliation);
+    QCOMPARE(runtime.publicSourceDisposition(protect.imageId),
+             PrivacyPublicSourceDisposition::Denied);
+}
+
+void PrivacyStillItemTransactionTest::compatibilityPublicTransitionRecovery()
+{
+    const PrivacyPassword password = PrivacyPassword::fromUnicode(
+        QString::fromUtf8("compatibility recovery password"));
+    QVERIFY(password.isValid());
+    QSharedPointer<VerifiedRoot> verifier(new VerifiedRoot);
+    QSharedPointer<VerifiedIntegrity> inspector(new VerifiedIntegrity);
+
+    const QList<PrivacyStillItemFaultPoint> cancelledExposureFaults = {
+        PrivacyStillItemFaultPoint::AfterCompatibilityUnlockDatabaseBegin,
+        PrivacyStillItemFaultPoint::AfterCompatibilityUnlockStages
+    };
+
+    for (const PrivacyStillItemFaultPoint faultPoint : cancelledExposureFaults)
+    {
+        QTemporaryDir directory;
+        QString sourcePath;
+        PrivacyStorageRoot root;
+        PrivacyJournalRootExpectation expectation;
+        PrivacyStillProtectRequest protect;
+        QVERIFY(prepareSyntheticStill(directory, &sourcePath, &root,
+                                      &expectation, &protect));
+        FakePersistence persistence;
+        persistence.snapshot.categories << category();
+        persistence.snapshot.storageRoots << root;
+        PrivacyRuntimeCoordinator runtime;
+        runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+        QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+        FakeCache cache;
+        PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+        QCOMPARE(engine.protect(protect, password).status,
+                 PrivacyStillItemTransactionStatus::Protected);
+        QFile proxy(sourcePath);
+        QVERIFY(proxy.open(QIODevice::ReadOnly));
+        const QByteArray proxyBytes = proxy.readAll();
+        proxy.close();
+        engine.setFaultHook([faultPoint](PrivacyStillItemFaultPoint point)
+        {
+            return (point == faultPoint);
+        });
+        PrivacyCompatibilityUnlockRequest unlock;
+        unlock.imageId = protect.imageId;
+        unlock.categoryUuid = CategoryUuid;
+        unlock.itemUuid = ItemUuid;
+        unlock.transactionUuid = CompatibilityUnlockUuid;
+        unlock.groupUuid = CompatibilityGroupUuid;
+        unlock.publicRoot = root;
+        unlock.rootExpectation = expectation;
+        QCOMPARE(engine.compatibilityUnlock(unlock, password).status,
+                 PrivacyStillItemTransactionStatus::FaultInjected);
+
+        PrivacyRuntimeCoordinator restartedRuntime;
+        restartedRuntime.initialize(persistence.snapshot, verifier, {}, inspector);
+        FakeCache restartedCache;
+        PrivacyStillItemTransactionEngine restarted(
+            persistence, restartedRuntime, restartedCache);
+        const PrivacyStillItemTransactionResult recovered = restarted.recover(
+            root, CompatibilityUnlockUuid);
+        QVERIFY2(recovered.status ==
+                     PrivacyStillItemTransactionStatus::CompatibilityRelocked,
+                 qPrintable(recovered.detail));
+        QVERIFY(proxy.open(QIODevice::ReadOnly));
+        QCOMPARE(proxy.readAll(), proxyBytes);
+        proxy.close();
+    }
+
+    const QList<PrivacyStillItemFaultPoint> unlockTransitionFaults = {
+        PrivacyStillItemFaultPoint::AfterCompatibilityUnlockApplying,
+        PrivacyStillItemFaultPoint::AfterCompatibilityUnlockPublicTransition
+    };
+
+    for (const PrivacyStillItemFaultPoint faultPoint : unlockTransitionFaults)
+    {
+        QTemporaryDir directory;
+        QString sourcePath;
+        PrivacyStorageRoot root;
+        PrivacyJournalRootExpectation expectation;
+        PrivacyStillProtectRequest protect;
+        QVERIFY(prepareSyntheticStill(directory, &sourcePath, &root,
+                                      &expectation, &protect));
+        FakePersistence persistence;
+        persistence.snapshot.categories << category();
+        persistence.snapshot.storageRoots << root;
+        PrivacyRuntimeCoordinator runtime;
+        runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+        QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+        FakeCache cache;
+        PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+        QCOMPARE(engine.protect(protect, password).status,
+                 PrivacyStillItemTransactionStatus::Protected);
+        QFile proxy(sourcePath);
+        QVERIFY(proxy.open(QIODevice::ReadOnly));
+        const QByteArray proxyBytes = proxy.readAll();
+        proxy.close();
+        engine.setFaultHook([faultPoint](PrivacyStillItemFaultPoint point)
+        {
+            return (point == faultPoint);
+        });
+        PrivacyCompatibilityUnlockRequest unlock;
+        unlock.imageId = protect.imageId;
+        unlock.categoryUuid = CategoryUuid;
+        unlock.itemUuid = ItemUuid;
+        unlock.transactionUuid = CompatibilityUnlockUuid;
+        unlock.groupUuid = CompatibilityGroupUuid;
+        unlock.publicRoot = root;
+        unlock.rootExpectation = expectation;
+        QCOMPARE(engine.compatibilityUnlock(unlock, password).status,
+                 PrivacyStillItemTransactionStatus::FaultInjected);
+
+        PrivacyRuntimeCoordinator restartedRuntime;
+        restartedRuntime.initialize(persistence.snapshot, verifier, {}, inspector);
+        FakeCache restartedCache;
+        PrivacyStillItemTransactionEngine restarted(
+            persistence, restartedRuntime, restartedCache);
+        const PrivacyStillItemTransactionResult recovered = restarted.recover(
+            root, CompatibilityUnlockUuid);
+        QVERIFY2(recovered.status ==
+                     PrivacyStillItemTransactionStatus::CompatibilityRelocked,
+                 qPrintable(recovered.detail));
+        QVERIFY(proxy.open(QIODevice::ReadOnly));
+        QCOMPARE(proxy.readAll(), proxyBytes);
+        proxy.close();
+        QCOMPARE(restartedRuntime.publicSourceDisposition(protect.imageId),
+                 PrivacyPublicSourceDisposition::Denied);
+    }
+
+    const QList<PrivacyStillItemFaultPoint> relockFaults = {
+        PrivacyStillItemFaultPoint::AfterCompatibilityRelockDatabaseBegin,
+        PrivacyStillItemFaultPoint::AfterCompatibilityRelockStages,
+        PrivacyStillItemFaultPoint::AfterCompatibilityRelockApplying,
+        PrivacyStillItemFaultPoint::AfterCompatibilityRelockPublicTransition
+    };
+
+    for (const PrivacyStillItemFaultPoint faultPoint : relockFaults)
+    {
+        QTemporaryDir directory;
+        QString sourcePath;
+        PrivacyStorageRoot root;
+        PrivacyJournalRootExpectation expectation;
+        PrivacyStillProtectRequest protect;
+        QVERIFY(prepareSyntheticStill(directory, &sourcePath, &root,
+                                      &expectation, &protect));
+        FakePersistence persistence;
+        persistence.snapshot.categories << category();
+        persistence.snapshot.storageRoots << root;
+        PrivacyRuntimeCoordinator runtime;
+        runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+        QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+        FakeCache cache;
+        PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+        QCOMPARE(engine.protect(protect, password).status,
+                 PrivacyStillItemTransactionStatus::Protected);
+        QFile proxy(sourcePath);
+        QVERIFY(proxy.open(QIODevice::ReadOnly));
+        const QByteArray proxyBytes = proxy.readAll();
+        proxy.close();
+        PrivacyCompatibilityUnlockRequest unlock;
+        unlock.imageId = protect.imageId;
+        unlock.categoryUuid = CategoryUuid;
+        unlock.itemUuid = ItemUuid;
+        unlock.transactionUuid = CompatibilityUnlockUuid;
+        unlock.groupUuid = CompatibilityGroupUuid;
+        unlock.publicRoot = root;
+        unlock.rootExpectation = expectation;
+        QCOMPARE(engine.compatibilityUnlock(unlock, password).status,
+                 PrivacyStillItemTransactionStatus::CompatibilityUnlocked);
+        QFile exposedFile(sourcePath);
+        QVERIFY(exposedFile.open(QIODevice::ReadOnly));
+        const QByteArray exposedBytes = exposedFile.readAll();
+        exposedFile.close();
+        engine.setFaultHook([faultPoint](PrivacyStillItemFaultPoint point)
+        {
+            return (point == faultPoint);
+        });
+        PrivacyCompatibilityRelockRequest relock;
+        relock.imageId = protect.imageId;
+        relock.categoryUuid = CategoryUuid;
+        relock.itemUuid = ItemUuid;
+        relock.unlockTransactionUuid = CompatibilityUnlockUuid;
+        relock.relockTransactionUuid = CompatibilityRelockUuid;
+        relock.publicRoot = root;
+        relock.rootExpectation = expectation;
+        QCOMPARE(engine.compatibilityRelock(relock).status,
+                 PrivacyStillItemTransactionStatus::FaultInjected);
+
+        const bool changedDuringApplying =
+            (faultPoint == PrivacyStillItemFaultPoint::
+                           AfterCompatibilityRelockApplying);
+        const bool missingProtectedCopy =
+            (faultPoint == PrivacyStillItemFaultPoint::
+                           AfterCompatibilityRelockStages);
+        const QByteArray changedBytes(
+            "externally changed during Compatibility recovery");
+
+        if (changedDuringApplying)
+        {
+            QFile changedFile(sourcePath);
+            QVERIFY(changedFile.open(QIODevice::WriteOnly |
+                                     QIODevice::Truncate));
+            QCOMPARE(changedFile.write(changedBytes),
+                     static_cast<qint64>(changedBytes.size()));
+            changedFile.close();
+        }
+        else if (missingProtectedCopy)
+        {
+            QVERIFY(QFile::remove(
+                sourcePath + QLatin1String(".digikam-private.zip")));
+        }
+
+        PrivacyRuntimeCoordinator restartedRuntime;
+        restartedRuntime.initialize(persistence.snapshot, verifier, {}, inspector);
+        FakeCache restartedCache;
+        PrivacyStillItemTransactionEngine restarted(
+            persistence, restartedRuntime, restartedCache);
+        const PrivacyStillItemTransactionResult recovered = restarted.recover(
+            root, CompatibilityRelockUuid);
+
+        if (changedDuringApplying || missingProtectedCopy)
+        {
+            QVERIFY2(recovered.status ==
+                         PrivacyStillItemTransactionStatus::
+                             ReconciliationRequired,
+                     qPrintable(recovered.detail));
+            QVERIFY(proxy.open(QIODevice::ReadOnly));
+            QCOMPARE(proxy.readAll(), changedDuringApplying
+                                      ? changedBytes : exposedBytes);
+            proxy.close();
+            const auto pendingIt = std::find_if(
+                persistence.snapshot.transactions.cbegin(),
+                persistence.snapshot.transactions.cend(),
+                [](const PrivacyTransaction& candidate)
+                {
+                    return (candidate.uuid == CompatibilityRelockUuid);
+                });
+            QVERIFY(pendingIt != persistence.snapshot.transactions.cend());
+            QCOMPARE(pendingIt->state,
+                     PrivacyTransactionState::NeedsReconciliation);
+            QCOMPARE(restartedRuntime.publicSourceDisposition(protect.imageId),
+                     PrivacyPublicSourceDisposition::Denied);
+            continue;
+        }
+
+        QVERIFY2(recovered.status ==
+                     PrivacyStillItemTransactionStatus::CompatibilityRelocked,
+                 qPrintable(recovered.detail));
+        QVERIFY(proxy.open(QIODevice::ReadOnly));
+        QCOMPARE(proxy.readAll(), proxyBytes);
+        proxy.close();
+        QCOMPARE(restartedRuntime.publicSourceDisposition(protect.imageId),
+                 PrivacyPublicSourceDisposition::Denied);
+    }
 }
 
 void PrivacyStillItemTransactionTest::rejectsUnsafeReplayInputs()

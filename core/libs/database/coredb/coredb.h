@@ -152,6 +152,7 @@ public:
                                             qlonglong expectedGeneration)                                           const;
     bool insertPrivacyTransactionJournal(const PrivacyTransactionJournal& journal)                                 const;
     bool getPrivacyTransactionJournals(QList<PrivacyTransactionJournal>* journals)                                 const;
+    bool getActivePrivacyTransactionJournals(QList<PrivacyTransactionJournal>* journals)                           const;
     bool compareAndUpdatePrivacyTransactionJournal(const PrivacyTransactionJournal& journal,
                                                    int expectedStage)                                               const;
     bool beginPrivacyCategoryCreation(const PrivacyCategory& category,
@@ -173,6 +174,11 @@ public:
                                       const PrivacyTransaction& transaction)                                    const;
     bool beginPrivacyItemUnprotection(const PrivacyTransaction& transaction,
                                       const PrivacyTransactionJournal& journal)                                 const;
+    bool beginPrivacyCompatibilityUnlock(const PrivacyTransaction& transaction,
+                                         const PrivacyTransactionJournal& journal)                              const;
+    bool beginPrivacyCompatibilityRelock(const PrivacyTransaction& completedUnlock,
+                                         const PrivacyTransaction& relock,
+                                         const PrivacyTransactionJournal& journal)                              const;
     bool publishPrivacyItemUnprotection(qlonglong imageId,
                                         const QString& itemUuid,
                                         const QString& categoryUuid,

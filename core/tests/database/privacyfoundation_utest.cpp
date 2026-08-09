@@ -8,6 +8,10 @@
  *
  * ============================================================ */
 
+// C++ includes
+
+#include <algorithm>
+
 // Qt includes
 
 #include <QDomDocument>
@@ -23,11 +27,14 @@
 // Local includes
 
 #include "coredbcopymanager.h"
+#include "coredbaccess.h"
+#include "coredb.h"
 #include "coredbschemaupdater.h"
 #include "dbengineparameters.h"
 #include "itemquerybuilder.h"
 #include "privacyservice.h"
 #include "privacyruntime.h"
+#include "privacytransactionjournal.h"
 
 using namespace Digikam;
 
@@ -41,6 +48,7 @@ private Q_SLOTS:
     void testSchemaActions();
     void testSqliteSchemaActionsExecute();
     void testSqlitePrivacyCopyRoundTrip();
+    void testCompatibilityTransactionHandoff();
     void testManualTagQueryVisibility();
     void testStorageRecordValidation();
     void testSessionLockState();
@@ -214,6 +222,18 @@ bool executeSqliteSchemaScenario(const QDomElement& database,
             {
                 break;
             }
+        }
+
+        if (success &&
+            (!query.exec(QLatin1String(
+                 "SELECT 1 FROM sqlite_master WHERE type='index' AND "
+                 "name='privacytransactions_state_type_index';")) ||
+             !query.next()))
+        {
+            *errorMessage = query.lastError().text().isEmpty()
+                          ? QLatin1String("Missing active privacy transaction index")
+                          : query.lastError().text();
+            success       = false;
         }
 
         const QString imageInsert = update
@@ -504,6 +524,7 @@ bool executeSqliteSchemaScenario(const QDomElement& database,
 void PrivacyFoundationTest::cleanup()
 {
     PrivacyManualTagVisibilityGate::resetProvider();
+    CoreDbAccess::cleanUpDatabase();
 }
 
 void PrivacyFoundationTest::testSchemaActions()
@@ -566,6 +587,11 @@ void PrivacyFoundationTest::testSchemaActions()
         QVERIFY(actionText(database, QLatin1String("Migrate_Write_PrivacyCategories"))
                     .contains(QLatin1String(":tagVisibilityMode")));
         QVERIFY(createText.contains(QLatin1String("ON DELETE RESTRICT")));
+        QVERIFY(createText.contains(QLatin1String("PrivacyTransactions_StateType")) ||
+                actionText(database, QLatin1String("CreateIndices"))
+                    .contains(QLatin1String("privacytransactions_state_type_index")));
+        QVERIFY(updateText.contains(QLatin1String("PrivacyTransactions_StateType")) ||
+                updateText.contains(QLatin1String("privacytransactions_state_type_index")));
         QVERIFY(createText.contains(QLatin1String("UNIQUE(albumRootId)")) ||
                 createText.contains(QLatin1String("UNIQUE INDEX PrivacyStorageRoots_AlbumRoot")));
         QVERIFY(updateText.contains(QLatin1String("UNIQUE(albumRootId)")) ||
@@ -862,6 +888,158 @@ void PrivacyFoundationTest::testSqlitePrivacyCopyRoundTrip()
     }
 
     QSqlDatabase::removeDatabase(connectionName);
+}
+
+void PrivacyFoundationTest::testCompatibilityTransactionHandoff()
+{
+    if (!QSqlDatabase::isDriverAvailable(DbEngineParameters::SQLiteDatabaseType()))
+    {
+        QSKIP("Qt SQLite driver is unavailable");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    DbEngineParameters parameters;
+    parameters.databaseType = DbEngineParameters::SQLiteDatabaseType();
+    parameters.setCoreDatabasePath(
+        directory.filePath(QLatin1String("compatibility.db")));
+    parameters.legacyAndDefaultChecks();
+    CoreDbAccess::setParameters(parameters);
+    QVERIFY(CoreDbAccess::checkReadyForUse());
+    CoreDbAccess access;
+    CoreDB* const database = access.db();
+    QVERIFY(database);
+    const int albumRootId = database->addAlbumRoot(
+        CollectionLocation::VolumeHardWired,
+        QLatin1String("compatibility-test-volume"), QLatin1String("/"),
+        QLatin1String("Compatibility test"));
+    QVERIFY(albumRootId > 0);
+    const int albumId = database->addAlbum(
+        albumRootId, QLatin1String("/album"), QString(), QDate(), QString());
+    QVERIFY(albumId > 0);
+    const qlonglong imageId = database->addItem(
+        albumId, QLatin1String("proxy.jpg"), DatabaseItem::Visible,
+        DatabaseItem::Image, QDateTime::currentDateTimeUtc(), 10,
+        QLatin1String("compatibility-test-hash"));
+    QVERIFY(imageId > 0);
+
+    const QString categoryUuid =
+        QLatin1String("10000000-0000-0000-0000-000000000011");
+    const QString itemUuid =
+        QLatin1String("20000000-0000-0000-0000-000000000011");
+    const QString rootUuid =
+        QLatin1String("30000000-0000-0000-0000-000000000011");
+    const QString unlockUuid =
+        QLatin1String("60000000-0000-0000-0000-000000000011");
+    const QString blockedUuid =
+        QLatin1String("60000000-0000-0000-0000-000000000012");
+    const QString relockUuid =
+        QLatin1String("70000000-0000-0000-0000-000000000011");
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    PrivacyCategory category = makeCategory(categoryUuid,
+                                             QLatin1String("Compatibility"));
+    QVERIFY(database->insertPrivacyCategory(category));
+    PrivacyCredential credential;
+    credential.categoryUuid = categoryUuid;
+    credential.generation = 1;
+    credential.encodingVersion = QLatin1String("utf8-nfc-v1");
+    credential.envelopeFormat = QLatin1String("gocryptfs-config-v2");
+    credential.envelopeBlob = QByteArray("opaque");
+    credential.envelopeHashAlgorithm = QLatin1String("sha256");
+    credential.envelopeHash = QLatin1String("hash");
+    credential.createdAt = now;
+    QVERIFY(database->insertPrivacyCredential(credential));
+    PrivacyStorageRoot root;
+    root.uuid = rootUuid;
+    root.kind = PrivacyStorageRootKind::AlbumRoot;
+    root.albumRootId = albumRootId;
+    root.configuredPath = directory.path();
+    root.identityVersion = 1;
+    root.identityData = QByteArray("compatibility-root-identity");
+    root.createdAt = now;
+    QVERIFY(database->insertPrivacyStorageRoot(root));
+    PrivacyItem item;
+    item.imageId = imageId;
+    item.uuid = itemUuid;
+    item.categoryUuid = categoryUuid;
+    item.presentationVersion = 1;
+    item.generation = 1;
+    item.transactionState = 0;
+    QVERIFY(database->insertPrivacyItem(item));
+
+    const auto createdTransaction = [&](const QString& uuid,
+                                        PrivacyTransactionType type)
+    {
+        PrivacyTransaction transaction;
+        transaction.uuid = uuid;
+        transaction.categoryUuid = categoryUuid;
+        transaction.itemUuid = itemUuid;
+        transaction.type = type;
+        transaction.state = PrivacyTransactionState::Created;
+        transaction.generation = 0;
+        transaction.fromCredentialGeneration = 1;
+        transaction.toCredentialGeneration = 1;
+        transaction.payloadFormatVersion = 1;
+        transaction.payloadData = QByteArray("{}");
+        transaction.createdAt = now;
+        transaction.updatedAt = now;
+        return transaction;
+    };
+    const auto createdJournal = [&](const QString& uuid)
+    {
+        PrivacyTransactionJournal journal;
+        journal.transactionUuid = uuid;
+        journal.rootUuid = rootUuid;
+        journal.journalRelativePath =
+            PrivacyTransactionJournalCodec::relativeJournalPath(uuid);
+        journal.journalFormatVersion =
+            PrivacyTransactionJournalCodec::FormatVersion;
+        journal.stage = static_cast<int>(PrivacyJournalStage::Created);
+        journal.updatedAt = now;
+        return journal;
+    };
+    PrivacyTransaction unlock = createdTransaction(
+        unlockUuid, PrivacyTransactionType::CompatibilityUnlock);
+    QVERIFY(database->beginPrivacyCompatibilityUnlock(
+        unlock, createdJournal(unlockUuid)));
+    const PrivacyTransaction blocked = createdTransaction(
+        blockedUuid, PrivacyTransactionType::CompatibilityUnlock);
+    QVERIFY(!database->beginPrivacyCompatibilityUnlock(
+        blocked, createdJournal(blockedUuid)));
+    unlock.state = PrivacyTransactionState::Exposed;
+    unlock.generation = 1;
+    unlock.updatedAt = QDateTime::currentDateTimeUtc();
+    QVERIFY(database->compareAndUpdatePrivacyTransaction(
+        unlock, PrivacyTransactionState::Created, 0));
+    PrivacyTransaction completedUnlock = unlock;
+    completedUnlock.state = PrivacyTransactionState::Complete;
+    completedUnlock.generation = 2;
+    completedUnlock.updatedAt = QDateTime::currentDateTimeUtc();
+    const PrivacyTransaction relock = createdTransaction(
+        relockUuid, PrivacyTransactionType::CompatibilityRelock);
+    QVERIFY(database->beginPrivacyCompatibilityRelock(
+        completedUnlock, relock, createdJournal(relockUuid)));
+
+    QList<PrivacyTransaction> active;
+    QVERIFY(database->getActivePrivacyTransactions(&active));
+    QCOMPARE(active.size(), 1);
+    QCOMPARE(active.constFirst().uuid, relockUuid);
+    QCOMPARE(active.constFirst().state, PrivacyTransactionState::Created);
+    QList<PrivacyTransactionJournal> activeJournals;
+    QVERIFY(database->getActivePrivacyTransactionJournals(&activeJournals));
+    QCOMPARE(activeJournals.size(), 1);
+    QCOMPARE(activeJournals.constFirst().transactionUuid, relockUuid);
+    QList<PrivacyTransaction> history;
+    QVERIFY(database->getPrivacyTransactions(&history));
+    QCOMPARE(history.size(), 2);
+    const auto completedIt = std::find_if(
+        history.cbegin(), history.cend(),
+        [&unlockUuid](const PrivacyTransaction& transaction)
+        {
+            return (transaction.uuid == unlockUuid);
+        });
+    QVERIFY(completedIt != history.cend());
+    QCOMPARE(completedIt->state, PrivacyTransactionState::Complete);
 }
 
 void PrivacyFoundationTest::testStorageRecordValidation()

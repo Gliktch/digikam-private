@@ -1008,6 +1008,13 @@ Q_GLOBAL_STATIC(PrivacyManualTagVisibilityGateData, manualTagGateData)
 
 } // namespace
 
+bool PrivacyTransactionRecovery::loadReconciledSnapshot(
+    PrivacyRepositorySnapshot* const snapshot) const
+{
+    Q_UNUSED(snapshot);
+    return false;
+}
+
 bool PrivacyRootIntegritySummary::hasReportableIssues(
     bool includeProxySizeChanges) const
 {
@@ -1282,31 +1289,36 @@ PrivacyStartupReport PrivacyRuntimeCoordinator::initialize(
 
         PrivacyRepositorySnapshot reconciled;
         QSet<QString> removedActiveTransactionUuids;
+        const bool snapshotReloaded = recovery->loadReconciledSnapshot(
+            &reconciled);
 
+        if (!snapshotReloaded)
         {
-            QReadLocker locker(&d->lock);
-            reconciled = d->snapshot;
-        }
-
-        for (int i = reconciled.transactions.size() - 1 ; i >= 0 ; --i)
-        {
-            const PrivacyTransaction& transaction =
-                reconciled.transactions.at(i);
-
-            if (transaction.isActive() &&
-                recoveredTransactionUuids.contains(transaction.uuid))
             {
-                removedActiveTransactionUuids.insert(transaction.uuid);
-                reconciled.transactions.removeAt(i);
+                QReadLocker locker(&d->lock);
+                reconciled = d->snapshot;
             }
-        }
 
-        for (int i = reconciled.transactionJournals.size() - 1 ; i >= 0 ; --i)
-        {
-            if (removedActiveTransactionUuids.contains(
-                    reconciled.transactionJournals.at(i).transactionUuid))
+            for (int i = reconciled.transactions.size() - 1 ; i >= 0 ; --i)
             {
-                reconciled.transactionJournals.removeAt(i);
+                const PrivacyTransaction& transaction =
+                    reconciled.transactions.at(i);
+
+                if (transaction.isActive() &&
+                    recoveredTransactionUuids.contains(transaction.uuid))
+                {
+                    removedActiveTransactionUuids.insert(transaction.uuid);
+                    reconciled.transactions.removeAt(i);
+                }
+            }
+
+            for (int i = reconciled.transactionJournals.size() - 1 ; i >= 0 ; --i)
+            {
+                if (removedActiveTransactionUuids.contains(
+                        reconciled.transactionJournals.at(i).transactionUuid))
+                {
+                    reconciled.transactionJournals.removeAt(i);
+                }
             }
         }
 
@@ -3155,6 +3167,36 @@ bool PrivacyRuntimeCoordinator::removeProtectedItemInternal(
     return true;
 }
 
+bool PrivacyRuntimeCoordinator::publishCompatibilityExposure(
+    qlonglong imageId, const QString& itemUuid, bool exposed)
+{
+    QWriteLocker locker(&d->lock);
+
+    if (!d->initialized || (imageId <= 0) || itemUuid.isEmpty())
+    {
+        return false;
+    }
+
+    const auto itemIt = d->items.constFind(imageId);
+
+    if ((itemIt == d->items.constEnd()) ||
+        (itemIt->item.uuid != itemUuid) || itemIt->mappingConflict)
+    {
+        return false;
+    }
+
+    if (exposed)
+    {
+        d->compatibilityExposedItems.insert(imageId);
+    }
+    else
+    {
+        d->compatibilityExposedItems.remove(imageId);
+    }
+
+    return true;
+}
+
 quint64 PrivacyRuntimeCoordinator::categoryEpoch(const QString& categoryUuid) const
 {
     QReadLocker locker(&d->lock);
@@ -3911,6 +3953,53 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
         }
     }
 
+    PrivacyRepositorySnapshot refreshedSnapshot;
+    const bool snapshotReloaded = recovery &&
+        recovery->loadReconciledSnapshot(&refreshedSnapshot);
+
+    if (snapshotReloaded)
+    {
+        snapshot.transactions = refreshedSnapshot.transactions;
+        snapshot.transactionJournals = refreshedSnapshot.transactionJournals;
+        unresolvedCount = 0;
+        compatibilityCount = 0;
+
+        for (const PrivacyTransaction& transaction : snapshot.transactions)
+        {
+            if (!transaction.isActive())
+            {
+                continue;
+            }
+
+            QList<PrivacyTransactionJournal> journals;
+
+            for (const PrivacyTransactionJournal& journal :
+                 snapshot.transactionJournals)
+            {
+                if (journal.transactionUuid == transaction.uuid)
+                {
+                    journals << journal;
+                }
+            }
+
+            if (!transactionAffectsRoot(transaction, journals, snapshot,
+                                        rootUuid))
+            {
+                continue;
+            }
+
+            ++unresolvedCount;
+
+            if ((transaction.type ==
+                 PrivacyTransactionType::CompatibilityUnlock) ||
+                (transaction.type ==
+                 PrivacyTransactionType::CompatibilityRelock))
+            {
+                ++compatibilityCount;
+            }
+        }
+    }
+
     {
         QWriteLocker locker(&d->lock);
         const PrivacyRootRuntimeState currentState = d->rootStates.value(
@@ -3923,25 +4012,33 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
             return PrivacyRootRecoveryResult::StaleEpoch;
         }
 
-        for (int i = d->snapshot.transactions.size() - 1 ; i >= 0 ; --i)
+        if (snapshotReloaded)
         {
-            const PrivacyTransaction& transaction =
-                d->snapshot.transactions.at(i);
-
-            if (transaction.isActive() &&
-                recoveredTransactionUuids.contains(transaction.uuid))
-            {
-                removedActiveTransactionUuids.insert(transaction.uuid);
-                d->snapshot.transactions.removeAt(i);
-            }
+            d->snapshot.transactions = snapshot.transactions;
+            d->snapshot.transactionJournals = snapshot.transactionJournals;
         }
-
-        for (int i = d->snapshot.transactionJournals.size() - 1 ; i >= 0 ; --i)
+        else
         {
-            if (removedActiveTransactionUuids.contains(
-                    d->snapshot.transactionJournals.at(i).transactionUuid))
+            for (int i = d->snapshot.transactions.size() - 1 ; i >= 0 ; --i)
             {
-                d->snapshot.transactionJournals.removeAt(i);
+                const PrivacyTransaction& transaction =
+                    d->snapshot.transactions.at(i);
+
+                if (transaction.isActive() &&
+                    recoveredTransactionUuids.contains(transaction.uuid))
+                {
+                    removedActiveTransactionUuids.insert(transaction.uuid);
+                    d->snapshot.transactions.removeAt(i);
+                }
+            }
+
+            for (int i = d->snapshot.transactionJournals.size() - 1 ; i >= 0 ; --i)
+            {
+                if (removedActiveTransactionUuids.contains(
+                        d->snapshot.transactionJournals.at(i).transactionUuid))
+                {
+                    d->snapshot.transactionJournals.removeAt(i);
+                }
             }
         }
 
@@ -4216,7 +4313,7 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
         transactionRecoveryFactory = startupData->transactionRecoveryFactory;
     }
 
-    if (repository.loadSnapshot(&snapshot))
+    if (repository.loadRuntimeSnapshot(&snapshot))
     {
         const QSharedPointer<const PrivacyRootVerifier> verifier =
             createDefaultPrivacyRootVerifier();

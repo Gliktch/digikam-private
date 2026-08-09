@@ -79,6 +79,19 @@ QString manualTagVisibilitySql(const QString& imageIdExpression,
     return sql + QLatin1Char(')');
 }
 
+QVariantList activePrivacyTransactionStates()
+{
+    return {
+        static_cast<int>(PrivacyTransactionState::Created),
+        static_cast<int>(PrivacyTransactionState::Prepared),
+        static_cast<int>(PrivacyTransactionState::Applying),
+        static_cast<int>(PrivacyTransactionState::Exposed),
+        static_cast<int>(PrivacyTransactionState::Relocking),
+        static_cast<int>(PrivacyTransactionState::NeedsReconciliation),
+        static_cast<int>(PrivacyTransactionState::Error)
+    };
+}
+
 } // namespace
 
 class Q_DECL_HIDDEN CoreDB::Private
@@ -1365,14 +1378,16 @@ bool CoreDB::getActivePrivacyTransactions(QList<PrivacyTransaction>* transaction
 
     transactions->clear();
     QVariantList values;
+    const QVariantList activeStates = activePrivacyTransactionStates();
+    QString sql = QString::fromUtf8("SELECT uuid, categoryUuid, itemUuid, type, state, generation, "
+                                    "fromCredentialGeneration, toCredentialGeneration, "
+                                    "payloadFormatVersion, payloadData, createdAt, updatedAt "
+                                    "FROM PrivacyTransactions WHERE state IN (");
+    addBoundValuePlaceholders(sql, activeStates.size());
+    sql += QLatin1String(") ORDER BY createdAt, uuid;");
 
     if (BdEngineBackend::NoErrors !=
-        d->db->execSql(QString::fromUtf8("SELECT uuid, categoryUuid, itemUuid, type, state, generation, "
-                                         "fromCredentialGeneration, toCredentialGeneration, "
-                                         "payloadFormatVersion, payloadData, createdAt, updatedAt "
-                                         "FROM PrivacyTransactions WHERE state<>? "
-                                         "ORDER BY createdAt, uuid;"),
-                       static_cast<int>(PrivacyTransactionState::Complete), &values) ||
+        d->db->execSql(sql, activeStates, &values) ||
         ((values.size() % 12) != 0))
     {
         return false;
@@ -1501,6 +1516,59 @@ bool CoreDB::getPrivacyTransactionJournals(QList<PrivacyTransactionJournal>* jou
                                          "expectedJournalHash, updatedAt "
                                          "FROM PrivacyTransactionJournals ORDER BY transactionUuid, rootUuid;"),
                        &values) || ((values.size() % 8) != 0))
+    {
+        return false;
+    }
+
+    for (auto it = values.constBegin() ; it != values.constEnd() ; )
+    {
+        PrivacyTransactionJournal journal;
+        journal.transactionUuid       = (*it++).toString();
+        journal.rootUuid              = (*it++).toString();
+        journal.journalRelativePath   = (*it++).toString();
+        journal.journalFormatVersion  = (*it++).toInt();
+        journal.stage                 = (*it++).toInt();
+        journal.expectedHashAlgorithm = (*it++).toString();
+        journal.expectedJournalHash   = (*it++).toString();
+        journal.updatedAt             = (*it++).toDateTime();
+        journals->append(journal);
+    }
+
+    return true;
+}
+
+bool CoreDB::getActivePrivacyTransactionJournals(
+    QList<PrivacyTransactionJournal>* journals) const
+{
+    if (!journals)
+    {
+        return false;
+    }
+
+    journals->clear();
+    QVariantList values;
+    const QVariantList activeStates = activePrivacyTransactionStates();
+    QString sql = QString::fromUtf8(
+        "SELECT PrivacyTransactionJournals.transactionUuid, "
+        "PrivacyTransactionJournals.rootUuid, "
+        "PrivacyTransactionJournals.journalRelativePath, "
+        "PrivacyTransactionJournals.journalFormatVersion, "
+        "PrivacyTransactionJournals.stage, "
+        "PrivacyTransactionJournals.expectedHashAlgorithm, "
+        "PrivacyTransactionJournals.expectedJournalHash, "
+        "PrivacyTransactionJournals.updatedAt "
+        "FROM PrivacyTransactionJournals "
+        "INNER JOIN PrivacyTransactions ON "
+        "PrivacyTransactions.uuid=PrivacyTransactionJournals.transactionUuid "
+        "WHERE PrivacyTransactions.state IN (");
+    addBoundValuePlaceholders(sql, activeStates.size());
+    sql += QLatin1String(
+        ") ORDER BY PrivacyTransactionJournals.transactionUuid, "
+        "PrivacyTransactionJournals.rootUuid;");
+
+    if ((BdEngineBackend::NoErrors !=
+         d->db->execSql(sql, activeStates, &values)) ||
+        ((values.size() % 8) != 0))
     {
         return false;
     }
@@ -1913,6 +1981,114 @@ bool CoreDB::beginPrivacyItemUnprotection(
         std::any_of(expected.cbegin(), expected.cend(),
                     [](const QVariant& value) { return !value.toBool(); }) ||
         !insertPrivacyTransaction(transaction) ||
+        !insertPrivacyTransactionJournal(journal))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::beginPrivacyCompatibilityUnlock(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    if (!transaction.isValid() || !journal.isValid() ||
+        transaction.itemUuid.isEmpty() ||
+        (transaction.type != PrivacyTransactionType::CompatibilityUnlock) ||
+        (transaction.state != PrivacyTransactionState::Created) ||
+        (transaction.generation != 0) ||
+        (journal.transactionUuid != transaction.uuid) ||
+        (journal.stage != static_cast<int>(PrivacyJournalStage::Created)) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList expected;
+    QVariantList bindings;
+    bindings << transaction.itemUuid << transaction.categoryUuid
+             << transaction.uuid << transaction.itemUuid
+             << static_cast<int>(PrivacyTransactionState::Complete);
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyItems WHERE uuid=? AND categoryUuid=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE itemUuid=? AND state<>?);"),
+        bindings, &expected);
+
+    if ((expected.size() != 3) ||
+        std::any_of(expected.cbegin(), expected.cend(),
+                    [](const QVariant& value) { return !value.toBool(); }) ||
+        !insertPrivacyTransaction(transaction) ||
+        !insertPrivacyTransactionJournal(journal))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::beginPrivacyCompatibilityRelock(
+    const PrivacyTransaction& completedUnlock,
+    const PrivacyTransaction& relock,
+    const PrivacyTransactionJournal& journal) const
+{
+    if (!completedUnlock.isValid() || !relock.isValid() || !journal.isValid() ||
+        completedUnlock.itemUuid.isEmpty() ||
+        (completedUnlock.type != PrivacyTransactionType::CompatibilityUnlock) ||
+        (completedUnlock.state != PrivacyTransactionState::Complete) ||
+        (completedUnlock.generation <= 0) ||
+        (relock.type != PrivacyTransactionType::CompatibilityRelock) ||
+        (relock.state != PrivacyTransactionState::Created) ||
+        (relock.generation != 0) ||
+        (completedUnlock.uuid == relock.uuid) ||
+        (completedUnlock.categoryUuid != relock.categoryUuid) ||
+        (completedUnlock.itemUuid != relock.itemUuid) ||
+        (journal.transactionUuid != relock.uuid) ||
+        (journal.stage != static_cast<int>(PrivacyJournalStage::Created)) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList expected;
+    QVariantList bindings;
+    bindings << completedUnlock.uuid << completedUnlock.itemUuid
+             << completedUnlock.categoryUuid
+             << static_cast<int>(PrivacyTransactionType::CompatibilityUnlock)
+             << static_cast<int>(PrivacyTransactionState::Exposed)
+             << (completedUnlock.generation - 1)
+             << relock.uuid << completedUnlock.itemUuid
+             << completedUnlock.uuid
+             << static_cast<int>(PrivacyTransactionState::Complete);
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? AND itemUuid=? "
+        "AND categoryUuid=? AND type=? AND state=? AND generation=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE itemUuid=? AND uuid<>? AND state<>?);"),
+        bindings, &expected);
+
+    if ((expected.size() != 3) ||
+        std::any_of(expected.cbegin(), expected.cend(),
+                    [](const QVariant& value) { return !value.toBool(); }) ||
+        !compareAndUpdatePrivacyTransaction(
+            completedUnlock, PrivacyTransactionState::Exposed,
+            completedUnlock.generation - 1) ||
+        !insertPrivacyTransaction(relock) ||
         !insertPrivacyTransactionJournal(journal))
     {
         return abort();

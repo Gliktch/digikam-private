@@ -97,6 +97,11 @@ public:
                                const PrivacyTransaction& transaction) const;
     bool beginItemUnprotection(const PrivacyTransaction& transaction,
                                const PrivacyTransactionJournal& journal) const;
+    bool beginCompatibilityUnlock(const PrivacyTransaction& transaction,
+                                  const PrivacyTransactionJournal& journal) const;
+    bool beginCompatibilityRelock(const PrivacyTransaction& completedUnlock,
+                                  const PrivacyTransaction& relock,
+                                  const PrivacyTransactionJournal& journal) const;
     bool publishItemUnprotection(qlonglong imageId,
                                  const QString& itemUuid,
                                  const QString& categoryUuid,
@@ -109,6 +114,9 @@ public:
     bool loadSnapshot(QList<PrivacyCategory>* categories,
                       QList<PrivacyItem>* items) const;
     bool loadSnapshot(PrivacyRepositorySnapshot* snapshot) const;
+    /** Loads only active transactions and their journals for startup/runtime
+     * recovery while retaining the complete current category/item graph. */
+    bool loadRuntimeSnapshot(PrivacyRepositorySnapshot* snapshot) const;
 };
 
 } // namespace Digikam

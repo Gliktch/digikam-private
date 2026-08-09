@@ -35,6 +35,8 @@ enum class PrivacyStillItemTransactionStatus
 {
     Protected,
     Unprotected,
+    CompatibilityUnlocked,
+    CompatibilityRelocked,
     InvalidRequest,
     PreflightRejected,
     AcknowledgementRequired,
@@ -51,6 +53,7 @@ enum class PrivacyStillItemTransactionStatus
     RuntimePublicationFailure,
     CacheTransitionFailure,
     CleanupPending,
+    ReconciliationRequired,
     RecoveryRequired,
     FaultInjected
 };
@@ -102,6 +105,32 @@ public:
     bool freshAuthenticationConfirmed = false;
 };
 
+class DIGIKAM_DATABASE_EXPORT PrivacyCompatibilityUnlockRequest
+{
+public:
+
+    qlonglong imageId = -1;
+    QString categoryUuid;
+    QString itemUuid;
+    QString transactionUuid;
+    QString groupUuid;
+    PrivacyStorageRoot publicRoot;
+    PrivacyJournalRootExpectation rootExpectation;
+};
+
+class DIGIKAM_DATABASE_EXPORT PrivacyCompatibilityRelockRequest
+{
+public:
+
+    qlonglong imageId = -1;
+    QString categoryUuid;
+    QString itemUuid;
+    QString unlockTransactionUuid;
+    QString relockTransactionUuid;
+    PrivacyStorageRoot publicRoot;
+    PrivacyJournalRootExpectation rootExpectation;
+};
+
 class DIGIKAM_DATABASE_EXPORT PrivacyStillItemPersistence
 {
 public:
@@ -118,6 +147,13 @@ public:
                                    const PrivacyTransaction& transaction) = 0;
     virtual bool beginUnprotection(const PrivacyTransaction& transaction,
                                    const PrivacyTransactionJournal& journal) = 0;
+    virtual bool beginCompatibilityUnlock(
+        const PrivacyTransaction& transaction,
+        const PrivacyTransactionJournal& journal) = 0;
+    virtual bool beginCompatibilityRelock(
+        const PrivacyTransaction& completedUnlock,
+        const PrivacyTransaction& relock,
+        const PrivacyTransactionJournal& journal) = 0;
     virtual bool publishUnprotection(qlonglong imageId,
                                      const QString& itemUuid,
                                      const QString& categoryUuid,
@@ -150,6 +186,13 @@ public:
                            const PrivacyTransaction& transaction) override;
     bool beginUnprotection(const PrivacyTransaction& transaction,
                            const PrivacyTransactionJournal& journal) override;
+    bool beginCompatibilityUnlock(
+        const PrivacyTransaction& transaction,
+        const PrivacyTransactionJournal& journal) override;
+    bool beginCompatibilityRelock(
+        const PrivacyTransaction& completedUnlock,
+        const PrivacyTransaction& relock,
+        const PrivacyTransactionJournal& journal) override;
     bool publishUnprotection(qlonglong imageId,
                              const QString& itemUuid,
                              const QString& categoryUuid,
@@ -201,7 +244,15 @@ enum class PrivacyStillItemFaultPoint
     AfterRuntimePublication,
     AfterUnprotectDatabaseTeardown,
     AfterUnprotectRuntimeRemoval,
-    AfterArchiveCleanup
+    AfterArchiveCleanup,
+    AfterCompatibilityUnlockDatabaseBegin,
+    AfterCompatibilityUnlockStages,
+    AfterCompatibilityUnlockApplying,
+    AfterCompatibilityUnlockPublicTransition,
+    AfterCompatibilityRelockDatabaseBegin,
+    AfterCompatibilityRelockStages,
+    AfterCompatibilityRelockApplying,
+    AfterCompatibilityRelockPublicTransition
 };
 
 /** One complete Casual, single-primary-media transaction. Multi-asset sets are
@@ -225,6 +276,11 @@ public:
     PrivacyStillItemTransactionResult unprotect(
         const PrivacyStillUnprotectRequest& request,
         const PrivacyPassword& password);
+    PrivacyStillItemTransactionResult compatibilityUnlock(
+        const PrivacyCompatibilityUnlockRequest& request,
+        const PrivacyPassword& password);
+    PrivacyStillItemTransactionResult compatibilityRelock(
+        const PrivacyCompatibilityRelockRequest& request);
 
     /**
      * Resumes one exact durable transaction without a retained password.
@@ -254,6 +310,9 @@ private:
         const QString& transactionUuid,
         const PrivacyPassword* verifiedPassword,
         bool freshAuthenticationConfirmed);
+    PrivacyStillItemTransactionResult recoverCompatibility(
+        const PrivacyStorageRoot& publicRoot,
+        const PrivacyTransaction& transaction);
 
     class Private;
     QScopedPointer<Private> d;

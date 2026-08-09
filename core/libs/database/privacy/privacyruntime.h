@@ -80,6 +80,12 @@ public:
         const PrivacyTransaction& transaction,
         const QList<PrivacyTransactionJournal>& journals) const = 0;
 
+    /** Optionally reloads the authoritative active recovery graph after a
+     * callback. This is required when recovery atomically hands an old
+     * transaction off to a new UUID. */
+    virtual bool loadReconciledSnapshot(
+        PrivacyRepositorySnapshot* snapshot) const;
+
 private:
 
     Q_DISABLE_COPY(PrivacyTransactionRecovery)
@@ -250,6 +256,11 @@ public:
         const PrivacyContainer& container,
         const QList<PrivacyAsset>& assets,
         const QString& transactionUuid);
+    /** Conservatively gates the exact live item while a durably recorded
+     * Compatibility transaction may expose a public original. */
+    bool publishCompatibilityExposure(qlonglong imageId,
+                                      const QString& itemUuid,
+                                      bool exposed);
     quint64 categoryEpoch(const QString& categoryUuid) const;
     bool setCategoryTagVisibilityMode(const QString& categoryUuid,
                                       PrivacyTagVisibilityMode mode,

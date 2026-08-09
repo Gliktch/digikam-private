@@ -637,6 +637,45 @@ bool PrivacyRepository::beginItemUnprotection(
                                                       normalizedJournal);
 }
 
+bool PrivacyRepository::beginCompatibilityUnlock(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    normalizedTransaction.itemUuid = normalizedUuid(transaction.itemUuid);
+    PrivacyTransactionJournal normalizedJournal = journal;
+    normalizedJournal.transactionUuid = normalizedUuid(journal.transactionUuid);
+    normalizedJournal.rootUuid = normalizedUuid(journal.rootUuid);
+    CoreDbAccess access;
+
+    return access.db()->beginPrivacyCompatibilityUnlock(normalizedTransaction,
+                                                         normalizedJournal);
+}
+
+bool PrivacyRepository::beginCompatibilityRelock(
+    const PrivacyTransaction& completedUnlock,
+    const PrivacyTransaction& relock,
+    const PrivacyTransactionJournal& journal) const
+{
+    PrivacyTransaction normalizedUnlock = completedUnlock;
+    normalizedUnlock.uuid = normalizedUuid(completedUnlock.uuid);
+    normalizedUnlock.categoryUuid = normalizedUuid(completedUnlock.categoryUuid);
+    normalizedUnlock.itemUuid = normalizedUuid(completedUnlock.itemUuid);
+    PrivacyTransaction normalizedRelock = relock;
+    normalizedRelock.uuid = normalizedUuid(relock.uuid);
+    normalizedRelock.categoryUuid = normalizedUuid(relock.categoryUuid);
+    normalizedRelock.itemUuid = normalizedUuid(relock.itemUuid);
+    PrivacyTransactionJournal normalizedJournal = journal;
+    normalizedJournal.transactionUuid = normalizedUuid(journal.transactionUuid);
+    normalizedJournal.rootUuid = normalizedUuid(journal.rootUuid);
+    CoreDbAccess access;
+
+    return access.db()->beginPrivacyCompatibilityRelock(
+        normalizedUnlock, normalizedRelock, normalizedJournal);
+}
+
 bool PrivacyRepository::publishItemUnprotection(
     qlonglong imageId, const QString& itemUuid, const QString& categoryUuid,
     qlonglong expectedItemGeneration,
@@ -685,7 +724,8 @@ bool PrivacyRepository::loadSnapshot(QList<PrivacyCategory>* categories,
     return true;
 }
 
-bool PrivacyRepository::loadSnapshot(PrivacyRepositorySnapshot* snapshot) const
+static bool loadSnapshotInternal(PrivacyRepositorySnapshot* snapshot,
+                                 bool activeOnly)
 {
     if (!snapshot)
     {
@@ -704,8 +744,14 @@ bool PrivacyRepository::loadSnapshot(PrivacyRepositorySnapshot* snapshot) const
         !access.db()->getPrivacyContainers(&loaded.containers)                 ||
         !access.db()->getPrivacyAssets(&loaded.assets)                         ||
         !access.db()->getPrivacyDerivatives(&loaded.derivatives)               ||
-        !access.db()->getPrivacyTransactions(&loaded.transactions)             ||
-        !access.db()->getPrivacyTransactionJournals(&loaded.transactionJournals) ||
+        !(activeOnly
+            ? access.db()->getActivePrivacyTransactions(&loaded.transactions)
+            : access.db()->getPrivacyTransactions(&loaded.transactions))       ||
+        !(activeOnly
+            ? access.db()->getActivePrivacyTransactionJournals(
+                  &loaded.transactionJournals)
+            : access.db()->getPrivacyTransactionJournals(
+                  &loaded.transactionJournals))                                 ||
         !allRecordsValid(loaded.categories)                                    ||
         !allRecordsValid(loaded.credentials)                                   ||
         !allRecordsValid(loaded.storageRoots)                                  ||
@@ -932,6 +978,17 @@ bool PrivacyRepository::loadSnapshot(PrivacyRepositorySnapshot* snapshot) const
     *snapshot = loaded;
 
     return true;
+}
+
+bool PrivacyRepository::loadSnapshot(PrivacyRepositorySnapshot* snapshot) const
+{
+    return loadSnapshotInternal(snapshot, false);
+}
+
+bool PrivacyRepository::loadRuntimeSnapshot(
+    PrivacyRepositorySnapshot* snapshot) const
+{
+    return loadSnapshotInternal(snapshot, true);
 }
 
 } // namespace Digikam

@@ -88,6 +88,8 @@ public:
         const PrivacyStorageRoot& root,
         const PrivacyTransaction& transaction,
         const QList<PrivacyTransactionJournal>& journals) const override;
+    bool loadReconciledSnapshot(
+        PrivacyRepositorySnapshot* snapshot) const override;
 
 private:
 
