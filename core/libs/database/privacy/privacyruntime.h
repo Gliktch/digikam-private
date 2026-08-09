@@ -199,6 +199,8 @@ public:
     PrivacyPublicSourceDisposition publicSourceDisposition(qlonglong imageId) const;
     QString publicSourceCacheNamespace(qlonglong imageId) const;
     qlonglong expectedPublicProxySize(qlonglong imageId) const;
+    bool publicProxyMatchesForDisplay(qlonglong imageId,
+                                      const QString& absolutePath) const;
 
     bool setCategoryUnlocked(const QString& categoryUuid, bool unlocked);
     bool isCategoryUnlocked(const QString& categoryUuid) const;

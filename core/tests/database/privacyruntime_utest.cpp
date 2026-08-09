@@ -11,6 +11,7 @@
 // Qt includes
 
 #include <QHash>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -351,6 +352,7 @@ private Q_SLOTS:
     void testManagedRootMarkerVerification();
     void testScanGateFailsClosedWithoutProvider();
     void testExpectedProxyAndCanonicalAsset();
+    void testOnDisplayProxyValidation();
     void testOfflineAndMismatchedRoot();
     void testCompatibilityTransactionRecovery();
     void testReconnectRecoveryPipeline();
@@ -534,6 +536,78 @@ void PrivacyRuntimeTest::testExpectedProxyAndCanonicalAsset()
     runtime.initialize(wrongRootSnapshot, verifier, {}, integrity);
     QCOMPARE(runtime.evaluate(makeScanRequest(10, 55)),
              PrivacyScanDisposition::PrivacyInspectionRequired);
+}
+
+void PrivacyRuntimeTest::testOnDisplayProxyValidation()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray proxyBytes = QByteArrayLiteral(
+        "synthetic metadata-free public privacy proxy");
+    const QByteArray proxyHash = QCryptographicHash::hash(
+        proxyBytes, QCryptographicHash::Sha256);
+    const QString proxyPath = directory.filePath(
+        QLatin1String("album/item.jpg"));
+    QVERIFY(QDir().mkpath(QFileInfo(proxyPath).absolutePath()));
+    QFile proxy(proxyPath);
+    QVERIFY(proxy.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+    QCOMPARE(proxy.write(proxyBytes), qint64(proxyBytes.size()));
+    proxy.close();
+
+    PrivacyRepositorySnapshot snapshot = makeSnapshot();
+    snapshot.storageRoots[0].configuredPath = directory.path();
+    snapshot.items[0].expectedProxyHash = QString::fromLatin1(
+        proxyHash.toHex());
+    snapshot.items[0].expectedProxySize = proxyBytes.size();
+
+    for (PrivacyAsset& asset : snapshot.assets)
+    {
+        if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+            (asset.ordinal == 0))
+        {
+            asset.proxyHash = snapshot.items[0].expectedProxyHash;
+            asset.proxySize = proxyBytes.size();
+        }
+    }
+
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid,
+                            PrivacyRootRuntimeState::VerifiedAvailable);
+    const QSharedPointer<FakeIntegrityInspector> integrity(
+        new FakeIntegrityInspector);
+    PrivacyRuntimeCoordinator runtime;
+    QCOMPARE(runtime.initialize(snapshot, verifier, {}, integrity).state,
+             PrivacyStartupState::Ready);
+    QVERIFY(runtime.publicProxyMatchesForDisplay(42, proxyPath));
+    QVERIFY(!runtime.publicProxyMatchesForDisplay(
+        42, directory.filePath(QLatin1String("copy.jpg"))));
+
+    const QByteArray changedBytes(proxyBytes.size(), 'z');
+    QVERIFY(proxy.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(proxy.write(changedBytes), qint64(changedBytes.size()));
+    proxy.close();
+    QVERIFY(!runtime.publicProxyMatchesForDisplay(42, proxyPath));
+
+    QVERIFY(proxy.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(proxy.write(proxyBytes), qint64(proxyBytes.size()));
+    proxy.close();
+    QVERIFY(runtime.publicProxyMatchesForDisplay(42, proxyPath));
+
+    const QString targetPath = directory.filePath(
+        QLatin1String("exact-proxy-target"));
+    QVERIFY(QFile::rename(proxyPath, targetPath));
+    QVERIFY(QFile::link(targetPath, proxyPath));
+    QVERIFY(QFileInfo(proxyPath).isSymLink());
+    QVERIFY(!runtime.publicProxyMatchesForDisplay(42, proxyPath));
+
+    QVERIFY(QFile::remove(proxyPath));
+    QVERIFY(QFile::copy(targetPath, proxyPath));
+    QVERIFY(QDir(directory.path()).rename(QLatin1String("album"),
+                                          QLatin1String("real-album")));
+    QVERIFY(QFile::link(directory.filePath(QLatin1String("real-album")),
+                        directory.filePath(QLatin1String("album"))));
+    QVERIFY(QFileInfo(directory.filePath(QLatin1String("album"))).isSymLink());
+    QVERIFY(!runtime.publicProxyMatchesForDisplay(42, proxyPath));
 }
 
 void PrivacyRuntimeTest::testOfflineAndMismatchedRoot()

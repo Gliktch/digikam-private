@@ -13,6 +13,7 @@
 // Qt includes
 
 #include <QFileInfo>
+#include <QCryptographicHash>
 #include <QGlobalStatic>
 #include <QReadLocker>
 #include <QDir>
@@ -49,6 +50,7 @@ namespace
 {
 
 constexpr qint64 managedRootMarkerMaximumBytes = 4096;
+constexpr qint64 proxyValidationChunkBytes = 1024 * 1024;
 
 #ifdef Q_OS_UNIX
 
@@ -82,6 +84,147 @@ private:
 
     int m_descriptor = -1;
 };
+
+#endif
+
+#ifdef Q_OS_UNIX
+
+bool pathHasSymlinkComponent(const QString& absolutePath);
+
+#endif
+
+bool stablePublicProxySha256(const QString& absolutePath, qlonglong expectedSize,
+                             QByteArray* const sha256)
+{
+    if (!sha256 || !QDir::isAbsolutePath(absolutePath) ||
+        (QDir::cleanPath(absolutePath) != absolutePath) ||
+        absolutePath.contains(QChar::Null) || (expectedSize < 0))
+    {
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+
+    if (pathHasSymlinkComponent(absolutePath))
+    {
+        return false;
+    }
+
+    const QByteArray encodedPath = QFile::encodeName(absolutePath);
+    ScopedFileDescriptor descriptor(::open(encodedPath.constData(),
+                                            O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+    struct stat before = {};
+
+    if ((descriptor.get() < 0) || (::fstat(descriptor.get(), &before) != 0) ||
+        !S_ISREG(before.st_mode) || S_ISLNK(before.st_mode) ||
+        (before.st_size != expectedSize))
+    {
+        return false;
+    }
+
+    QFile file;
+
+    if (!file.open(descriptor.get(), QIODevice::ReadOnly,
+                   QFileDevice::DontCloseHandle))
+    {
+        return false;
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+
+    while (!file.atEnd())
+    {
+        const QByteArray chunk = file.read(proxyValidationChunkBytes);
+
+        if (chunk.isEmpty() && !file.atEnd())
+        {
+            return false;
+        }
+
+        hash.addData(chunk);
+    }
+
+    if (file.error() != QFileDevice::NoError)
+    {
+        return false;
+    }
+
+    struct stat after = {};
+    struct stat named = {};
+
+    if ((::fstat(descriptor.get(), &after) != 0) ||
+        (::lstat(encodedPath.constData(), &named) != 0) ||
+        !S_ISREG(named.st_mode) || S_ISLNK(named.st_mode) ||
+        (before.st_dev != after.st_dev) ||
+        (before.st_ino != after.st_ino) ||
+        (before.st_mode != after.st_mode) ||
+        (before.st_nlink != after.st_nlink) ||
+        (before.st_size != after.st_size) ||
+        (before.st_mtim.tv_sec != after.st_mtim.tv_sec) ||
+        (before.st_mtim.tv_nsec != after.st_mtim.tv_nsec) ||
+        (before.st_ctim.tv_sec != after.st_ctim.tv_sec) ||
+        (before.st_ctim.tv_nsec != after.st_ctim.tv_nsec) ||
+        (named.st_dev != before.st_dev) || (named.st_ino != before.st_ino))
+    {
+        return false;
+    }
+
+    *sha256 = hash.result();
+    return true;
+
+#else
+
+    const QFileInfo before(absolutePath);
+
+    if (!before.isFile() || before.isSymLink() ||
+        (before.size() != expectedSize))
+    {
+        return false;
+    }
+
+    QFile file(absolutePath);
+
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return false;
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+
+    while (!file.atEnd())
+    {
+        const QByteArray chunk = file.read(proxyValidationChunkBytes);
+
+        if (chunk.isEmpty() && !file.atEnd())
+        {
+            return false;
+        }
+
+        hash.addData(chunk);
+    }
+
+    if (file.error() != QFileDevice::NoError)
+    {
+        return false;
+    }
+
+    const QFileInfo after(absolutePath);
+
+    if (!after.isFile() || after.isSymLink() ||
+        (before.absoluteFilePath() != after.absoluteFilePath()) ||
+        (before.size() != after.size()) ||
+        (before.lastModified() != after.lastModified()))
+    {
+        return false;
+    }
+
+    *sha256 = hash.result();
+    return true;
+
+#endif
+}
+
+#ifdef Q_OS_UNIX
 
 bool pathHasSymlinkComponent(const QString& absolutePath)
 {
@@ -707,6 +850,7 @@ bool hasProtectedFactsForRoot(const PrivacyRepositorySnapshot& snapshot,
 struct ValidatedProtectedItemFacts
 {
     QString publicRootUuid;
+    QString publicRelativePath;
     QString originalRootUuid;
     qlonglong expectedProxySize = -1;
     bool originalInspectable = false;
@@ -822,6 +966,7 @@ bool validateProtectedItemFacts(
     }
 
     facts->publicRootUuid = primary.publicRootUuid;
+    facts->publicRelativePath = primary.publicRelativePath;
     facts->originalRootUuid = originalRootUuid;
     facts->expectedProxySize = primary.proxySize;
     facts->originalInspectable = true;
@@ -907,6 +1052,7 @@ public:
     {
         PrivacyItem item;
         QString     publicRootUuid;
+        QString     publicRelativePath;
         QString     originalRootUuid;
         qlonglong   expectedProxySize = -1;
         bool        originalInspectable = false;
@@ -1466,6 +1612,7 @@ PrivacyStartupReport PrivacyRuntimeCoordinator::initialize(
 
         assignedPrimaryAssets.insert(asset.itemUuid);
         runtimeIt->publicRootUuid    = asset.publicRootUuid;
+        runtimeIt->publicRelativePath = asset.publicRelativePath;
         runtimeIt->expectedProxySize = asset.proxySize;
 
         if (!d->rootStates.contains(asset.publicRootUuid) ||
@@ -1742,6 +1889,68 @@ qlonglong PrivacyRuntimeCoordinator::expectedPublicProxySize(qlonglong imageId) 
     QReadLocker locker(&d->lock);
 
     return d->items.value(imageId).expectedProxySize;
+}
+
+bool PrivacyRuntimeCoordinator::publicProxyMatchesForDisplay(
+    qlonglong imageId, const QString& absolutePath) const
+{
+    qlonglong expectedSize = -1;
+    QByteArray expectedSha256;
+    QString expectedAbsolutePath;
+
+    {
+        QReadLocker locker(&d->lock);
+
+        if (!d->initialized || (imageId <= 0))
+        {
+            return false;
+        }
+
+        const auto itemIt = d->items.constFind(imageId);
+
+        if ((itemIt == d->items.constEnd()) || itemIt->mappingConflict ||
+            d->conflictingItemUuids.contains(itemIt->item.uuid) ||
+            itemIt->publicRootUuid.isEmpty() ||
+            (d->rootStates.value(itemIt->publicRootUuid,
+                                 PrivacyRootRuntimeState::Unknown) !=
+             PrivacyRootRuntimeState::VerifiedAvailable) ||
+            d->proxyIssueItemsByRoot.value(itemIt->publicRootUuid).contains(
+                itemIt->item.uuid))
+        {
+            return false;
+        }
+
+        expectedSize = itemIt->expectedProxySize;
+        expectedSha256 = QByteArray::fromHex(
+            itemIt->item.expectedProxyHash.toLatin1());
+
+        int rootCount = 0;
+
+        for (const PrivacyStorageRoot& root : std::as_const(d->snapshot.storageRoots))
+        {
+            if (root.uuid == itemIt->publicRootUuid)
+            {
+                expectedAbsolutePath = QDir(root.configuredPath).absoluteFilePath(
+                    itemIt->publicRelativePath);
+                ++rootCount;
+            }
+        }
+
+        if ((rootCount != 1) || itemIt->publicRelativePath.isEmpty())
+        {
+            return false;
+        }
+    }
+
+    QByteArray actualSha256;
+
+    return ((QDir::cleanPath(absolutePath) ==
+             QDir::cleanPath(expectedAbsolutePath)) &&
+            (expectedSha256.size() ==
+             QCryptographicHash::hashLength(QCryptographicHash::Sha256)) &&
+            stablePublicProxySha256(absolutePath, expectedSize,
+                                    &actualSha256) &&
+            (actualSha256 == expectedSha256));
 }
 
 bool PrivacyRuntimeCoordinator::setCategoryUnlocked(const QString& categoryUuid,
@@ -2128,6 +2337,7 @@ bool PrivacyRuntimeCoordinator::publishProtectedItem(
     Private::ItemRuntime runtime;
     runtime.item                  = item;
     runtime.publicRootUuid        = facts.publicRootUuid;
+    runtime.publicRelativePath    = facts.publicRelativePath;
     runtime.originalRootUuid      = facts.originalRootUuid;
     runtime.expectedProxySize     = facts.expectedProxySize;
     runtime.originalInspectable  = facts.originalInspectable;
@@ -2388,6 +2598,7 @@ bool PrivacyRuntimeCoordinator::publishProtectedItemForProtectRecovery(
     d->snapshot = prospective;
     runtimeIt->item = item;
     runtimeIt->publicRootUuid = facts.publicRootUuid;
+    runtimeIt->publicRelativePath = facts.publicRelativePath;
     runtimeIt->originalRootUuid = facts.originalRootUuid;
     runtimeIt->expectedProxySize = facts.expectedProxySize;
     runtimeIt->originalInspectable = facts.originalInspectable;
@@ -2481,6 +2692,7 @@ bool PrivacyRuntimeCoordinator::hasProtectedItem(
     if ((runtimeIt == d->items.constEnd()) || runtimeIt->mappingConflict ||
         !sameItem(runtimeIt->item, item) ||
         (runtimeIt->publicRootUuid != facts.publicRootUuid) ||
+        (runtimeIt->publicRelativePath != facts.publicRelativePath) ||
         (runtimeIt->originalRootUuid != facts.originalRootUuid) ||
         (runtimeIt->expectedProxySize != facts.expectedProxySize) ||
         (runtimeIt->originalInspectable != facts.originalInspectable) ||
@@ -2679,6 +2891,7 @@ bool PrivacyRuntimeCoordinator::removeProtectedItemInternal(
     if ((runtimeIt == d->items.constEnd()) || runtimeIt->mappingConflict ||
         !sameItem(runtimeIt->item, item) ||
         (runtimeIt->publicRootUuid != facts.publicRootUuid) ||
+        (runtimeIt->publicRelativePath != facts.publicRelativePath) ||
         (runtimeIt->originalRootUuid != facts.originalRootUuid) ||
         (runtimeIt->expectedProxySize != facts.expectedProxySize) ||
         (runtimeIt->originalInspectable != facts.originalInspectable) ||

@@ -105,10 +105,8 @@ public:
         if ((disposition == PrivacyPublicSourceDisposition::LockedProxy) &&
             !cacheNamespace.isEmpty())
         {
-            const QFileInfo proxyInfo(request.logicalFilePath);
-
-            if (!proxyInfo.isFile() || proxyInfo.isSymLink() ||
-                (proxyInfo.size() != m_runtime->expectedPublicProxySize(imageId)))
+            if (!m_runtime->publicProxyMatchesForDisplay(
+                    imageId, request.logicalFilePath))
             {
                 return PrivacySourceResult::denied(cacheNamespace);
             }
