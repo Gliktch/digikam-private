@@ -311,6 +311,7 @@ public:
     {
         PrivacyRootInspectionResult result;
         result.summary.rootUuid = root.uuid;
+        result.summary.configuredPath = root.configuredPath;
         QSet<QString> protectedItemUuids;
         QString rootPath;
 
@@ -844,6 +845,60 @@ Q_GLOBAL_STATIC(PrivacyStartupData, startupData)
 
 } // namespace
 
+bool PrivacyRootIntegritySummary::hasReportableIssues(
+    bool includeProxySizeChanges) const
+{
+    return ((state != PrivacyRootRuntimeState::VerifiedAvailable) ||
+            (missingProxyCount > 0) ||
+            (includeProxySizeChanges && (changedProxySizeCount > 0)) ||
+            (unexpectedPublicAssetCount > 0) ||
+            (missingProtectedObjectCount > 0) ||
+            (changedProtectedObjectSizeCount > 0) ||
+            (unresolvedTransactionCount > 0) ||
+            (compatibilityExposureCount > 0) || identityMismatch);
+}
+
+bool PrivacyStartupReport::hasOnlyProxySizeIssues() const
+{
+    if ((state != PrivacyStartupState::Ready) ||
+        (offlineRootCount != 0) || (mismatchedRootCount != 0) ||
+        (recoveringRootCount != 0) || (unresolvedTransactionCount != 0) ||
+        !diagnostics.isEmpty())
+    {
+        return false;
+    }
+
+    bool foundProxySizeIssue = false;
+
+    for (const PrivacyRootIntegritySummary& root : roots)
+    {
+        if (root.hasReportableIssues(false))
+        {
+            return false;
+        }
+
+        foundProxySizeIssue = foundProxySizeIssue ||
+                              (root.changedProxySizeCount > 0);
+    }
+
+    return foundProxySizeIssue;
+}
+
+bool PrivacyStartupReport::hasReportableIssues(bool suppressProxySizeOnly) const
+{
+    bool found = (state == PrivacyStartupState::Degraded) ||
+                 (offlineRootCount > 0) || (mismatchedRootCount > 0) ||
+                 (recoveringRootCount > 0) ||
+                 (unresolvedTransactionCount > 0) || !diagnostics.isEmpty();
+
+    for (const PrivacyRootIntegritySummary& root : roots)
+    {
+        found = found || root.hasReportableIssues();
+    }
+
+    return (found && !(suppressProxySizeOnly && hasOnlyProxySizeIssues()));
+}
+
 class Q_DECL_HIDDEN PrivacyRuntimeCoordinator::Private
 {
 public:
@@ -1282,6 +1337,7 @@ PrivacyStartupReport PrivacyRuntimeCoordinator::initialize(
             root.uuid, PrivacyRootRuntimeState::IdentityMismatch);
         PrivacyRootIntegritySummary summary = integrityResults.value(root.uuid).summary;
         summary.rootUuid = root.uuid;
+        summary.configuredPath = root.configuredPath;
         summary.protectedItemCount = itemUuidsForRoot(snapshot, root.uuid).size();
         summary.unresolvedTransactionCount = unresolvedTransactionsByRoot.value(root.uuid);
         summary.compatibilityExposureCount = compatibilityExposuresByRoot.value(root.uuid);
@@ -1956,6 +2012,7 @@ bool PrivacyRuntimeCoordinator::publishCategoryCreation(
         d->setRootState(root.uuid, PrivacyRootRuntimeState::VerifiedAvailable);
         PrivacyRootIntegritySummary summary;
         summary.rootUuid = root.uuid;
+        summary.configuredPath = root.configuredPath;
         summary.state = PrivacyRootRuntimeState::VerifiedAvailable;
         d->rootSummaries.insert(root.uuid, summary);
         d->report.roots << summary;

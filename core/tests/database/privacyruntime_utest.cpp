@@ -355,6 +355,7 @@ private Q_SLOTS:
     void testCompatibilityTransactionRecovery();
     void testReconnectRecoveryPipeline();
     void testRootIntegritySummary();
+    void testStartupIssueSuppressionIsNarrow();
     void testRecoveryEpochCompareAndPublish();
     void testProductionStateProviders();
     void testCategorySessionOwnerShutdown();
@@ -718,6 +719,7 @@ void PrivacyRuntimeTest::testRootIntegritySummary()
     const PrivacyStartupReport report = runtime.initialize(snapshot, verifier, {}, inspector);
     QCOMPARE(report.state, PrivacyStartupState::Ready);
     QCOMPARE(report.roots.size(), 1);
+    QCOMPARE(report.roots.constFirst().configuredPath, root.configuredPath);
     QCOMPARE(report.roots.constFirst().missingProxyCount, 1);
     QCOMPARE(report.roots.constFirst().changedProxySizeCount, 1);
     QCOMPARE(report.roots.constFirst().missingProtectedObjectCount, 1);
@@ -729,6 +731,42 @@ void PrivacyRuntimeTest::testRootIntegritySummary()
     QCOMPARE(actionState.originalRootState, PrivacyRootRuntimeState::VerifiedAvailable);
     QVERIFY(!actionState.proxyReady);
     QVERIFY(!actionState.originalReady);
+}
+
+void PrivacyRuntimeTest::testStartupIssueSuppressionIsNarrow()
+{
+    PrivacyStartupReport report;
+    report.state = PrivacyStartupState::Ready;
+    PrivacyRootIntegritySummary root;
+    root.rootUuid = rootUuid;
+    root.configuredPath = QLatin1String("/synthetic/collection");
+    root.state = PrivacyRootRuntimeState::VerifiedAvailable;
+    report.roots << root;
+    QVERIFY(!report.hasReportableIssues(false));
+    QVERIFY(!report.hasOnlyProxySizeIssues());
+
+    report.roots[0].changedProxySizeCount = 2;
+    QVERIFY(report.hasReportableIssues(false));
+    QVERIFY(report.hasOnlyProxySizeIssues());
+    QVERIFY(!report.hasReportableIssues(true));
+
+    report.roots[0].missingProxyCount = 1;
+    QVERIFY(report.hasReportableIssues(true));
+    QVERIFY(!report.hasOnlyProxySizeIssues());
+
+    report.roots[0].missingProxyCount = 0;
+    report.roots[0].state = PrivacyRootRuntimeState::Offline;
+    report.state = PrivacyStartupState::Degraded;
+    report.offlineRootCount = 1;
+    QVERIFY(report.hasReportableIssues(true));
+    QVERIFY(!report.hasOnlyProxySizeIssues());
+
+    report.roots[0].state = PrivacyRootRuntimeState::VerifiedAvailable;
+    report.state = PrivacyStartupState::Ready;
+    report.offlineRootCount = 0;
+    report.diagnostics << QLatin1String("synthetic recovery diagnostic");
+    QVERIFY(report.hasReportableIssues(true));
+    QVERIFY(!report.hasOnlyProxySizeIssues());
 }
 
 void PrivacyRuntimeTest::testRecoveryEpochCompareAndPublish()

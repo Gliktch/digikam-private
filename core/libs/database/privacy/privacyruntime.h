@@ -90,6 +90,7 @@ class DIGIKAM_DATABASE_EXPORT PrivacyRootIntegritySummary
 public:
 
     QString rootUuid;
+    QString configuredPath;
     PrivacyRootRuntimeState state = PrivacyRootRuntimeState::Unknown;
     int protectedItemCount = 0;
     int missingProxyCount = 0;
@@ -100,6 +101,8 @@ public:
     int unresolvedTransactionCount = 0;
     int compatibilityExposureCount = 0;
     bool identityMismatch = false;
+
+    bool hasReportableIssues(bool includeProxySizeChanges = true) const;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyRootInspectionResult
@@ -163,6 +166,9 @@ public:
     int unresolvedTransactionCount = 0;
     QList<PrivacyRootIntegritySummary> roots;
     QStringList diagnostics;
+
+    bool hasOnlyProxySizeIssues() const;
+    bool hasReportableIssues(bool suppressProxySizeOnly) const;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyRuntimeCoordinator : public PrivacyScanGateProvider,

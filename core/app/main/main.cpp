@@ -24,10 +24,13 @@
 #include <QSettings>
 #include <QStringList>
 #include <QMessageBox>
+#include <QCheckBox>
 #include <QSqlDatabase>
 #include <QApplication>
 #include <QImageReader>
+#include <QPointer>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QCommandLineParser>
 #include <QCommandLineOption>
 
@@ -118,6 +121,224 @@ using namespace Magick;
 #endif
 
 using namespace Digikam;
+
+namespace
+{
+
+const char PrivacyConfigGroup[] = "Privacy";
+const char SuppressProxySizeSummaryKey[] =
+    "SuppressProxySizeOnlyStartupSummary";
+
+QString privacyRootLabel(const PrivacyRootIntegritySummary& root)
+{
+    return root.configuredPath.isEmpty()
+        ? i18nc("@info", "Storage %1", root.rootUuid)
+        : QDir::toNativeSeparators(root.configuredPath);
+}
+
+QStringList privacyRootIssueLines(const PrivacyRootIntegritySummary& root)
+{
+    QStringList lines;
+
+    switch (root.state)
+    {
+        case PrivacyRootRuntimeState::Offline:
+        {
+            lines << i18ncp("@info",
+                            "Storage is offline; one protected item was not checked.",
+                            "Storage is offline; %1 protected items were not checked.",
+                            root.protectedItemCount);
+            break;
+        }
+
+        case PrivacyRootRuntimeState::IdentityMismatch:
+        {
+            lines << i18nc("@info",
+                           "Storage identity changed; private-media access is blocked.");
+            break;
+        }
+
+        case PrivacyRootRuntimeState::Unknown:
+        case PrivacyRootRuntimeState::Recovering:
+        {
+            lines << i18nc("@info",
+                           "Privacy recovery is incomplete; access remains blocked.");
+            break;
+        }
+
+        case PrivacyRootRuntimeState::VerifiedAvailable:
+        {
+            break;
+        }
+    }
+
+    if (root.missingProxyCount > 0)
+    {
+        lines << i18ncp("@info",
+                        "One public privacy placeholder is missing.",
+                        "%1 public privacy placeholders are missing.",
+                        root.missingProxyCount);
+    }
+
+    if (root.changedProxySizeCount > 0)
+    {
+        lines << i18ncp("@info",
+                        "One public privacy placeholder changed byte size.",
+                        "%1 public privacy placeholders changed byte size.",
+                        root.changedProxySizeCount);
+    }
+
+    if (root.unexpectedPublicAssetCount > 0)
+    {
+        lines << i18ncp(
+            "@info",
+            "One protected associated file is unexpectedly present at its public path.",
+            "%1 protected associated files are unexpectedly present at public paths.",
+            root.unexpectedPublicAssetCount);
+    }
+
+    if (root.missingProtectedObjectCount > 0)
+    {
+        lines << i18ncp("@info",
+                        "One protected archive or vault object is missing.",
+                        "%1 protected archives or vault objects are missing.",
+                        root.missingProtectedObjectCount);
+    }
+
+    if (root.changedProtectedObjectSizeCount > 0)
+    {
+        lines << i18ncp(
+            "@info",
+            "One protected archive or vault object changed byte size.",
+            "%1 protected archives or vault objects changed byte size.",
+            root.changedProtectedObjectSizeCount);
+    }
+
+    if (root.unresolvedTransactionCount > 0)
+    {
+        lines << i18ncp("@info",
+                        "One privacy transaction still requires recovery.",
+                        "%1 privacy transactions still require recovery.",
+                        root.unresolvedTransactionCount);
+    }
+
+    if (root.compatibilityExposureCount > 0)
+    {
+        lines << i18ncp("@info",
+                        "One Compatibility Unlock exposure may still be public.",
+                        "%1 Compatibility Unlock exposures may still be public.",
+                        root.compatibilityExposureCount);
+    }
+
+    return lines;
+}
+
+bool privacyStartupIssueIsSevere(const PrivacyRootIntegritySummary& root)
+{
+    return ((root.state == PrivacyRootRuntimeState::IdentityMismatch) ||
+            (root.unexpectedPublicAssetCount > 0) ||
+            (root.missingProtectedObjectCount > 0) ||
+            (root.changedProtectedObjectSizeCount > 0) ||
+            (root.unresolvedTransactionCount > 0) ||
+            (root.compatibilityExposureCount > 0));
+}
+
+void showPrivacyStartupSummary(QWidget* const parent)
+{
+    const PrivacyStartupReport report = PrivacyStartupRecovery::report();
+    KConfigGroup privacyGroup(KSharedConfig::openConfig(),
+                              QLatin1String(PrivacyConfigGroup));
+    const bool suppressProxySizeOnly = privacyGroup.readEntry(
+        SuppressProxySizeSummaryKey, false);
+
+    if (!report.hasReportableIssues(suppressProxySizeOnly))
+    {
+        return;
+    }
+
+    QStringList rootDetails;
+    bool severe = false;
+
+    for (const PrivacyRootIntegritySummary& root : report.roots)
+    {
+        if (!root.hasReportableIssues())
+        {
+            continue;
+        }
+
+        const QStringList issues = privacyRootIssueLines(root);
+
+        if (!issues.isEmpty())
+        {
+            rootDetails << QStringLiteral("%1\n%2")
+                               .arg(privacyRootLabel(root),
+                                    issues.join(QLatin1Char('\n')));
+        }
+
+        severe = severe || privacyStartupIssueIsSevere(root);
+    }
+
+    QString text;
+
+    if (report.hasOnlyProxySizeIssues())
+    {
+        text = i18nc("@info",
+                     "Some public privacy placeholders changed byte size. "
+                     "Protected originals remain locked.");
+    }
+    else if ((report.offlineRootCount > 0) && !severe)
+    {
+        text = i18nc("@info",
+                     "Some private-media storage is offline or still recovering. "
+                     "digiKam deferred those checks instead of reporting the "
+                     "protected files as missing.");
+    }
+    else
+    {
+        text = i18nc("@info",
+                     "digiKam found private-media storage or files that need "
+                     "attention. Affected items remain fail-closed.");
+    }
+
+    QMessageBox* const message = new QMessageBox(
+        severe ? QMessageBox::Critical : QMessageBox::Warning,
+        i18nc("@title:window", "Private Media Check"), text,
+        QMessageBox::Close, parent);
+    message->setAttribute(Qt::WA_DeleteOnClose);
+    message->setTextFormat(Qt::PlainText);
+
+    if (!rootDetails.isEmpty())
+    {
+        message->setInformativeText(rootDetails.join(
+            QLatin1String("\n\n")));
+    }
+
+    if (report.hasOnlyProxySizeIssues())
+    {
+        QCheckBox* const suppress = new QCheckBox(
+            i18nc("@option:check",
+                  "Do not show future placeholder byte-size-only summaries"),
+            message);
+        message->setCheckBox(suppress);
+        const QPointer<QCheckBox> guardedSuppress(suppress);
+        QObject::connect(message, &QMessageBox::finished, message,
+                         [guardedSuppress](int)
+                         {
+                             if (guardedSuppress && guardedSuppress->isChecked())
+                             {
+                                 KConfigGroup group(KSharedConfig::openConfig(),
+                                                    QLatin1String(PrivacyConfigGroup));
+                                 group.writeEntry(SuppressProxySizeSummaryKey,
+                                                  true);
+                                 group.sync();
+                             }
+                         });
+    }
+
+    message->open();
+}
+
+} // namespace
 
 MAIN_EXPORT int MAIN_FN(int argc, char** argv)
 {
@@ -482,6 +703,11 @@ MAIN_EXPORT int MAIN_FN(int argc, char** argv)
 
     digikam->restoreSession();
     digikam->show();
+    QTimer::singleShot(0, digikam,
+                       [digikam]()
+                       {
+                           showPrivacyStartupSummary(digikam);
+                       });
 
     if (system.enableAIAutoTools || system.enableFaceEngine || system.enableAesthetic || system.enableAutoTags)
     {
