@@ -1228,6 +1228,17 @@ void PrivacyFoundationTest::testSessionLockState()
     QVERIFY(!service.mayAccessManualTags(1));
     QVERIFY(!service.mayAccessManualTags(2));
     QVERIFY(service.mayAccessManualTags(999));
+    const quint64 preThumbnailModeEpoch = service.categoryEpoch(categoryBUuid);
+    QVERIFY(!service.setCategoryUnlockedThumbnailMode(
+        categoryBUuid, PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked,
+        false));
+    QCOMPARE(service.categoryEpoch(categoryBUuid), preThumbnailModeEpoch);
+    QVERIFY(service.setCategoryUnlockedThumbnailMode(
+        categoryBUuid, PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked,
+        true));
+    QVERIFY(service.categoryEpoch(categoryBUuid) > preThumbnailModeEpoch);
+    QVERIFY(!service.setCategoryUnlockedThumbnailMode(
+        categoryBUuid, static_cast<PrivacyUnlockedThumbnailMode>(99), true));
     const quint64 preTagVisibilityEpoch = service.categoryEpoch(categoryBUuid);
     QVERIFY(!service.setCategoryTagVisibilityMode(categoryBUuid,
                                                   PrivacyTagVisibilityMode::AlwaysVisible,

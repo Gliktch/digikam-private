@@ -109,6 +109,8 @@ public:
     PrivacyCoreDbCategorySessionRepository         repository;
     PrivacyGocryptfsCategoryStoreBackend           storeBackend;
     PrivacyCategorySessionCoordinator              coordinator;
+    PrivacyCategorySessionOwner::PresentationAvailabilityCallback
+                                                   presentationAvailability;
 };
 
 QSharedPointer<PrivacyCategorySessionOwner> PrivacyCategorySessionOwner::create(
@@ -164,6 +166,11 @@ PrivacyCategorySessionResult PrivacyCategorySessionOwner::unlockCategory(
 
     if (result.succeeded())
     {
+        if (d->presentationAvailability)
+        {
+            d->presentationAvailability(categoryUuid, true);
+        }
+
         d->publishManualTagVisibilityChange(categoryUuid);
     }
 
@@ -180,7 +187,18 @@ PrivacyCategorySessionResult PrivacyCategorySessionOwner::lockCategory(
         return { PrivacyCategorySessionStatus::TransactionBlocked };
     }
 
+    if (d->presentationAvailability)
+    {
+        d->presentationAvailability(categoryUuid, false);
+    }
+
     const PrivacyCategorySessionResult result = d->coordinator.lockCategory(categoryUuid);
+
+    if (d->presentationAvailability)
+    {
+        d->presentationAvailability(categoryUuid,
+                                    d->runtime->isCategoryUnlocked(categoryUuid));
+    }
 
     if (result.succeeded())
     {
@@ -202,8 +220,18 @@ QList<PrivacyCategorySessionResult> PrivacyCategorySessionOwner::lockAllCategori
         return { result };
     }
 
+    if (d->presentationAvailability)
+    {
+        d->presentationAvailability(QString(), false);
+    }
+
     const QList<PrivacyCategorySessionResult> results =
         d->coordinator.lockAllCategories();
+
+    if (d->presentationAvailability)
+    {
+        d->presentationAvailability(QString(), true);
+    }
 
     if (std::any_of(results.cbegin(), results.cend(),
                     [](const PrivacyCategorySessionResult& result)
@@ -238,6 +266,17 @@ PrivacyCategoryOperationStatus PrivacyCategorySessionOwner::runWithUnlockedSecre
          : d->coordinator.runWithUnlockedSecret(categoryUuid, operation);
 }
 
+PrivacyCategoryOperationStatus PrivacyCategorySessionOwner::runWithUnlockedStore(
+    const QString& categoryUuid,
+    const std::function<void(const PrivacyPassword&, const QString&)>& operation)
+{
+    QReadLocker locker(&d->lifecycleLock);
+
+    return d->closed
+         ? PrivacyCategoryOperationStatus::TransactionBlocked
+         : d->coordinator.runWithUnlockedStore(categoryUuid, operation);
+}
+
 PrivacyCategorySessionResult
 PrivacyCategorySessionOwner::runWithFreshlyAuthenticatedSecret(
     const QString& categoryUuid, const QString& passwordText,
@@ -254,6 +293,36 @@ PrivacyCategorySessionOwner::runWithFreshlyAuthenticatedSecret(
     return d->coordinator.runWithFreshlyAuthenticatedSecret(
                categoryUuid, passwordText, operation,
                allowedActiveItemTransactionUuid);
+}
+
+PrivacyCategorySessionResult
+PrivacyCategorySessionOwner::setCategoryUnlockedThumbnailMode(
+    const QString& categoryUuid, PrivacyUnlockedThumbnailMode mode,
+    const QString& passwordText)
+{
+    QReadLocker locker(&d->lifecycleLock);
+
+    if (d->closed)
+    {
+        return { PrivacyCategorySessionStatus::TransactionBlocked };
+    }
+
+    if (d->presentationAvailability)
+    {
+        d->presentationAvailability(categoryUuid, false);
+    }
+
+    const PrivacyCategorySessionResult result =
+        d->coordinator.setCategoryUnlockedThumbnailMode(categoryUuid, mode,
+                                                        passwordText);
+
+    if (d->presentationAvailability)
+    {
+        d->presentationAvailability(categoryUuid,
+                                    d->runtime->isCategoryUnlocked(categoryUuid));
+    }
+
+    return result;
 }
 
 PrivacyCategorySessionResult
@@ -280,6 +349,17 @@ PrivacyCategorySessionOwner::setCategoryTagVisibilityMode(
     return result;
 }
 
+void PrivacyCategorySessionOwner::setPresentationAvailabilityCallback(
+    const PresentationAvailabilityCallback& callback)
+{
+    QWriteLocker locker(&d->lifecycleLock);
+
+    if (!d->closed)
+    {
+        d->presentationAvailability = callback;
+    }
+}
+
 bool PrivacyCategorySessionOwner::ownsSecret(const QString& categoryUuid) const
 {
     QReadLocker locker(&d->lifecycleLock);
@@ -291,6 +371,11 @@ void PrivacyCategorySessionOwner::shutdown()
 {
     QWriteLocker locker(&d->lifecycleLock);
     d->closed = true;
+
+    if (d->presentationAvailability)
+    {
+        d->presentationAvailability(QString(), false);
+    }
 
     // Retry retained sessions when an earlier backend unmount failed. The
     // coordinator keeps those sessions specifically so a later attempt can

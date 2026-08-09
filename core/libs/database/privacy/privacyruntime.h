@@ -167,6 +167,20 @@ enum class PrivacyPublicProxyDisplayResult
     NewlyExposedOriginal  = 4
 };
 
+class DIGIKAM_DATABASE_EXPORT PrivacyClearThumbnailSource
+{
+public:
+
+    bool isValid() const;
+
+public:
+
+    QString                      categoryUuid;
+    PrivacyUnlockedThumbnailMode mode = PrivacyUnlockedThumbnailMode::AlwaysOpaque;
+    quint64                      categoryEpoch = 0;
+    PrivacyDerivative            derivative;
+};
+
 enum class PrivacyRootRecoveryResult
 {
     PublishedVerified = 1,
@@ -225,6 +239,8 @@ public:
     qlonglong expectedPublicProxySize(qlonglong imageId) const;
     PrivacyPublicProxyDisplayResult validatePublicProxyForDisplay(
         qlonglong imageId, const QString& absolutePath);
+    bool clearThumbnailSource(qlonglong imageId,
+                              PrivacyClearThumbnailSource* source) const;
 
     bool setCategoryUnlocked(const QString& categoryUuid, bool unlocked);
     bool isCategoryUnlocked(const QString& categoryUuid) const;
@@ -239,6 +255,9 @@ public:
     bool publishProtectedItem(const PrivacyItem& item,
                               const PrivacyContainer& container,
                               const QList<PrivacyAsset>& assets);
+    /// Publishes one exact rebuildable presentation derivative after its
+    /// encrypted store object and database row are durable.
+    bool publishDerivative(const PrivacyDerivative& derivative);
     /// Replaces only the exact DB-begun partial item held by a cold runtime
     /// after its sole Protect transaction has durably completed.
     bool publishProtectedItemForProtectRecovery(
@@ -270,6 +289,10 @@ public:
                                       const QString& itemUuid,
                                       bool exposed);
     quint64 categoryEpoch(const QString& categoryUuid) const;
+    bool setCategoryUnlockedThumbnailMode(
+        const QString& categoryUuid,
+        PrivacyUnlockedThumbnailMode mode,
+        bool categoryAuthenticationVerified);
     bool setCategoryTagVisibilityMode(const QString& categoryUuid,
                                       PrivacyTagVisibilityMode mode,
                                       bool categoryAuthenticationVerified);

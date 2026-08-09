@@ -43,6 +43,7 @@ void PrivacyService::reset(const QList<PrivacyCategory>& categories,
     QWriteLocker locker(&m_lock);
 
     m_categoryUnlockState.clear();
+    m_categoryUnlockedThumbnailModes.clear();
     m_categoryTagVisibilityModes.clear();
     m_categoryEpochs.clear();
     m_itemCategories.clear();
@@ -58,6 +59,8 @@ void PrivacyService::reset(const QList<PrivacyCategory>& categories,
         {
             const QString categoryUuid = normalizedUuid(category.uuid);
             m_categoryUnlockState.insert(categoryUuid, false);
+            m_categoryUnlockedThumbnailModes.insert(
+                categoryUuid, category.unlockedThumbnailMode);
             m_categoryTagVisibilityModes.insert(categoryUuid, category.tagVisibilityMode);
             m_categoryEpochs.insert(categoryUuid, advanceEpoch());
         }
@@ -148,6 +151,7 @@ bool PrivacyService::addCategory(const PrivacyCategory& category)
     }
 
     m_categoryUnlockState.insert(uuid, false);
+    m_categoryUnlockedThumbnailModes.insert(uuid, category.unlockedThumbnailMode);
     m_categoryTagVisibilityModes.insert(uuid, category.tagVisibilityMode);
     m_categoryEpochs.insert(uuid, advanceEpoch());
 
@@ -208,6 +212,37 @@ bool PrivacyService::removeItem(const PrivacyItem& item)
     m_imageIdsByItemUuid.remove(itemUuid);
     m_itemGenerations.remove(item.imageId);
     m_categoryEpochs.insert(categoryUuid, advanceEpoch());
+
+    return true;
+}
+
+bool PrivacyService::setCategoryUnlockedThumbnailMode(
+    const QString& categoryUuid,
+    PrivacyUnlockedThumbnailMode mode,
+    bool categoryAuthenticationVerified)
+{
+    if (!categoryAuthenticationVerified ||
+        ((mode != PrivacyUnlockedThumbnailMode::AlwaysOpaque) &&
+         (mode != PrivacyUnlockedThumbnailMode::FocusedClear) &&
+         (mode != PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked)))
+    {
+        return false;
+    }
+
+    QWriteLocker locker(&m_lock);
+    const QString uuid = normalizedUuid(categoryUuid);
+    auto it = m_categoryUnlockedThumbnailModes.find(uuid);
+
+    if (it == m_categoryUnlockedThumbnailModes.end())
+    {
+        return false;
+    }
+
+    if (it.value() != mode)
+    {
+        it.value() = mode;
+        m_categoryEpochs.insert(uuid, advanceEpoch());
+    }
 
     return true;
 }

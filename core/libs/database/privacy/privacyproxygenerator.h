@@ -83,6 +83,32 @@ public:
     bool                            sourcePixelsUsed = false;
 };
 
+enum class PrivacyClearThumbnailError
+{
+    None                 = 0,
+    InvalidSource        = 1,
+    DecodeFailed         = 2,
+    SafetyLimitExceeded  = 3,
+    EncoderMissing       = 4,
+    EncodeFailed         = 5,
+    EncodedOutputInvalid = 6
+};
+
+class DIGIKAM_DATABASE_EXPORT PrivacyClearThumbnailResult
+{
+public:
+
+    bool isValid() const;
+
+public:
+
+    PrivacyClearThumbnailError error = PrivacyClearThumbnailError::InvalidSource;
+    QByteArray encodedBytes;
+    QByteArray encodedFormat;
+    QByteArray sha256;
+    QSize pixelSize;
+};
+
 /**
  * Builds metadata-free still-image proxy bytes. Privacy badges and borders are
  * UI adornments and are deliberately never rasterized by this class.
@@ -99,6 +125,8 @@ public:
     static bool isSameFormatCandidate(const QString& fileName);
 
     PrivacyStillProxyResult generate(const PrivacyStillProxyRequest& request) const;
+    PrivacyClearThumbnailResult generateClearThumbnail(
+        const QString& sourcePath) const;
 };
 
 } // namespace Digikam

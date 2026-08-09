@@ -104,6 +104,9 @@ public:
     virtual ~PrivacyCategorySessionRepository() = default;
 
     virtual bool loadSnapshot(PrivacyRepositorySnapshot* snapshot) const = 0;
+    virtual bool setCategoryUnlockedThumbnailMode(
+        const QString& categoryUuid,
+        PrivacyUnlockedThumbnailMode mode) = 0;
     virtual bool setCategoryTagVisibilityMode(
         const QString& categoryUuid,
         PrivacyTagVisibilityMode mode) = 0;
@@ -128,6 +131,9 @@ class DIGIKAM_DATABASE_EXPORT PrivacyCoreDbCategorySessionRepository final
 public:
 
     bool loadSnapshot(PrivacyRepositorySnapshot* snapshot) const override;
+    bool setCategoryUnlockedThumbnailMode(
+        const QString& categoryUuid,
+        PrivacyUnlockedThumbnailMode mode) override;
     bool setCategoryTagVisibilityMode(
         const QString& categoryUuid,
         PrivacyTagVisibilityMode mode) override;
@@ -187,6 +193,7 @@ public:
 
     virtual ~PrivacyCategoryStoreLease() = default;
     virtual bool isActive() = 0;
+    virtual QString plaintextRoot() const = 0;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyCategoryStoreBackend
@@ -277,6 +284,16 @@ public:
         const std::function<void(const PrivacyPassword&)>& operation);
 
     /**
+     * Borrows both the retained normalized password and the active category
+     * store mount for one synchronous operation. The root is empty when a
+     * Casual category is unlocked while its optional derivative store is
+     * offline. Neither reference may be retained after the callback returns.
+     */
+    PrivacyCategoryOperationStatus runWithUnlockedStore(
+        const QString& categoryUuid,
+        const std::function<void(const PrivacyPassword&, const QString&)>& operation);
+
+    /**
      * Runs one synchronous protected-item operation with a newly entered,
      * independently verified category password. The category may be locked;
      * this operation never creates or replaces a retained category session or
@@ -292,6 +309,10 @@ public:
         const QString& passwordText,
         const std::function<void(const PrivacyPassword&)>& operation,
         const QString& allowedActiveItemTransactionUuid = QString());
+    PrivacyCategorySessionResult setCategoryUnlockedThumbnailMode(
+        const QString& categoryUuid,
+        PrivacyUnlockedThumbnailMode mode,
+        const QString& passwordText = QString());
     PrivacyCategorySessionResult setCategoryTagVisibilityMode(
         const QString& categoryUuid,
         PrivacyTagVisibilityMode mode,

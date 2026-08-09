@@ -204,6 +204,7 @@ private Q_SLOTS:
     void testSourceSnapshotInvalidationAndCachePolicy();
     void testProviderSnapshotLifetime();
     void testIdenticalProviderReinstallInvalidatesHandledSnapshot();
+    void testThumbnailRevealRegistryUnionsViews();
     void testThreadSafeProviderReset();
     void testOrdinarySourceUseGuardDrainsAndBlocksNewcomers();
     void testProviderChangeWhileBeginWaitsRemovesBarrier();
@@ -494,6 +495,23 @@ void PrivacySourceResolverTest::testSourceSnapshotInvalidationAndCachePolicy()
     ordinaryDetail.previewParameters.extraParameter   = QRect(1, 2, 3, 4);
     ordinaryDetail.resolveSource();
     QVERIFY(ordinaryDetail.thumbnailIdentifier().persistentCacheAllowed);
+
+    const QByteArray encoded("synthetic-encoded-thumbnail");
+    PrivacySourceResolver::setProvider(
+        QSharedPointer<FixedProvider>(new FixedProvider(
+            PrivacySourceResult::resolvedMemory(
+                encoded, QLatin1String("category-a:clear:14")))));
+    LoadingDescription memoryThumbnail(
+        path, PreviewSettings(), 128, LoadingDescription::NoColorConversion,
+        LoadingDescription::PreviewParameters::Thumbnail);
+    memoryThumbnail.resolveSource();
+    QVERIFY(memoryThumbnail.sourceResolutionIsCurrent());
+    QVERIFY(!memoryThumbnail.persistentCacheAllowed());
+    QCOMPARE(memoryThumbnail.thumbnailIdentifier().sourceEncodedBytes, encoded);
+
+    LoadingDescription rejectedPreview(path, PreviewSettings(), 128);
+    rejectedPreview.resolveSource();
+    QVERIFY(rejectedPreview.isSourceDenied());
 }
 
 void PrivacySourceResolverTest::testProviderSnapshotLifetime()
@@ -560,6 +578,35 @@ void PrivacySourceResolverTest::testIdenticalProviderReinstallInvalidatesHandled
     const ThumbnailIdentifier newIdentifier = newSnapshot.thumbnailIdentifier();
     QVERIFY(oldIdentifier.sourceResolverGeneration !=
             newIdentifier.sourceResolverGeneration);
+}
+
+void PrivacySourceResolverTest::testThumbnailRevealRegistryUnionsViews()
+{
+    const QString first = QLatin1String("/synthetic/album/first.jpg");
+    const QString second = QLatin1String("/synthetic/album/second.jpg");
+    const quintptr firstView = 101;
+    const quintptr secondView = 202;
+
+    QCOMPARE(PrivacySourceResolver::setThumbnailRevealPaths(
+                 firstView, { first }), QSet<QString>({ first }));
+    QVERIFY(PrivacySourceResolver::thumbnailRevealRequested(first));
+    QVERIFY(!PrivacySourceResolver::thumbnailRevealRequested(second));
+
+    QCOMPARE(PrivacySourceResolver::setThumbnailRevealPaths(
+                 secondView, { first, second }), QSet<QString>({ second }));
+    QVERIFY(PrivacySourceResolver::thumbnailRevealRequested(first));
+    QVERIFY(PrivacySourceResolver::thumbnailRevealRequested(second));
+
+    QVERIFY(PrivacySourceResolver::clearThumbnailRevealPaths(firstView).isEmpty());
+    QCOMPARE(PrivacySourceResolver::clearThumbnailRevealPaths(secondView),
+             QSet<QString>({ first, second }));
+    QVERIFY(!PrivacySourceResolver::thumbnailRevealRequested(first));
+    QVERIFY(!PrivacySourceResolver::thumbnailRevealRequested(second));
+
+    QVERIFY(PrivacySourceResolver::setThumbnailRevealPaths(
+                0, { first }).isEmpty());
+    QVERIFY(!PrivacySourceResolver::thumbnailRevealRequested(
+                QLatin1String("relative.jpg")));
 }
 
 void PrivacySourceResolverTest::testThreadSafeProviderReset()

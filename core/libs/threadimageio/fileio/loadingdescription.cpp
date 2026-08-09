@@ -318,6 +318,7 @@ bool LoadingDescription::operator==(const LoadingDescription& other) const
             ((!m_sourceResolutionApplied || !other.m_sourceResolutionApplied) ||
              (m_sourceResolverGeneration == other.m_sourceResolverGeneration)) &&
             (m_sourceFilePath         == other.m_sourceFilePath)           &&
+            (m_sourceEncodedBytes     == other.m_sourceEncodedBytes)       &&
             (m_privacyCacheNamespace  == other.m_privacyCacheNamespace));
 }
 
@@ -334,6 +335,7 @@ bool LoadingDescription::equalsIgnoreReducedVersion(const LoadingDescription& ot
             ((!m_sourceResolutionApplied || !other.m_sourceResolutionApplied) ||
              (m_sourceResolverGeneration == other.m_sourceResolverGeneration)) &&
             (m_sourceFilePath        == other.m_sourceFilePath)        &&
+            (m_sourceEncodedBytes    == other.m_sourceEncodedBytes)    &&
             (m_privacyCacheNamespace == other.m_privacyCacheNamespace));
 }
 
@@ -362,6 +364,7 @@ bool LoadingDescription::equalsOrBetterThan(const LoadingDescription& other) con
             ((!m_sourceResolutionApplied || !other.m_sourceResolutionApplied) ||
              (m_sourceResolverGeneration == other.m_sourceResolverGeneration)) &&
             (m_sourceFilePath        == other.m_sourceFilePath)        &&
+            (m_sourceEncodedBytes    == other.m_sourceEncodedBytes)    &&
             (m_privacyCacheNamespace == other.m_privacyCacheNamespace) &&
             (
                 (rawDecodingSettings == other.rawDecodingSettings) ||
@@ -397,10 +400,13 @@ ThumbnailIdentifier LoadingDescription::thumbnailIdentifier() const
     id.filePath = filePath;
     id.id       = previewParameters.storageReference.toLongLong();
     id.sourceFilePath      = m_sourceFilePath;
+    id.sourceEncodedBytes  = m_sourceEncodedBytes;
     id.cacheNamespace      = m_privacyCacheNamespace;
     id.sourceResolverGeneration = m_sourceResolverGeneration;
     id.sourceResolutionApplied = m_sourceResolutionApplied;
     id.sourceAccessDenied  = isSourceDenied();
+    id.detailThumbnail     = (previewParameters.type ==
+                              PreviewParameters::DetailThumbnail);
     // Detail/crop identifiers include an arbitrary rectangle. There is no
     // reverse logical-owner index in either persistent thumbnail backend, so
     // old privacy generations could not be enumerated safely for deletion.
@@ -428,6 +434,8 @@ void LoadingDescription::resolveSource()
     if      (isThumbnail())
     {
         request.consumer = PrivacySourceRequest::Thumbnail;
+        request.detailThumbnail = (previewParameters.type ==
+                                   PreviewParameters::DetailThumbnail);
     }
     else if (isPreviewImage())
     {
@@ -445,6 +453,7 @@ void LoadingDescription::resolveSource()
     m_sourceCachePolicy       = result.cachePolicy;
     m_sourceResolverGeneration = result.resolverGeneration;
     m_sourceFilePath          = result.physicalFilePath;
+    m_sourceEncodedBytes      = result.encodedBytes;
     m_privacyCacheNamespace   = result.cacheNamespace;
 }
 
@@ -455,6 +464,7 @@ void LoadingDescription::resetSourceResolution()
     m_sourceCachePolicy       = PrivacySourceResult::Persistent;
     m_sourceResolverGeneration = 0;
     m_sourceFilePath.clear();
+    m_sourceEncodedBytes.clear();
     m_privacyCacheNamespace.clear();
 }
 
@@ -465,7 +475,8 @@ QString LoadingDescription::effectiveFilePath() const
         return QString();
     }
 
-    if (m_sourceDisposition == PrivacySourceResult::Resolved)
+    if ((m_sourceDisposition == PrivacySourceResult::Resolved) &&
+        !m_sourceFilePath.isEmpty())
     {
         return m_sourceFilePath;
     }
@@ -497,6 +508,8 @@ bool LoadingDescription::sourceResolutionIsCurrent() const
     if      (isThumbnail())
     {
         request.consumer = PrivacySourceRequest::Thumbnail;
+        request.detailThumbnail = (previewParameters.type ==
+                                   PreviewParameters::DetailThumbnail);
     }
     else if (isPreviewImage())
     {
@@ -513,6 +526,7 @@ bool LoadingDescription::sourceResolutionIsCurrent() const
             (m_sourceCachePolicy      == current.cachePolicy)      &&
             (m_sourceResolverGeneration == current.resolverGeneration) &&
             (m_sourceFilePath         == current.physicalFilePath) &&
+            (m_sourceEncodedBytes     == current.encodedBytes) &&
             (m_privacyCacheNamespace  == current.cacheNamespace));
 }
 

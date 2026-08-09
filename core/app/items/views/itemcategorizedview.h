@@ -203,6 +203,7 @@ protected:
     void indexActivated(const QModelIndex& index, Qt::KeyboardModifiers modifiers)        override;
     void currentChanged(const QModelIndex& index, const QModelIndex& previous)            override;
     void selectionChanged(const QItemSelection&, const QItemSelection&)                   override;
+    void leaveEvent(QEvent* event)                                                        override;
     void updateGeometries()                                                               override;
 
     /// Reimplement these in a subclass
@@ -221,6 +222,8 @@ private Q_SLOTS:
     void slotDelayedEnter();
 
 private:
+
+    void updatePrivacyThumbnailRevealPaths();
 
     class Private;
     Private* const d = nullptr;

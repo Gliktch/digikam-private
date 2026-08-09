@@ -39,6 +39,7 @@ public:
 
     QReadWriteLock                             lock;
     QSharedPointer<const PrivacySourceProvider> provider;
+    QHash<quintptr, QSet<QString> >              thumbnailRevealPaths;
     quint64                                    generation = 0;
 };
 
@@ -46,6 +47,7 @@ Q_GLOBAL_STATIC(PrivacySourceResolverData, resolverData)
 
 const QLatin1String invalidProviderNamespace("invalid-provider-result");
 const QLatin1String changedProviderNamespace("provider-changed-during-resolution");
+constexpr qsizetype MaximumEncodedMemorySourceBytes = 32 * 1024 * 1024;
 
 PrivacySourceResult stampedResult(PrivacySourceResult result, quint64 generation)
 {
@@ -70,6 +72,18 @@ PrivacySourceResult PrivacySourceResult::resolved(const QString& physicalFilePat
     result.physicalFilePath = physicalFilePath;
     result.cacheNamespace   = cacheNamespace;
     result.cachePolicy      = cachePolicy;
+
+    return result;
+}
+
+PrivacySourceResult PrivacySourceResult::resolvedMemory(
+    const QByteArray& encodedBytes, const QString& cacheNamespace)
+{
+    PrivacySourceResult result;
+    result.disposition   = Resolved;
+    result.encodedBytes  = encodedBytes;
+    result.cacheNamespace = cacheNamespace;
+    result.cachePolicy   = MemoryOnly;
 
     return result;
 }
@@ -190,10 +204,18 @@ PrivacySourceResult PrivacySourceResolver::resolve(const PrivacySourceRequest& r
                              providerGeneration);
     }
 
+    const bool validPathSource =
+        !result.physicalFilePath.isEmpty() && result.encodedBytes.isEmpty() &&
+        QDir::isAbsolutePath(result.physicalFilePath) &&
+        !result.physicalFilePath.contains(QChar::Null);
+    const bool validMemorySource =
+        result.physicalFilePath.isEmpty() && !result.encodedBytes.isEmpty() &&
+        (result.encodedBytes.size() <= MaximumEncodedMemorySourceBytes) &&
+        (request.consumer == PrivacySourceRequest::Thumbnail) &&
+        !request.detailThumbnail;
+
     if ((result.disposition == PrivacySourceResult::Resolved) &&
-        !result.physicalFilePath.isEmpty()                    &&
-        QDir::isAbsolutePath(result.physicalFilePath)         &&
-        !result.physicalFilePath.contains(QChar::Null))
+        (validPathSource || validMemorySource))
     {
         return stampedResult(result, providerGeneration);
     }
@@ -206,6 +228,83 @@ PrivacySourceResult PrivacySourceResolver::resolve(const PrivacySourceRequest& r
 
     return stampedResult(PrivacySourceResult::denied(invalidProviderNamespace),
                          providerGeneration);
+}
+
+QSet<QString> PrivacySourceResolver::setThumbnailRevealPaths(
+    quintptr requester, const QSet<QString>& logicalFilePaths)
+{
+    if (requester == 0)
+    {
+        return {};
+    }
+
+    QSet<QString> normalized;
+
+    for (const QString& path : logicalFilePaths)
+    {
+        if (!path.isEmpty() && QDir::isAbsolutePath(path) &&
+            !path.contains(QChar::Null))
+        {
+            normalized.insert(QDir::cleanPath(path));
+        }
+    }
+
+    QWriteLocker locker(&resolverData->lock);
+    QSet<QString> before;
+
+    for (const QSet<QString>& paths :
+         std::as_const(resolverData->thumbnailRevealPaths))
+    {
+        before.unite(paths);
+    }
+
+    if (normalized.isEmpty())
+    {
+        resolverData->thumbnailRevealPaths.remove(requester);
+    }
+    else
+    {
+        resolverData->thumbnailRevealPaths.insert(requester, normalized);
+    }
+
+    QSet<QString> after;
+
+    for (const QSet<QString>& paths :
+         std::as_const(resolverData->thumbnailRevealPaths))
+    {
+        after.unite(paths);
+    }
+
+    return (before - after) + (after - before);
+}
+
+QSet<QString> PrivacySourceResolver::clearThumbnailRevealPaths(quintptr requester)
+{
+    return setThumbnailRevealPaths(requester, {});
+}
+
+bool PrivacySourceResolver::thumbnailRevealRequested(
+    const QString& logicalFilePath)
+{
+    if (logicalFilePath.isEmpty() || !QDir::isAbsolutePath(logicalFilePath) ||
+        logicalFilePath.contains(QChar::Null))
+    {
+        return false;
+    }
+
+    const QString normalized = QDir::cleanPath(logicalFilePath);
+    QReadLocker locker(&resolverData->lock);
+
+    for (const QSet<QString>& paths :
+         std::as_const(resolverData->thumbnailRevealPaths))
+    {
+        if (paths.contains(normalized))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 quint64 PrivacySourceResolver::currentGeneration()

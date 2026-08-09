@@ -164,6 +164,29 @@ public:
         return true;
     }
 
+    bool setCategoryUnlockedThumbnailMode(
+        const QString& categoryUuid,
+        PrivacyUnlockedThumbnailMode mode) override
+    {
+        ++thumbnailModeUpdateCalls;
+
+        if (failThumbnailModeUpdate)
+        {
+            return false;
+        }
+
+        for (PrivacyCategory& category : snapshot.categories)
+        {
+            if (category.uuid == categoryUuid)
+            {
+                category.unlockedThumbnailMode = mode;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     bool setCategoryTagVisibilityMode(
         const QString& categoryUuid,
         PrivacyTagVisibilityMode mode) override
@@ -302,10 +325,12 @@ public:
     std::atomic<int> beginCalls { 0 };
     std::atomic<int> publishCalls { 0 };
     std::atomic<int> journalUpdateCalls { 0 };
+    std::atomic<int> thumbnailModeUpdateCalls { 0 };
     std::atomic<int> tagVisibilityUpdateCalls { 0 };
     bool failBegin = false;
     bool failPublish = false;
     bool failCompleteJournalUpdateOnce = false;
+    bool failThumbnailModeUpdate = false;
     bool failTagVisibilityUpdate = false;
     PrivacyRepositorySnapshot snapshot;
 };
@@ -413,6 +438,11 @@ public:
     bool isActive() override
     {
         return active;
+    }
+
+    QString plaintextRoot() const override
+    {
+        return QLatin1String("/synthetic/category-store");
     }
 
     bool active = true;
@@ -620,6 +650,7 @@ private Q_SLOTS:
     void testFreshAuthenticationDoesNotReplaceRetainedSecret();
     void testFreshAuthenticationRejectsWrongPasswordAndRecoversFromException();
     void testFreshAuthenticationSerializesLock();
+    void testThumbnailModeUpdateAuthenticatesAndCompensatesFailure();
     void testTagVisibilityUpdateReusesUnlockedAuthentication();
     void testTagVisibilityUpdateRequiresAuthenticationAndCompensatesFailure();
     void testCallbacksAndBlockingTeardownAreOutOfLock();
@@ -1101,6 +1132,24 @@ void PrivacyCategorySessionTest::testItemOperationBorrowsSecretAndSerializesLock
              PrivacyCategorySessionStatus::TransactionBlocked);
     QVERIFY(coordinator.ownsSecret(CategoryUuid));
 
+    bool storeSecretMatched = false;
+    QString borrowedStoreRoot;
+    QCOMPARE(coordinator.runWithUnlockedStore(
+                 CategoryUuid,
+                 [&](const PrivacyPassword& password, const QString& root)
+                 {
+                     password.withStdinLine([&](const QByteArray& line)
+                     {
+                         storeSecretMatched = (line == QByteArray("secret\n"));
+                         return true;
+                     });
+                     borrowedStoreRoot = root;
+                 }),
+             PrivacyCategoryOperationStatus::Completed);
+    QVERIFY(storeSecretMatched);
+    QCOMPARE(borrowedStoreRoot,
+             QLatin1String("/synthetic/category-store"));
+
     bool exceptionObserved = false;
 
     try
@@ -1407,6 +1456,50 @@ void PrivacyCategorySessionTest::testFreshAuthenticationSerializesLock()
     QCOMPARE(lockResult.status, PrivacyCategorySessionStatus::Locked);
     QVERIFY(lockFinished.load());
     QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+}
+
+void PrivacyCategorySessionTest::testThumbnailModeUpdateAuthenticatesAndCompensatesFailure()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+    const quint64 initialEpoch = runtime.categoryEpoch(CategoryUuid);
+
+    QCOMPARE(coordinator.setCategoryUnlockedThumbnailMode(
+                 CategoryUuid, PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked,
+                 QLatin1String("wrong")).status,
+             PrivacyCategorySessionStatus::AuthenticationFailed);
+    QCOMPARE(repository.thumbnailModeUpdateCalls.load(), 0);
+    QCOMPARE(runtime.categoryEpoch(CategoryUuid), initialEpoch);
+
+    QCOMPARE(coordinator.setCategoryUnlockedThumbnailMode(
+                 CategoryUuid, PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked,
+                 QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::SettingsUpdated);
+    QCOMPARE(repository.snapshot.categories.constFirst().unlockedThumbnailMode,
+             PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked);
+    QVERIFY(runtime.categoryEpoch(CategoryUuid) > initialEpoch);
+    QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+
+    const quint64 revealedEpoch = runtime.categoryEpoch(CategoryUuid);
+    repository.failThumbnailModeUpdate = true;
+    QCOMPARE(coordinator.setCategoryUnlockedThumbnailMode(
+                 CategoryUuid, PrivacyUnlockedThumbnailMode::AlwaysOpaque,
+                 QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::SettingsUpdateFailed);
+    QCOMPARE(repository.snapshot.categories.constFirst().unlockedThumbnailMode,
+             PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked);
+    QVERIFY(runtime.categoryEpoch(CategoryUuid) >= (revealedEpoch + 2));
+
+    QCOMPARE(coordinator.setCategoryUnlockedThumbnailMode(
+                 CategoryUuid, static_cast<PrivacyUnlockedThumbnailMode>(99),
+                 QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::InvalidRequest);
 }
 
 void PrivacyCategorySessionTest::testTagVisibilityUpdateReusesUnlockedAuthentication()

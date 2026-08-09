@@ -299,6 +299,27 @@ PrivacyCategory CoreDB::getPrivacyCategory(const QString& uuid) const
     return category;
 }
 
+bool CoreDB::updatePrivacyCategoryUnlockedThumbnailMode(
+    const QString& uuid,
+    PrivacyUnlockedThumbnailMode mode) const
+{
+    if ((mode != PrivacyUnlockedThumbnailMode::AlwaysOpaque) &&
+        (mode != PrivacyUnlockedThumbnailMode::FocusedClear) &&
+        (mode != PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked))
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << static_cast<int>(mode) << uuid;
+
+    const QSqlQuery query = d->db->execQuery(
+        QString::fromUtf8("UPDATE PrivacyCategories SET unlockedThumbnailMode=? WHERE uuid=?;"),
+        values);
+
+    return (query.isActive() && (query.numRowsAffected() == 1));
+}
+
 bool CoreDB::updatePrivacyCategoryTagVisibilityMode(
     const QString& uuid,
     PrivacyTagVisibilityMode mode) const

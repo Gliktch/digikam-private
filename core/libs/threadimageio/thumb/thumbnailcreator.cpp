@@ -73,6 +73,7 @@ bool thumbnailSourceIsCurrent(const ThumbnailIdentifier& identifier)
     request.logicalFilePath = identifier.filePath;
     request.itemReference   = identifier.id;
     request.consumer        = PrivacySourceRequest::Thumbnail;
+    request.detailThumbnail = identifier.detailThumbnail;
 
     const PrivacySourceResult current = PrivacySourceResolver::resolve(request);
     PrivacySourceResult::Disposition expectedDisposition = PrivacySourceResult::NotHandled;
@@ -82,7 +83,8 @@ bool thumbnailSourceIsCurrent(const ThumbnailIdentifier& identifier)
         expectedDisposition = PrivacySourceResult::Denied;
     }
     else if (!identifier.cacheNamespace.isEmpty() ||
-             !identifier.sourceFilePath.isEmpty())
+             !identifier.sourceFilePath.isEmpty() ||
+             !identifier.sourceEncodedBytes.isEmpty())
     {
         expectedDisposition = PrivacySourceResult::Resolved;
     }
@@ -91,7 +93,8 @@ bool thumbnailSourceIsCurrent(const ThumbnailIdentifier& identifier)
             (current.cacheNamespace    == identifier.cacheNamespace)           &&
             (current.resolverGeneration == identifier.sourceResolverGeneration) &&
             ((expectedDisposition != PrivacySourceResult::Resolved) ||
-             (current.physicalFilePath == identifier.sourceFilePath)));
+             ((current.physicalFilePath == identifier.sourceFilePath) &&
+              (current.encodedBytes == identifier.sourceEncodedBytes))));
 }
 
 } // namespace
@@ -600,6 +603,7 @@ ThumbnailInfo ThumbnailCreator::makeThumbnailInfo(const ThumbnailIdentifier& ide
     info.sourceResolutionApplied = identifier.sourceResolutionApplied;
     info.sourceAccessDenied = identifier.sourceAccessDenied;
     info.persistentCacheAllowed = identifier.persistentCacheAllowed;
+    info.detailThumbnail    = identifier.detailThumbnail;
 
     if (!identifier.cacheNamespace.isEmpty())
     {
@@ -622,6 +626,15 @@ ThumbnailInfo ThumbnailCreator::makeThumbnailInfo(const ThumbnailIdentifier& ide
         info.mimeType         = sourceInfo.mimeType;
         info.modificationDate = sourceInfo.modificationDate;
     }
+    else if (!identifier.sourceEncodedBytes.isEmpty())
+    {
+        info.filePath     = identifier.filePath;
+        info.fileName     = QLatin1String("private-clear-thumbnail.jpg");
+        info.isAccessible = true;
+        info.mimeType     = QLatin1String("image");
+    }
+
+    info.sourceEncodedBytes = identifier.sourceEncodedBytes;
 
     if (!rect.isNull())
     {

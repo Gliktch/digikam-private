@@ -50,6 +50,8 @@
 #include "metaenginesettings.h"
 #include "privacycategorysessionowner.h"
 #include "privacycontracts.h"
+#include "privacyderivativestore.h"
+#include "privacyproxygenerator.h"
 #include "privacyrepository.h"
 #include "privacystillitemtransaction.h"
 #include "privacythreadimagestillitemcachegate.h"
@@ -942,11 +944,11 @@ PrivacyThreadImageIOStillItemTransactionOwner::protect(
         QStringLiteral("The category became unavailable"));
 
     const PrivacyCategoryOperationStatus operationStatus =
-        sessions->runWithUnlockedSecret(
+        sessions->runWithUnlockedStore(
             categoryUuid,
             [this, &info, &categoryUuid, &acknowledgeAssetSet, &result,
              &runtime]
-            (const PrivacyPassword& password)
+            (const PrivacyPassword& password, const QString& storeRoot)
             {
                 PrivacyAssetInventoryBridgeRequest bridgeRequest;
                 bridgeRequest.imageIds << info.id();
@@ -1050,6 +1052,16 @@ PrivacyThreadImageIOStillItemTransactionOwner::protect(
                 request.rootExpectation = expectation;
                 request.originalPixelSize = info.dimensions();
                 request.originalCreationDate = info.dateTime();
+                PrivacyClearThumbnailResult clearDerivative;
+
+                if ((info.category() == DatabaseItem::Image) &&
+                    !storeRoot.isEmpty())
+                {
+                    clearDerivative = PrivacyStillProxyGenerator().
+                        generateClearThumbnail(
+                            QDir(primaryAsset->location.root.absolutePath).
+                                filePath(primaryAsset->location.relativePath));
+                }
 
                 {
                     QMutexLocker locker(&d->transactionMutex);
@@ -1060,6 +1072,84 @@ PrivacyThreadImageIOStillItemTransactionOwner::protect(
                 {
                     PrivacyProtectPreflight::discardNewlyCreatedRoots(preflight,
                                                                       runtime);
+                    return;
+                }
+
+                if (!clearDerivative.isValid() || storeRoot.isEmpty())
+                {
+                    return;
+                }
+
+                PrivacyRepositorySnapshot completed;
+
+                if (!d->persistence.loadSnapshot(&completed))
+                {
+                    return;
+                }
+
+                const PrivacyAsset* protectedPrimary = nullptr;
+                QString derivativeStoreUuid;
+                int primaryCount = 0;
+                int derivativeBindingCount = 0;
+
+                for (const PrivacyAsset& asset : std::as_const(completed.assets))
+                {
+                    if ((asset.itemUuid == request.itemUuid) &&
+                        (asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                        (asset.ordinal == 0))
+                    {
+                        protectedPrimary = &asset;
+                        ++primaryCount;
+                    }
+                }
+
+                for (const PrivacyStoreBinding& binding :
+                     std::as_const(completed.storeBindings))
+                {
+                    if ((binding.categoryUuid == categoryUuid) &&
+                        (binding.role == PrivacyStoreRole::Derivatives))
+                    {
+                        derivativeStoreUuid = binding.storeUuid;
+                        ++derivativeBindingCount;
+                    }
+                }
+
+                if ((primaryCount != 1) || !protectedPrimary ||
+                    (derivativeBindingCount != 1))
+                {
+                    return;
+                }
+
+                PrivacyDerivative derivative;
+                derivative.itemUuid = request.itemUuid;
+                derivative.kind = PrivacyDerivativeKind::ClearThumbnail;
+                derivative.ordinal = 0;
+                derivative.storeUuid = derivativeStoreUuid;
+                derivative.sourceHashAlgorithm = protectedPrimary->hashAlgorithm;
+                derivative.sourceOriginalHash = protectedPrimary->originalHash;
+                derivative.derivativeFormat = QString::fromLatin1(
+                    clearDerivative.encodedFormat);
+                derivative.derivativeHashAlgorithm = QLatin1String("sha256");
+                derivative.derivativeHash = QString::fromLatin1(
+                    clearDerivative.sha256.toHex());
+                derivative.derivativeSize = clearDerivative.encodedBytes.size();
+                derivative.presentationVersion = 1;
+                derivative.generation = 1;
+                derivative.createdAt = QDateTime::currentDateTimeUtc();
+                derivative.protectedRelativePath =
+                    PrivacyDerivativeStore::clearThumbnailRelativePath(
+                        derivative.itemUuid, derivative.sourceOriginalHash,
+                        derivative.presentationVersion);
+                PrivacyDerivativeStore derivativeStore;
+
+                if (derivative.isValid() &&
+                    derivativeStore.put(storeRoot, derivative,
+                                        clearDerivative.encodedBytes))
+                {
+                    if (PrivacyRepository().addDerivative(derivative))
+                    {
+                        runtime->publishDerivative(derivative);
+                    }
                 }
             });
 

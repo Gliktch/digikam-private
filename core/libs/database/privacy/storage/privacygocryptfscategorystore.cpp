@@ -289,6 +289,11 @@ public:
         return lease && lease->isActive();
     }
 
+    QString plaintextRoot() const override
+    {
+        return lease ? lease->mountPoint() : QString();
+    }
+
     std::unique_ptr<PrivacyGocryptfsStoreHarness> harness;
     std::unique_ptr<PrivacyGocryptfsMountLease> lease;
 };

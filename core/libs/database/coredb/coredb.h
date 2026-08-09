@@ -118,6 +118,9 @@ public:
     bool insertPrivacyCategory(const PrivacyCategory& category)                                                    const;
     bool getPrivacyCategories(QList<PrivacyCategory>* categories)                                                  const;
     PrivacyCategory getPrivacyCategory(const QString& uuid)                                                        const;
+    bool updatePrivacyCategoryUnlockedThumbnailMode(
+        const QString& uuid,
+        PrivacyUnlockedThumbnailMode mode)                                                                        const;
     bool updatePrivacyCategoryTagVisibilityMode(const QString& uuid,
                                                 PrivacyTagVisibilityMode mode)                                     const;
 

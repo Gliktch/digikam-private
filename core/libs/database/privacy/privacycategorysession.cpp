@@ -560,6 +560,13 @@ bool PrivacyCoreDbCategorySessionRepository::loadSnapshot(
     return PrivacyRepository().loadSnapshot(snapshot);
 }
 
+bool PrivacyCoreDbCategorySessionRepository::setCategoryUnlockedThumbnailMode(
+    const QString& categoryUuid, PrivacyUnlockedThumbnailMode mode)
+{
+    return PrivacyRepository().setCategoryUnlockedThumbnailMode(
+        categoryUuid, mode, true);
+}
+
 bool PrivacyCoreDbCategorySessionRepository::setCategoryTagVisibilityMode(
     const QString& categoryUuid, PrivacyTagVisibilityMode mode)
 {
@@ -1817,6 +1824,56 @@ PrivacyCategorySessionCoordinator::runWithUnlockedSecret(
     return PrivacyCategoryOperationStatus::Completed;
 }
 
+PrivacyCategoryOperationStatus
+PrivacyCategorySessionCoordinator::runWithUnlockedStore(
+    const QString& categoryUuidText,
+    const std::function<void(const PrivacyPassword&, const QString&)>& operation)
+{
+    const QString categoryUuid = normalizedUuid(categoryUuidText);
+
+    if (categoryUuid.isEmpty() || !operation)
+    {
+        return PrivacyCategoryOperationStatus::InvalidRequest;
+    }
+
+    quint64 operationToken = 0;
+    std::shared_ptr<Private::Session> session;
+
+    {
+        QMutexLocker locker(&d->lock);
+        const auto sessionIt = d->sessions.constFind(categoryUuid);
+
+        if ((sessionIt == d->sessions.constEnd()) ||
+            !sessionIt.value()->password ||
+            !sessionIt.value()->password->isValid())
+        {
+            return PrivacyCategoryOperationStatus::CategoryLocked;
+        }
+
+        operationToken = d->beginOperation(categoryUuid,
+                                           Private::OperationKind::ItemTransaction);
+
+        if (operationToken == 0)
+        {
+            return PrivacyCategoryOperationStatus::TransactionBlocked;
+        }
+
+        session = sessionIt.value();
+    }
+
+    const ScopeExit finishOperation([this, categoryUuid, operationToken]()
+    {
+        QMutexLocker locker(&d->lock);
+        d->finishOperation(categoryUuid, operationToken);
+    });
+    const QString plaintextRoot = session->lease
+                                ? session->lease->plaintextRoot()
+                                : QString();
+
+    operation(*session->password, plaintextRoot);
+    return PrivacyCategoryOperationStatus::Completed;
+}
+
 PrivacyCategorySessionResult
 PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
     const QString& categoryUuidText, const QString& passwordText,
@@ -1906,6 +1963,131 @@ PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
     Q_UNUSED(session); // Retain an existing session and lease for the callback.
 
     result.status = PrivacyCategorySessionStatus::FreshAuthenticationVerified;
+    return result;
+}
+
+PrivacyCategorySessionResult
+PrivacyCategorySessionCoordinator::setCategoryUnlockedThumbnailMode(
+    const QString& categoryUuidText, PrivacyUnlockedThumbnailMode mode,
+    const QString& passwordText)
+{
+    PrivacyCategorySessionResult result;
+    const QString categoryUuid = normalizedUuid(categoryUuidText);
+
+    if (categoryUuid.isEmpty() ||
+        ((mode != PrivacyUnlockedThumbnailMode::AlwaysOpaque) &&
+         (mode != PrivacyUnlockedThumbnailMode::FocusedClear) &&
+         (mode != PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked)))
+    {
+        result.status = PrivacyCategorySessionStatus::InvalidRequest;
+        return result;
+    }
+
+    bool updated = false;
+    const auto update = [this, &updated, categoryUuid, mode](const PrivacyPassword&)
+    {
+        PrivacyRepositorySnapshot snapshot;
+
+        if (!d->repository.loadSnapshot(&snapshot))
+        {
+            return;
+        }
+
+        PrivacyCategory category;
+        int matches = 0;
+
+        for (const PrivacyCategory& candidate : std::as_const(snapshot.categories))
+        {
+            if (candidate.uuid == categoryUuid)
+            {
+                category = candidate;
+                ++matches;
+            }
+        }
+
+        if ((matches != 1) || !category.isValid() ||
+            (category.lifecycleState != PrivacyCategoryLifecycleState::Active))
+        {
+            return;
+        }
+
+        const PrivacyUnlockedThumbnailMode previous =
+            category.unlockedThumbnailMode;
+
+        if (previous == mode)
+        {
+            updated = true;
+            return;
+        }
+
+        const bool revealsMore =
+            (static_cast<int>(mode) > static_cast<int>(previous));
+
+        if (revealsMore)
+        {
+            // Publish a more revealing policy only after it is durable. A
+            // runtime failure is compensated back to the prior durable mode.
+
+            if (!d->repository.setCategoryUnlockedThumbnailMode(categoryUuid, mode))
+            {
+                return;
+            }
+
+            if (!d->runtime.setCategoryUnlockedThumbnailMode(
+                    categoryUuid, mode, true))
+            {
+                d->repository.setCategoryUnlockedThumbnailMode(categoryUuid,
+                                                                previous);
+                return;
+            }
+        }
+        else
+        {
+            // Hide immediately, then persist. Restore runtime if persistence
+            // fails so the current session and restart behavior still agree.
+
+            if (!d->runtime.setCategoryUnlockedThumbnailMode(
+                    categoryUuid, mode, true))
+            {
+                return;
+            }
+
+            if (!d->repository.setCategoryUnlockedThumbnailMode(categoryUuid, mode))
+            {
+                d->runtime.setCategoryUnlockedThumbnailMode(categoryUuid,
+                                                             previous, true);
+                return;
+            }
+        }
+
+        updated = true;
+    };
+
+    if (ownsSecret(categoryUuid))
+    {
+        const PrivacyCategoryOperationStatus operation =
+            runWithUnlockedSecret(categoryUuid, update);
+
+        if (operation != PrivacyCategoryOperationStatus::Completed)
+        {
+            result.status = (operation == PrivacyCategoryOperationStatus::TransactionBlocked)
+                          ? PrivacyCategorySessionStatus::TransactionBlocked
+                          : PrivacyCategorySessionStatus::CategoryLocked;
+            return result;
+        }
+    }
+    else
+    {
+        result = runWithFreshlyAuthenticatedSecret(categoryUuid, passwordText, update);
+
+        if (!result.succeeded())
+        {
+            return result;
+        }
+    }
+
+    result.status = updated ? PrivacyCategorySessionStatus::SettingsUpdated
+                            : PrivacyCategorySessionStatus::SettingsUpdateFailed;
     return result;
 }
 

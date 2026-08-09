@@ -281,6 +281,7 @@ private:
     PrivacySourceResult::CachePolicy m_sourceCachePolicy        = PrivacySourceResult::Persistent;
     quint64                          m_sourceResolverGeneration  = 0;
     QString                          m_sourceFilePath;
+    QByteArray                       m_sourceEncodedBytes;
     QString                          m_privacyCacheNamespace;
 };
 

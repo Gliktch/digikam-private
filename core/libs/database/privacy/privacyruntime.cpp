@@ -46,6 +46,17 @@
 namespace Digikam
 {
 
+bool PrivacyClearThumbnailSource::isValid() const
+{
+    return (!categoryUuid.isEmpty() && (categoryEpoch != 0) &&
+            ((mode == PrivacyUnlockedThumbnailMode::AlwaysOpaque) ||
+             (mode == PrivacyUnlockedThumbnailMode::FocusedClear) ||
+             (mode == PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked)) &&
+            derivative.isValid() &&
+            (derivative.kind == PrivacyDerivativeKind::ClearThumbnail) &&
+            (derivative.ordinal == 0));
+}
+
 namespace
 {
 
@@ -2121,6 +2132,122 @@ PrivacyRuntimeCoordinator::validatePublicProxyForDisplay(
          : PrivacyPublicProxyDisplayResult::NewlyFailedValidation;
 }
 
+bool PrivacyRuntimeCoordinator::clearThumbnailSource(
+    qlonglong imageId, PrivacyClearThumbnailSource* const source) const
+{
+    if (!source)
+    {
+        return false;
+    }
+
+    *source = PrivacyClearThumbnailSource();
+    QReadLocker locker(&d->lock);
+
+    if (!d->initialized ||
+        (d->service.itemAccess(imageId) != PrivacyItemAccess::Unlocked))
+    {
+        return false;
+    }
+
+    const auto runtimeIt = d->items.constFind(imageId);
+
+    if ((runtimeIt == d->items.constEnd()) || runtimeIt->mappingConflict)
+    {
+        return false;
+    }
+
+    const PrivacyItem& item = runtimeIt->item;
+    const PrivacyCategory* category = nullptr;
+    const PrivacyDerivative* derivative = nullptr;
+    const PrivacyAsset* primary = nullptr;
+    QString derivativeStoreUuid;
+    int categoryCount = 0;
+    int derivativeCount = 0;
+    int primaryCount = 0;
+    int bindingCount = 0;
+    int storeCount = 0;
+
+    for (const PrivacyCategory& candidate : std::as_const(d->snapshot.categories))
+    {
+        if (candidate.uuid == item.categoryUuid)
+        {
+            category = &candidate;
+            ++categoryCount;
+        }
+    }
+
+    for (const PrivacyDerivative& candidate : std::as_const(d->snapshot.derivatives))
+    {
+        if ((candidate.itemUuid == item.uuid) &&
+            (candidate.kind == PrivacyDerivativeKind::ClearThumbnail) &&
+            (candidate.ordinal == 0))
+        {
+            derivative = &candidate;
+            ++derivativeCount;
+        }
+    }
+
+    for (const PrivacyAsset& candidate : std::as_const(d->snapshot.assets))
+    {
+        if ((candidate.itemUuid == item.uuid) &&
+            (candidate.role == PrivacyAsset::PrimaryMediaRole) &&
+            (candidate.ordinal == 0))
+        {
+            primary = &candidate;
+            ++primaryCount;
+        }
+    }
+
+    for (const PrivacyStoreBinding& binding :
+         std::as_const(d->snapshot.storeBindings))
+    {
+        if ((binding.categoryUuid == item.categoryUuid) &&
+            (binding.role == PrivacyStoreRole::Derivatives))
+        {
+            derivativeStoreUuid = binding.storeUuid;
+            ++bindingCount;
+        }
+    }
+
+    if ((categoryCount != 1) || !category ||
+        (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
+        (derivativeCount != 1) || !derivative ||
+        (primaryCount != 1) || !primary ||
+        (bindingCount != 1) ||
+        (derivative->storeUuid != derivativeStoreUuid) ||
+        (derivative->sourceHashAlgorithm != primary->hashAlgorithm) ||
+        (derivative->sourceOriginalHash != primary->originalHash))
+    {
+        return false;
+    }
+
+    for (const PrivacyStore& store : std::as_const(d->snapshot.stores))
+    {
+        if (store.uuid == derivativeStoreUuid)
+        {
+            if ((store.categoryUuid != item.categoryUuid) ||
+                (store.lifecycleState != PrivacyStoreLifecycleState::Active))
+            {
+                return false;
+            }
+
+            ++storeCount;
+        }
+    }
+
+    if (storeCount != 1)
+    {
+        return false;
+    }
+
+    source->categoryUuid = item.categoryUuid;
+    source->mode = category->unlockedThumbnailMode;
+    source->categoryEpoch = d->service.categoryEpoch(item.categoryUuid);
+    source->derivative = *derivative;
+
+    return source->isValid();
+}
+
 bool PrivacyRuntimeCoordinator::setCategoryUnlocked(const QString& categoryUuid,
                                                     bool unlocked)
 {
@@ -2526,6 +2653,94 @@ bool PrivacyRuntimeCoordinator::publishProtectedItem(
     }
 
     d->refreshProtectedRootFacts(facts.rootUuids);
+
+    return true;
+}
+
+bool PrivacyRuntimeCoordinator::publishDerivative(
+    const PrivacyDerivative& derivative)
+{
+    if (!derivative.isValid())
+    {
+        return false;
+    }
+
+    QWriteLocker locker(&d->lock);
+
+    if (!d->initialized)
+    {
+        return false;
+    }
+
+    const qlonglong imageId = d->imageIdsByItemUuid.value(derivative.itemUuid, -1);
+    const auto runtimeIt = d->items.constFind(imageId);
+
+    if ((runtimeIt == d->items.constEnd()) || runtimeIt->mappingConflict)
+    {
+        return false;
+    }
+
+    const PrivacyItem& item = runtimeIt->item;
+    const PrivacyAsset* primary = nullptr;
+    int primaryCount = 0;
+    int bindingCount = 0;
+    int storeCount = 0;
+
+    for (const PrivacyDerivative& existing : std::as_const(d->snapshot.derivatives))
+    {
+        if ((existing.itemUuid == derivative.itemUuid) &&
+            (existing.kind == derivative.kind) &&
+            (existing.ordinal == derivative.ordinal))
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyAsset& asset : std::as_const(d->snapshot.assets))
+    {
+        if ((asset.itemUuid == item.uuid) &&
+            (asset.role == PrivacyAsset::PrimaryMediaRole) &&
+            (asset.ordinal == 0))
+        {
+            primary = &asset;
+            ++primaryCount;
+        }
+    }
+
+    for (const PrivacyStoreBinding& binding :
+         std::as_const(d->snapshot.storeBindings))
+    {
+        if ((binding.categoryUuid == item.categoryUuid) &&
+            (binding.role == PrivacyStoreRole::Derivatives) &&
+            (binding.storeUuid == derivative.storeUuid))
+        {
+            ++bindingCount;
+        }
+    }
+
+    for (const PrivacyStore& store : std::as_const(d->snapshot.stores))
+    {
+        if (store.uuid == derivative.storeUuid)
+        {
+            if ((store.categoryUuid != item.categoryUuid) ||
+                (store.lifecycleState != PrivacyStoreLifecycleState::Active))
+            {
+                return false;
+            }
+
+            ++storeCount;
+        }
+    }
+
+    if ((primaryCount != 1) || !primary || (bindingCount != 1) ||
+        (storeCount != 1) ||
+        (derivative.sourceHashAlgorithm != primary->hashAlgorithm) ||
+        (derivative.sourceOriginalHash != primary->originalHash))
+    {
+        return false;
+    }
+
+    d->snapshot.derivatives << derivative;
 
     return true;
 }
@@ -3219,6 +3434,50 @@ quint64 PrivacyRuntimeCoordinator::categoryEpoch(const QString& categoryUuid) co
     QReadLocker locker(&d->lock);
 
     return d->initialized ? d->service.categoryEpoch(categoryUuid) : 0;
+}
+
+bool PrivacyRuntimeCoordinator::setCategoryUnlockedThumbnailMode(
+    const QString& categoryUuid,
+    PrivacyUnlockedThumbnailMode mode,
+    bool categoryAuthenticationVerified)
+{
+    QWriteLocker locker(&d->lock);
+
+    if (!d->initialized || !categoryAuthenticationVerified ||
+        ((mode != PrivacyUnlockedThumbnailMode::AlwaysOpaque) &&
+         (mode != PrivacyUnlockedThumbnailMode::FocusedClear) &&
+         (mode != PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked)))
+    {
+        return false;
+    }
+
+    PrivacyCategory* category = nullptr;
+    int matches = 0;
+
+    for (PrivacyCategory& candidate : d->snapshot.categories)
+    {
+        if (candidate.uuid == categoryUuid)
+        {
+            category = &candidate;
+            ++matches;
+        }
+    }
+
+    if ((matches != 1) || !category ||
+        (category->lifecycleState != PrivacyCategoryLifecycleState::Active))
+    {
+        return false;
+    }
+
+    if (!d->service.setCategoryUnlockedThumbnailMode(
+            categoryUuid, mode, categoryAuthenticationVerified))
+    {
+        return false;
+    }
+
+    category->unlockedThumbnailMode = mode;
+
+    return true;
 }
 
 bool PrivacyRuntimeCoordinator::setCategoryTagVisibilityMode(

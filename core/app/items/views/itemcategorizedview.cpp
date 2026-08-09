@@ -37,6 +37,7 @@
 #include "itemviewtooltip.h"
 #include "loadingcacheinterface.h"
 #include "privacyitemviewadornment.h"
+#include "privacysourceresolver.h"
 #include "thumbnailloadthread.h"
 #include "tooltipfiller.h"
 #include "itemfacedelegate.h"
@@ -95,6 +96,7 @@ public:
     QUrl                  unknownCurrentUrl;
 
     QTimer*               delayedEnterTimer = nullptr;
+    QString               hoveredPrivacyPath;
 };
 
 // -------------------------------------------------------------------------------
@@ -117,10 +119,27 @@ ItemCategorizedView::ItemCategorizedView(QWidget* const parent)
 
     connect(d->delayedEnterTimer, SIGNAL(timeout()),
             this, SLOT(slotDelayedEnter()));
+
+    connect(this, &DCategorizedView::entered,
+            this, [this](const QModelIndex& index)
+            {
+                d->hoveredPrivacyPath = imageInfo(index).filePath();
+                updatePrivacyThumbnailRevealPaths();
+            });
 }
 
 ItemCategorizedView::~ItemCategorizedView()
 {
+    const QSet<QString> changed =
+        PrivacySourceResolver::clearThumbnailRevealPaths(
+            reinterpret_cast<quintptr>(this));
+
+    for (const QString& path : changed)
+    {
+        LoadingCacheInterface::cleanFileCache(path);
+        LoadingCacheInterface::fileChanged(path, true);
+    }
+
     d->delegate->removeAllOverlays();
 
     delete d;
@@ -674,6 +693,8 @@ void ItemCategorizedView::currentChanged(const QModelIndex& index, const QModelI
 {
     ItemViewCategorized::currentChanged(index, previous);
 
+    updatePrivacyThumbnailRevealPaths();
+
     Q_EMIT currentInfoChanged(imageInfo(index));
 }
 
@@ -681,6 +702,8 @@ void ItemCategorizedView::selectionChanged(const QItemSelection& selectedItems,
                                            const QItemSelection& deselectedItems)
 {
     ItemViewCategorized::selectionChanged(selectedItems, deselectedItems);
+
+    updatePrivacyThumbnailRevealPaths();
 
     if (!selectedItems.isEmpty())
     {
@@ -690,6 +713,52 @@ void ItemCategorizedView::selectionChanged(const QItemSelection& selectedItems,
     if (!deselectedItems.isEmpty())
     {
         Q_EMIT deselected(imageInfos(deselectedItems.indexes()));
+    }
+}
+
+void ItemCategorizedView::leaveEvent(QEvent* event)
+{
+    d->hoveredPrivacyPath.clear();
+    updatePrivacyThumbnailRevealPaths();
+    ItemViewCategorized::leaveEvent(event);
+}
+
+void ItemCategorizedView::updatePrivacyThumbnailRevealPaths()
+{
+    QSet<QString> paths;
+    const auto addIndex = [this, &paths](const QModelIndex& index)
+    {
+        const QString path = imageInfo(index).filePath();
+
+        if (!path.isEmpty())
+        {
+            paths.insert(path);
+        }
+    };
+
+    addIndex(currentIndex());
+
+    for (const QModelIndex& index : selectedIndexes())
+    {
+        addIndex(index);
+    }
+
+    if (!d->hoveredPrivacyPath.isEmpty())
+    {
+        paths.insert(d->hoveredPrivacyPath);
+    }
+
+    const QSet<QString> changed =
+        PrivacySourceResolver::setThumbnailRevealPaths(
+            reinterpret_cast<quintptr>(this), paths);
+
+    for (const QString& path : changed)
+    {
+        // Privacy presentation changes must not use notifyFileChanged() alone:
+        // that API intentionally retains a buffered pixmap. Remove every RAM
+        // namespace first, then emit the repaint notification.
+        LoadingCacheInterface::cleanFileCache(path);
+        LoadingCacheInterface::fileChanged(path, true);
     }
 }
 

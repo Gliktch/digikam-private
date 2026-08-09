@@ -16,6 +16,7 @@
 
 // Qt includes
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QString>
 #include <QtGlobal>
@@ -55,11 +56,13 @@ public:
      * identifiers retain their legacy behavior.
      */
     QString   sourceFilePath;
+    QByteArray sourceEncodedBytes;
     QString   cacheNamespace;
     quint64   sourceResolverGeneration = 0;
     bool      sourceResolutionApplied  = false;
     bool      sourceAccessDenied       = false;
     bool      persistentCacheAllowed   = true;
+    bool      detailThumbnail          = false;
 
     QString effectiveFilePath() const
     {
@@ -68,8 +71,7 @@ public:
             return QString();
         }
 
-        return sourceFilePath.isEmpty() ? filePath
-                                        : sourceFilePath;
+        return sourceFilePath.isEmpty() ? filePath : sourceFilePath;
     }
 };
 

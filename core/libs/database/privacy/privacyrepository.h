@@ -49,6 +49,10 @@ public:
 
     bool createCategory(const PrivacyCategory& category) const;
     PrivacyCategory category(const QString& uuid) const;
+    bool setCategoryUnlockedThumbnailMode(
+        const QString& uuid,
+        PrivacyUnlockedThumbnailMode mode,
+        bool categoryAuthenticationVerified) const;
     bool setCategoryTagVisibilityMode(const QString& uuid,
                                       PrivacyTagVisibilityMode mode,
                                       bool categoryAuthenticationVerified) const;

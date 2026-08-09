@@ -22,6 +22,28 @@ namespace Digikam
 ThumbnailImage ThumbnailCreator::createThumbnail(const ThumbnailInfo& info, const QRect& detailRect) const
 {
     const QString path = info.filePath;
+
+    if (!info.sourceEncodedBytes.isEmpty())
+    {
+        // Private clear derivatives are already orientation-normalized,
+        // metadata-free JPEGs. Decode directly from the immutable request;
+        // never materialize them as a public temporary file.
+        if (!detailRect.isNull())
+        {
+            return ThumbnailImage();
+        }
+
+        ThumbnailImage memoryImage;
+        memoryImage.qimage = QImage::fromData(info.sourceEncodedBytes, "JPEG");
+
+        if (!memoryImage.qimage.isNull())
+        {
+            memoryImage.qimage = scaleForStorage(memoryImage.qimage);
+        }
+
+        return memoryImage;
+    }
+
     QFileInfo fileInfo(path);
 
     if (!info.isAccessible || !fileInfo.exists() || !fileInfo.isFile())

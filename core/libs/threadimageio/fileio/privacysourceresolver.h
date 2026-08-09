@@ -16,7 +16,9 @@
 
 // Qt includes
 
+#include <QByteArray>
 #include <QSharedPointer>
+#include <QSet>
 #include <QString>
 #include <QVariant>
 #include <QtGlobal>
@@ -44,6 +46,7 @@ public:
     QString  logicalFilePath;
     QVariant itemReference;
     Consumer consumer = Image;
+    bool     detailThumbnail = false;
 };
 
 // -----------------------------------------------------------------------------
@@ -71,12 +74,15 @@ public:
     static PrivacySourceResult resolved(const QString& physicalFilePath,
                                         const QString& cacheNamespace,
                                         CachePolicy cachePolicy = MemoryOnly);
+    static PrivacySourceResult resolvedMemory(const QByteArray& encodedBytes,
+                                              const QString& cacheNamespace);
     static PrivacySourceResult denied(const QString& cacheNamespace);
 
 public:
 
     Disposition disposition = NotHandled;
     QString     physicalFilePath;
+    QByteArray  encodedBytes;
     QString     cacheNamespace;
     CachePolicy cachePolicy = Persistent;
 
@@ -105,7 +111,9 @@ public:
      * returned pixels. The namespace must not contain credentials or key
      * material; hashing it for cache identity is not secret storage. Returning
      * malformed handled data is normalized to a denied result. Handled
-     * results default to memory-only caching. Persistent is appropriate only
+     * Results may instead carry small immutable encoded bytes for a thumbnail
+     * decoder; providers must never use that form for Image or Preview
+     * consumers. Handled results default to memory-only caching. Persistent is appropriate only
      * when the provider knows the selected pixels are safe to retain outside
      * the protected derivative store (for example, a public locked proxy).
      *
@@ -131,6 +139,16 @@ public:
     static void resetProvider();
 
     static PrivacySourceResult resolve(const PrivacySourceRequest& request);
+
+    /**
+     * Publishes the logical paths intentionally focused by one thumbnail view.
+     * Multiple views are unioned. The returned paths are the exact global
+     * reveal-state delta and should have their RAM caches evicted/repainted.
+     */
+    static QSet<QString> setThumbnailRevealPaths(
+        quintptr requester, const QSet<QString>& logicalFilePaths);
+    static QSet<QString> clearThumbnailRevealPaths(quintptr requester);
+    static bool thumbnailRevealRequested(const QString& logicalFilePath);
 
     /** Resolver generation used by cache-transition snapshot validation. */
     static quint64 currentGeneration();

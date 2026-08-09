@@ -25,7 +25,13 @@
 #endif
 
 #include <QFileInfo>
+#include <QCache>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QPointer>
+#include <QSet>
+#include <QWeakPointer>
 
 // C++ includes
 
@@ -39,6 +45,9 @@
 // Local includes
 
 #include "privacyruntime.h"
+#include "privacycategorysessionowner.h"
+#include "privacyderivativestore.h"
+#include "loadingcacheinterface.h"
 #include "privacysourceresolver.h"
 #include "collectionlocation.h"
 #include "collectionmanager.h"
@@ -56,10 +65,62 @@ public:
 
     explicit StartupPrivacySourceProvider(
         const QSharedPointer<PrivacyRuntimeCoordinator>& runtime,
+        const QSharedPointer<PrivacyCategorySessionOwner>& sessions,
         const std::function<void(qlonglong, bool)>& validationFailed)
         : m_runtime(runtime),
+          m_sessions(sessions),
+          m_clearBytes(128 * 1024),
           m_validationFailed(validationFailed)
     {
+    }
+
+    void setPresentationAvailable(const QString& categoryUuid, bool available)
+    {
+        QSet<QString> changedPaths;
+
+        {
+            QMutexLocker locker(&m_clearLock);
+
+            if (categoryUuid.isEmpty())
+            {
+                m_allPresentationBlocked = !available;
+
+                if (available)
+                {
+                    m_blockedCategories.clear();
+                }
+
+                for (const QSet<QString>& paths :
+                     std::as_const(m_knownPathsByCategory))
+                {
+                    changedPaths.unite(paths);
+                }
+            }
+            else
+            {
+                if (available)
+                {
+                    m_blockedCategories.remove(categoryUuid);
+                }
+                else
+                {
+                    m_blockedCategories.insert(categoryUuid);
+                }
+
+                changedPaths = m_knownPathsByCategory.value(categoryUuid);
+            }
+
+            if (!available)
+            {
+                m_clearBytes.clear();
+            }
+        }
+
+        for (const QString& path : std::as_const(changedPaths))
+        {
+            LoadingCacheInterface::cleanFileCache(path);
+            LoadingCacheInterface::fileChanged(path, true);
+        }
     }
 
     PrivacySourceResult resolve(const PrivacySourceRequest& request) const override
@@ -133,6 +194,40 @@ public:
                 return PrivacySourceResult::denied(cacheNamespace);
             }
 
+            PrivacyActionItemState itemState;
+
+            if (m_runtime->stateForItem(imageId, &itemState) &&
+                itemState.protectedItem && !itemState.categoryUuid.isEmpty())
+            {
+                QMutexLocker locker(&m_clearLock);
+                m_knownPathsByCategory[itemState.categoryUuid].insert(
+                    QDir::cleanPath(request.logicalFilePath));
+            }
+
+            if ((request.consumer == PrivacySourceRequest::Thumbnail) &&
+                !request.detailThumbnail)
+            {
+                PrivacyClearThumbnailSource clearSource;
+
+                if (m_runtime->clearThumbnailSource(imageId, &clearSource) &&
+                    ((clearSource.mode ==
+                      PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked) ||
+                     ((clearSource.mode ==
+                       PrivacyUnlockedThumbnailMode::FocusedClear) &&
+                      PrivacySourceResolver::thumbnailRevealRequested(
+                          request.logicalFilePath))))
+                {
+                    const QByteArray bytes = clearThumbnailBytes(
+                        imageId, request.logicalFilePath, clearSource);
+
+                    if (!bytes.isEmpty())
+                    {
+                        return PrivacySourceResult::resolvedMemory(
+                            bytes, clearThumbnailCacheNamespace(clearSource));
+                    }
+                }
+            }
+
             return PrivacySourceResult::resolved(request.logicalFilePath,
                                                  cacheNamespace,
                                                  PrivacySourceResult::Persistent);
@@ -145,7 +240,112 @@ public:
 
 private:
 
+    static QString clearThumbnailCacheNamespace(
+        const PrivacyClearThumbnailSource& source)
+    {
+        return (QLatin1String("privacy-clear:") + source.derivative.itemUuid +
+                QLatin1Char(':') +
+                QString::number(source.derivative.generation) +
+                QLatin1Char(':') +
+                QString::number(source.derivative.presentationVersion) +
+                QLatin1Char(':') + source.derivative.derivativeHash +
+                QLatin1Char(':') + QString::number(source.categoryEpoch));
+    }
+
+    static bool sameClearSource(const PrivacyClearThumbnailSource& left,
+                                const PrivacyClearThumbnailSource& right)
+    {
+        return (left.categoryUuid == right.categoryUuid) &&
+               (left.categoryEpoch == right.categoryEpoch) &&
+               (left.mode == right.mode) &&
+               (left.derivative.itemUuid == right.derivative.itemUuid) &&
+               (left.derivative.storeUuid == right.derivative.storeUuid) &&
+               (left.derivative.protectedRelativePath ==
+                right.derivative.protectedRelativePath) &&
+               (left.derivative.derivativeHash ==
+                right.derivative.derivativeHash) &&
+               (left.derivative.derivativeSize ==
+                right.derivative.derivativeSize) &&
+               (left.derivative.generation == right.derivative.generation) &&
+               (left.derivative.presentationVersion ==
+                right.derivative.presentationVersion);
+    }
+
+    QByteArray clearThumbnailBytes(
+        qlonglong imageId, const QString& logicalPath,
+        const PrivacyClearThumbnailSource& source) const
+    {
+        const QString cacheKey = clearThumbnailCacheNamespace(source);
+
+        {
+            QMutexLocker locker(&m_clearLock);
+
+            if (m_allPresentationBlocked ||
+                m_blockedCategories.contains(source.categoryUuid))
+            {
+                return {};
+            }
+
+            m_knownPathsByCategory[source.categoryUuid].insert(
+                QDir::cleanPath(logicalPath));
+
+            if (const QByteArray* const cached = m_clearBytes.object(cacheKey))
+            {
+                return *cached;
+            }
+        }
+
+        if (!m_sessions)
+        {
+            return {};
+        }
+
+        QByteArray bytes;
+        const PrivacyCategoryOperationStatus operation =
+            m_sessions->runWithUnlockedStore(
+                source.categoryUuid,
+                [&bytes, &source](const PrivacyPassword&, const QString& root)
+                {
+                    if (!root.isEmpty())
+                    {
+                        bytes = PrivacyDerivativeStore().read(root,
+                                                              source.derivative);
+                    }
+                });
+
+        PrivacyClearThumbnailSource current;
+
+        if ((operation != PrivacyCategoryOperationStatus::Completed) ||
+            bytes.isEmpty() ||
+            !m_runtime->clearThumbnailSource(imageId, &current) ||
+            !sameClearSource(source, current))
+        {
+            return {};
+        }
+
+        QMutexLocker locker(&m_clearLock);
+
+        if (m_allPresentationBlocked ||
+            m_blockedCategories.contains(source.categoryUuid))
+        {
+            return {};
+        }
+
+        const int cost = qMax(1, (bytes.size() + 1023) / 1024);
+        m_clearBytes.insert(cacheKey, new QByteArray(bytes), cost);
+
+        return bytes;
+    }
+
+private:
+
     QSharedPointer<PrivacyRuntimeCoordinator> m_runtime;
+    QSharedPointer<PrivacyCategorySessionOwner> m_sessions;
+    mutable QMutex                            m_clearLock;
+    mutable QCache<QString, QByteArray>        m_clearBytes;
+    mutable QHash<QString, QSet<QString> >     m_knownPathsByCategory;
+    mutable QSet<QString>                     m_blockedCategories;
+    mutable bool                              m_allPresentationBlocked = false;
     std::function<void(qlonglong, bool)>       m_validationFailed;
 };
 
@@ -374,10 +574,11 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
     // only after DigikamApp exists.
 
     const PrivacyStartupReport privacyReport = PrivacyStartupRecovery::run();
-    PrivacySourceResolver::setProvider(
-        QSharedPointer<const PrivacySourceProvider>(
-            new StartupPrivacySourceProvider(
-                PrivacyStartupRecovery::coordinator(),
+    const QSharedPointer<PrivacyCategorySessionOwner> privacySessions =
+        PrivacyStartupRecovery::categorySessions();
+    const QSharedPointer<StartupPrivacySourceProvider> privacySource(
+        new StartupPrivacySourceProvider(
+                PrivacyStartupRecovery::coordinator(), privacySessions,
                 [guardedManager = QPointer<AlbumManager>(this)](
                     qlonglong imageId, bool exposedOriginal)
                 {
@@ -398,7 +599,25 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
                             }
                         },
                         Qt::QueuedConnection);
-                })));
+                }));
+
+    if (privacySessions)
+    {
+        const QWeakPointer<StartupPrivacySourceProvider> weakSource(privacySource);
+        privacySessions->setPresentationAvailabilityCallback(
+            [weakSource](const QString& categoryUuid, bool available)
+            {
+                const QSharedPointer<StartupPrivacySourceProvider> source =
+                    weakSource.toStrongRef();
+
+                if (source)
+                {
+                    source->setPresentationAvailable(categoryUuid, available);
+                }
+            });
+    }
+
+    PrivacySourceResolver::setProvider(privacySource);
 
     if (privacyReport.state == PrivacyStartupState::Degraded)
     {

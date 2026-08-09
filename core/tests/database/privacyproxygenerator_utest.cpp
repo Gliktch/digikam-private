@@ -94,6 +94,20 @@ QImage decode(const PrivacyStillProxyResult& result)
     return reader.read();
 }
 
+QImage decode(const PrivacyClearThumbnailResult& result)
+{
+    QBuffer buffer;
+    buffer.setData(result.encodedBytes);
+
+    if (!buffer.open(QIODevice::ReadOnly))
+    {
+        return QImage();
+    }
+
+    QImageReader reader(&buffer, result.encodedFormat);
+    return reader.read();
+}
+
 QByteArray decodedPixelHash(QImage image)
 {
     image = image.convertToFormat(QImage::Format_RGB32);
@@ -165,6 +179,7 @@ private Q_SLOTS:
     void testGenericIsMetadataFreeAndContentIndependent();
     void testGenericSameFormatCandidatesAreDeterministic();
     void testBlurredUsesPixelsWithoutCopyingMetadata();
+    void testClearThumbnailUsesPixelsWithoutCopyingMetadata();
     void testRawLikeFormatUsesPngFallback();
     void testMismatchedSourceUsesGenericFallback();
     void testMalformedOversizedAndSymlinkSourcesFailClosed();
@@ -288,6 +303,48 @@ void PrivacyProxyGeneratorTest::testBlurredUsesPixelsWithoutCopyingMetadata()
     QVERIFY(image.offset() != QPoint(17, 29));
     QVERIFY(image.dotsPerMeterX() != 12345);
     QVERIFY(image.dotsPerMeterY() != 23456);
+}
+
+void PrivacyProxyGeneratorTest::testClearThumbnailUsesPixelsWithoutCopyingMetadata()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString firstPath = directory.filePath(QLatin1String("first.png"));
+    const QString secondPath = directory.filePath(QLatin1String("second.png"));
+    QVERIFY(writeSynthetic(firstPath, "png", QColor(220, 30, 20),
+                           QColor(15, 40, 220)));
+    QVERIFY(writeSynthetic(secondPath, "png", Qt::green, Qt::yellow));
+
+    PrivacyStillProxyGenerator generator;
+    const PrivacyClearThumbnailResult first =
+        generator.generateClearThumbnail(firstPath);
+    const PrivacyClearThumbnailResult second =
+        generator.generateClearThumbnail(secondPath);
+
+    QVERIFY(first.isValid());
+    QVERIFY(second.isValid());
+    QCOMPARE(first.encodedFormat, QByteArray("jpeg"));
+    QVERIFY(first.encodedBytes != second.encodedBytes);
+    QVERIFY(first.sha256 != second.sha256);
+    QVERIFY(!first.encodedBytes.contains(SecretMetadata.toUtf8()));
+    QCOMPARE(first.sha256,
+             QCryptographicHash::hash(first.encodedBytes,
+                                      QCryptographicHash::Sha256));
+
+    const QImage image = decode(first);
+    QCOMPARE(image.size(), PrivacyStillProxyGenerator::fixedPixelSize());
+    QVERIFY(image.textKeys().isEmpty());
+    QVERIFY(!image.colorSpace().isValid());
+    QCOMPARE(image.devicePixelRatio(), 1.0);
+    QVERIFY(image.offset() != QPoint(17, 29));
+    QVERIFY(image.dotsPerMeterX() != 12345);
+    QVERIFY(image.dotsPerMeterY() != 23456);
+
+    const PrivacyClearThumbnailResult missing =
+        generator.generateClearThumbnail(directory.filePath(
+            QLatin1String("missing.png")));
+    QVERIFY(!missing.isValid());
+    QCOMPARE(missing.error, PrivacyClearThumbnailError::InvalidSource);
 }
 
 void PrivacyProxyGeneratorTest::testRawLikeFormatUsesPngFallback()

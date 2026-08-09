@@ -388,6 +388,7 @@ private Q_SLOTS:
     void testMixedRootAndConflictingMappings();
     void testDynamicAlbumRootRegistration();
     void testDynamicProtectedItemPublication();
+    void testClearThumbnailSourcePublication();
     void testRootEpochTransition();
     void testTransactionStates();
 };
@@ -1433,6 +1434,91 @@ void PrivacyRuntimeTest::testDynamicProtectedItemPublication()
              PrivacyAnalysisDisposition::Allowed);
     QVERIFY(!runtime.hasProtectedItem(item, container, { primary }));
     QVERIFY(!runtime.removeProtectedItem(item, container, { primary }));
+}
+
+void PrivacyRuntimeTest::testClearThumbnailSourcePublication()
+{
+    const QString storeUuid =
+        QLatin1String("70000000-0000-0000-0000-000000000001");
+    PrivacyRepositorySnapshot snapshot = makeSnapshot();
+    PrivacyStore store;
+    store.uuid = storeUuid;
+    store.categoryUuid = categoryUuid;
+    store.rootUuid = rootUuid;
+    store.format = QLatin1String("gocryptfs");
+    store.formatVersion = 2;
+    store.cipherRelativePath = QLatin1String("stores/category");
+    store.configRelativePath = QLatin1String("stores/category/gocryptfs.conf");
+    store.configGeneration = 1;
+    store.lifecycleState = PrivacyStoreLifecycleState::Active;
+    store.createdAt = QDateTime::currentDateTimeUtc();
+    snapshot.stores << store;
+
+    PrivacyStoreBinding binding;
+    binding.categoryUuid = categoryUuid;
+    binding.role = PrivacyStoreRole::Derivatives;
+    binding.storeUuid = storeUuid;
+    snapshot.storeBindings << binding;
+
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+    const QSharedPointer<FakeIntegrityInspector> integrity(
+        new FakeIntegrityInspector);
+    PrivacyRuntimeCoordinator runtime;
+    QCOMPARE(runtime.initialize(snapshot, verifier, {}, integrity).state,
+             PrivacyStartupState::Ready);
+
+    PrivacyClearThumbnailSource source;
+    QVERIFY(!runtime.clearThumbnailSource(42, &source));
+    QVERIFY(runtime.setCategoryUnlocked(categoryUuid, true));
+    QVERIFY(!runtime.clearThumbnailSource(42, &source));
+
+    PrivacyDerivative derivative;
+    derivative.itemUuid = itemUuid;
+    derivative.kind = PrivacyDerivativeKind::ClearThumbnail;
+    derivative.ordinal = 0;
+    derivative.storeUuid = storeUuid;
+    derivative.protectedRelativePath =
+        QLatin1String("derivatives/20000000/clear.jpg");
+    derivative.sourceHashAlgorithm = QLatin1String("sha256");
+    derivative.sourceOriginalHash = QLatin1String("original-hash");
+    derivative.derivativeFormat = QLatin1String("jpeg");
+    derivative.derivativeHashAlgorithm = QLatin1String("sha256");
+    derivative.derivativeHash = QString(64, QLatin1Char('a'));
+    derivative.derivativeSize = 1234;
+    derivative.presentationVersion = 1;
+    derivative.generation = 1;
+    derivative.createdAt = QDateTime::currentDateTimeUtc();
+    QVERIFY(derivative.isValid());
+
+    PrivacyDerivative wrongSource = derivative;
+    wrongSource.sourceOriginalHash = QLatin1String("other-hash");
+    QVERIFY(!runtime.publishDerivative(wrongSource));
+    QVERIFY(runtime.publishDerivative(derivative));
+    QVERIFY(!runtime.publishDerivative(derivative));
+    QVERIFY(runtime.clearThumbnailSource(42, &source));
+    QVERIFY(source.isValid());
+    QCOMPARE(source.categoryUuid, categoryUuid);
+    QCOMPARE(source.mode, PrivacyUnlockedThumbnailMode::FocusedClear);
+    QCOMPARE(source.derivative.derivativeHash, derivative.derivativeHash);
+    QVERIFY(source.categoryEpoch > 0);
+
+    const quint64 focusedEpoch = source.categoryEpoch;
+    QVERIFY(!runtime.setCategoryUnlockedThumbnailMode(
+        categoryUuid, PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked,
+        false));
+    QVERIFY(runtime.setCategoryUnlockedThumbnailMode(
+        categoryUuid, PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked,
+        true));
+    QVERIFY(runtime.clearThumbnailSource(42, &source));
+    QCOMPARE(source.mode,
+             PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked);
+    QVERIFY(source.categoryEpoch > focusedEpoch);
+    QVERIFY(!runtime.setCategoryUnlockedThumbnailMode(
+        categoryUuid, static_cast<PrivacyUnlockedThumbnailMode>(99), true));
+
+    QVERIFY(runtime.setCategoryUnlocked(categoryUuid, false));
+    QVERIFY(!runtime.clearThumbnailSource(42, &source));
 }
 
 void PrivacyRuntimeTest::testRootEpochTransition()

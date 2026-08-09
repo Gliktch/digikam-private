@@ -38,6 +38,9 @@ class DIGIKAM_DATABASE_EXPORT PrivacyCategorySessionOwner
 {
 public:
 
+    using PresentationAvailabilityCallback =
+        std::function<void(const QString& categoryUuid, bool available)>;
+
     static QSharedPointer<PrivacyCategorySessionOwner> create(
         const QSharedPointer<PrivacyRuntimeCoordinator>& runtime,
         const QSharedPointer<const PrivacyRootVerifier>& rootVerifier);
@@ -59,15 +62,24 @@ public:
     PrivacyCategoryOperationStatus runWithUnlockedSecret(
         const QString& categoryUuid,
         const std::function<void(const PrivacyPassword&)>& operation);
+    PrivacyCategoryOperationStatus runWithUnlockedStore(
+        const QString& categoryUuid,
+        const std::function<void(const PrivacyPassword&, const QString&)>& operation);
     PrivacyCategorySessionResult runWithFreshlyAuthenticatedSecret(
         const QString& categoryUuid,
         const QString& passwordText,
         const std::function<void(const PrivacyPassword&)>& operation,
         const QString& allowedActiveItemTransactionUuid = QString());
+    PrivacyCategorySessionResult setCategoryUnlockedThumbnailMode(
+        const QString& categoryUuid,
+        PrivacyUnlockedThumbnailMode mode,
+        const QString& passwordText = QString());
     PrivacyCategorySessionResult setCategoryTagVisibilityMode(
         const QString& categoryUuid,
         PrivacyTagVisibilityMode mode,
         const QString& passwordText = QString());
+    void setPresentationAvailabilityCallback(
+        const PresentationAvailabilityCallback& callback);
 
     bool ownsSecret(const QString& categoryUuid) const;
 

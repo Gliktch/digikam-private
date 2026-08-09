@@ -77,6 +77,10 @@ public:
     bool addCategory(const PrivacyCategory& category);
     bool addItem(const PrivacyItem& item);
     bool removeItem(const PrivacyItem& item);
+    bool setCategoryUnlockedThumbnailMode(
+        const QString& categoryUuid,
+        PrivacyUnlockedThumbnailMode mode,
+        bool categoryAuthenticationVerified);
     bool setCategoryTagVisibilityMode(const QString& categoryUuid,
                                       PrivacyTagVisibilityMode mode,
                                       bool categoryAuthenticationVerified);
@@ -108,6 +112,7 @@ private:
 
     mutable QReadWriteLock      m_lock;
     QHash<QString, bool>        m_categoryUnlockState;
+    QHash<QString, PrivacyUnlockedThumbnailMode> m_categoryUnlockedThumbnailModes;
     QHash<QString, PrivacyTagVisibilityMode> m_categoryTagVisibilityModes;
     QHash<QString, quint64>     m_categoryEpochs;
     QHash<qlonglong, QString>   m_itemCategories;

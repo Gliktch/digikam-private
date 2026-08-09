@@ -104,6 +104,26 @@ PrivacyCategory PrivacyRepository::category(const QString& uuid) const
     return access.db()->getPrivacyCategory(normalized);
 }
 
+bool PrivacyRepository::setCategoryUnlockedThumbnailMode(
+    const QString& uuid,
+    PrivacyUnlockedThumbnailMode mode,
+    bool categoryAuthenticationVerified) const
+{
+    const QString normalized = normalizedUuid(uuid);
+
+    if (normalized.isEmpty() || !categoryAuthenticationVerified ||
+        ((mode != PrivacyUnlockedThumbnailMode::AlwaysOpaque) &&
+         (mode != PrivacyUnlockedThumbnailMode::FocusedClear) &&
+         (mode != PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked)))
+    {
+        return false;
+    }
+
+    CoreDbAccess access;
+
+    return access.db()->updatePrivacyCategoryUnlockedThumbnailMode(normalized, mode);
+}
+
 bool PrivacyRepository::setCategoryTagVisibilityMode(
     const QString& uuid,
     PrivacyTagVisibilityMode mode,

@@ -91,6 +91,24 @@ QString presentationText(PrivacyPresentationMode mode)
          : i18nc("@item:inlistbox private category presentation", "Generic privacy tile");
 }
 
+QString unlockedThumbnailText(PrivacyUnlockedThumbnailMode mode)
+{
+    switch (mode)
+    {
+        case PrivacyUnlockedThumbnailMode::AlwaysOpaque:
+            return i18nc("@item:inlistbox private category thumbnails", "Always opaque");
+
+        case PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked:
+            return i18nc("@item:inlistbox private category thumbnails",
+                         "All clear while unlocked");
+
+        case PrivacyUnlockedThumbnailMode::FocusedClear:
+            break;
+    }
+
+    return i18nc("@item:inlistbox private category thumbnails", "Clear focused item");
+}
+
 QString tagVisibilityText(PrivacyTagVisibilityMode mode)
 {
     return (mode == PrivacyTagVisibilityMode::AlwaysVisible)
@@ -257,10 +275,11 @@ public:
         layout->addWidget(introduction);
 
         table = new QTableWidget(q);
-        table->setColumnCount(6);
+        table->setColumnCount(7);
         table->setHorizontalHeaderLabels({
             i18nc("@title:column", "Category"),
             i18nc("@title:column", "Presentation"),
+            i18nc("@title:column", "Unlocked Thumbnails"),
             i18nc("@title:column", "Tags"),
             i18nc("@title:column", "Items"),
             i18nc("@title:column", "Session"),
@@ -275,7 +294,8 @@ public:
         table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
         table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
         table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
-        table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+        table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Stretch);
         layout->addWidget(table, 1);
 
         auto* const actionLayout = new QHBoxLayout;
@@ -283,6 +303,9 @@ public:
             QIcon::fromTheme(QLatin1String("list-add")),
             i18nc("@action:button", "Create Category..."), q);
         sessionButton = new QPushButton(q);
+        thumbnailModeButton = new QPushButton(
+            QIcon::fromTheme(QLatin1String("view-preview")),
+            i18nc("@action:button", "Unlocked Thumbnails..."), q);
         tagVisibilityButton = new QPushButton(
             QIcon::fromTheme(QLatin1String("tag")),
             i18nc("@action:button", "Tag Visibility..."), q);
@@ -294,6 +317,7 @@ public:
             i18nc("@action:button", "Lock All"), q);
         actionLayout->addWidget(createButton);
         actionLayout->addWidget(sessionButton);
+        actionLayout->addWidget(thumbnailModeButton);
         actionLayout->addWidget(tagVisibilityButton);
         actionLayout->addWidget(compatibilityButton);
         actionLayout->addWidget(lockAllButton);
@@ -313,6 +337,8 @@ public:
                          q, [this]() { createCategory(); });
         QObject::connect(sessionButton, &QPushButton::clicked,
                          q, [this]() { runSelectedCategoryAction(); });
+        QObject::connect(thumbnailModeButton, &QPushButton::clicked,
+                         q, [this]() { editUnlockedThumbnailMode(); });
         QObject::connect(tagVisibilityButton, &QPushButton::clicked,
                          q, [this]() { editTagVisibility(); });
         QObject::connect(compatibilityButton, &QPushButton::clicked,
@@ -469,13 +495,15 @@ public:
             table->setItem(row, 1, new QTableWidgetItem(
                                presentationText(category.presentationMode)));
             table->setItem(row, 2, new QTableWidgetItem(
-                               tagVisibilityText(category.tagVisibilityMode)));
+                               unlockedThumbnailText(category.unlockedThumbnailMode)));
             table->setItem(row, 3, new QTableWidgetItem(
+                               tagVisibilityText(category.tagVisibilityMode)));
+            table->setItem(row, 4, new QTableWidgetItem(
                                QString::number(itemCounts.value(category.uuid))));
-            table->setItem(row, 4, new QTableWidgetItem(sessionText));
+            table->setItem(row, 5, new QTableWidgetItem(sessionText));
             auto* const pathItem = new QTableWidgetItem(root.configuredPath);
             pathItem->setToolTip(root.configuredPath);
-            table->setItem(row, 5, pathItem);
+            table->setItem(row, 6, pathItem);
 
             if (category.uuid == selectedUuid)
             {
@@ -574,6 +602,7 @@ public:
         lockAllButton->setEnabled(!busy && sessions && !categories.isEmpty());
         sessionButton->setEnabled(false);
         sessionButton->setIcon(QIcon());
+        thumbnailModeButton->setEnabled(false);
         tagVisibilityButton->setEnabled(false);
         compatibilityButton->setEnabled(false);
         compatibilityButton->setIcon(
@@ -610,6 +639,7 @@ public:
             unlocked ? QLatin1String("object-locked")
                      : QLatin1String("object-unlocked")));
         sessionButton->setEnabled(true);
+        thumbnailModeButton->setEnabled(!runtime.isNull());
         tagVisibilityButton->setEnabled(!runtime.isNull());
 
         if (transactions)
@@ -1011,6 +1041,101 @@ public:
                        i18nc("@info", "The category is unlocked for this digiKam session."));
     }
 
+    void editUnlockedThumbnailMode()
+    {
+        const PrivacyCategory* const selected = selectedCategory();
+
+        if (!sessions || !runtime || busy || !selected ||
+            (selected->lifecycleState != PrivacyCategoryLifecycleState::Active))
+        {
+            return;
+        }
+
+        const PrivacyCategory category = *selected;
+        const QStringList choices = {
+            unlockedThumbnailText(PrivacyUnlockedThumbnailMode::AlwaysOpaque),
+            unlockedThumbnailText(PrivacyUnlockedThumbnailMode::FocusedClear),
+            unlockedThumbnailText(
+                PrivacyUnlockedThumbnailMode::AllClearWhileUnlocked)
+        };
+        const int currentIndex = static_cast<int>(category.unlockedThumbnailMode) - 1;
+        bool accepted = false;
+        const QString choice = QInputDialog::getItem(
+            q, i18nc("@title:window", "Unlocked Private Thumbnails"),
+            i18nc("@label",
+                  "How should thumbnails for %1 appear while it is unlocked?",
+                  category.name),
+            choices, qBound(0, currentIndex,
+                            static_cast<int>(choices.size()) - 1),
+            false, &accepted);
+
+        if (!accepted)
+        {
+            return;
+        }
+
+        const int selectedIndex = choices.indexOf(choice);
+
+        if (selectedIndex < 0)
+        {
+            return;
+        }
+
+        const PrivacyUnlockedThumbnailMode mode =
+            static_cast<PrivacyUnlockedThumbnailMode>(selectedIndex + 1);
+
+        if (mode == category.unlockedThumbnailMode)
+        {
+            statusLabel->setText(
+                i18nc("@info", "The unlocked thumbnail setting is unchanged."));
+            return;
+        }
+
+        QString password;
+
+        if (!sessions->ownsSecret(category.uuid))
+        {
+            password = QInputDialog::getText(
+                q, i18nc("@title:window", "Authenticate Privacy Category"),
+                i18nc("@label", "Password for %1:", category.name),
+                QLineEdit::Password, QString(), &accepted);
+
+            if (!accepted)
+            {
+                wipe(password);
+                return;
+            }
+        }
+
+        const QSharedPointer<QString> secret =
+            QSharedPointer<QString>::create(std::move(password));
+        const QSharedPointer<PrivacyCategorySessionOwner> owner = sessions;
+        const QFuture<PrivacyCategorySessionResult> future = QtConcurrent::run(
+            [owner, category, mode, secret]()
+            {
+                PrivacyCategorySessionResult result;
+
+                try
+                {
+                    result = owner->setCategoryUnlockedThumbnailMode(
+                        category.uuid, mode, *secret);
+                }
+                catch (...)
+                {
+                    result.status = PrivacyCategorySessionStatus::SettingsUpdateFailed;
+                }
+
+                wipe(*secret);
+                return result;
+            });
+        watchOperation(future,
+                       i18nc("@title:window", "Updating Unlocked Thumbnails"),
+                       i18nc("@info:progress",
+                             "Updating the private thumbnail policy..."),
+                       i18nc("@info",
+                             "The unlocked private thumbnail setting was updated."));
+    }
+
     void editTagVisibility()
     {
         const PrivacyCategory* const selected = selectedCategory();
@@ -1375,6 +1500,7 @@ public:
     QTableWidget* table = nullptr;
     QPushButton* createButton = nullptr;
     QPushButton* sessionButton = nullptr;
+    QPushButton* thumbnailModeButton = nullptr;
     QPushButton* tagVisibilityButton = nullptr;
     QPushButton* compatibilityButton = nullptr;
     QPushButton* lockAllButton = nullptr;

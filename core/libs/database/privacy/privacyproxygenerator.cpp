@@ -193,6 +193,28 @@ QImage blurredPresentation(const QImage& decoded)
     return blurred;
 }
 
+QImage clearPresentation(const QImage& decoded)
+{
+    const QImage clean = cleanRgbImage(decoded);
+
+    if (clean.isNull())
+    {
+        return QImage();
+    }
+
+    const QImage scaled = clean.scaled(ProxyPixelSize, Qt::KeepAspectRatio,
+                                       Qt::SmoothTransformation);
+    QImage presentation(ProxyPixelSize, QImage::Format_RGB32);
+    presentation.fill(Qt::black);
+    QPainter painter(&presentation);
+    painter.drawImage((ProxyPixelSize.width() - scaled.width()) / 2,
+                      (ProxyPixelSize.height() - scaled.height()) / 2,
+                      scaled);
+    painter.end();
+
+    return presentation;
+}
+
 bool encodeImage(const QImage& image,
                  const QByteArray& format,
                  QByteArray* encoded)
@@ -268,6 +290,13 @@ bool PrivacyStillProxyResult::isValid() const
             (renderedPresentation == PrivacyStillProxyPresentation::Generic) &&
             (fallbackReason != PrivacyStillProxyFallbackReason::None) &&
             !sourcePixelsUsed);
+}
+
+bool PrivacyClearThumbnailResult::isValid() const
+{
+    return ((error == PrivacyClearThumbnailError::None) &&
+            !encodedBytes.isEmpty() && (encodedFormat == QByteArray("jpeg")) &&
+            (sha256.size() == 32) && (pixelSize == ProxyPixelSize));
 }
 
 QSize PrivacyStillProxyGenerator::fixedPixelSize()
@@ -434,6 +463,90 @@ PrivacyStillProxyResult PrivacyStillProxyGenerator::generate(
                                              QCryptographicHash::Sha256);
     result.error = PrivacyStillProxyError::None;
 
+    return result;
+}
+
+PrivacyClearThumbnailResult PrivacyStillProxyGenerator::generateClearThumbnail(
+    const QString& sourcePath) const
+{
+    PrivacyClearThumbnailResult result;
+    QFileInfo sourceInfo;
+
+    if (!isSafeSourcePath(sourcePath, &sourceInfo))
+    {
+        return result;
+    }
+
+    if (sourceInfo.size() > MaximumSourceFileBytes)
+    {
+        result.error = PrivacyClearThumbnailError::SafetyLimitExceeded;
+        return result;
+    }
+
+    QFile source(sourcePath);
+
+    if (!source.open(QIODevice::ReadOnly))
+    {
+        result.error = PrivacyClearThumbnailError::DecodeFailed;
+        return result;
+    }
+
+    QImageReader reader(&source);
+
+    if (canonicalFormat(reader.format()).isEmpty())
+    {
+        result.error = PrivacyClearThumbnailError::DecodeFailed;
+        return result;
+    }
+
+    reader.setAutoTransform(true);
+    const QSize sourceSize = reader.size();
+
+    if (!isSafeSourceSize(sourceSize))
+    {
+        result.error = sourceSize.isValid()
+                     ? PrivacyClearThumbnailError::SafetyLimitExceeded
+                     : PrivacyClearThumbnailError::DecodeFailed;
+        return result;
+    }
+
+    reader.setScaledSize(sourceSize.scaled(ProxyPixelSize, Qt::KeepAspectRatio));
+    const QImage decoded = reader.read();
+
+    if (decoded.isNull() || (decoded.width() > ProxyPixelSize.width()) ||
+        (decoded.height() > ProxyPixelSize.height()))
+    {
+        result.error = PrivacyClearThumbnailError::DecodeFailed;
+        return result;
+    }
+
+    const QImage presentation = clearPresentation(decoded);
+    const QByteArray format("jpeg");
+
+    if (!writerSupports(format))
+    {
+        result.error = PrivacyClearThumbnailError::EncoderMissing;
+        return result;
+    }
+
+    if (!encodeImage(presentation, format, &result.encodedBytes))
+    {
+        result.error = PrivacyClearThumbnailError::EncodeFailed;
+        return result;
+    }
+
+    if (!validateEncodedImage(result.encodedBytes, format))
+    {
+        result.error = PrivacyClearThumbnailError::EncodedOutputInvalid;
+        result.encodedBytes.clear();
+        return result;
+    }
+
+    result.encodedFormat = format;
+    result.sha256 = QCryptographicHash::hash(result.encodedBytes,
+                                             QCryptographicHash::Sha256);
+    result.pixelSize = presentation.size();
+    result.error = PrivacyClearThumbnailError::None;
     return result;
 }
 
