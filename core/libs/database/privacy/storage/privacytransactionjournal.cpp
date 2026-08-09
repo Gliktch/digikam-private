@@ -241,10 +241,15 @@ bool safeRelativePath(const QString& path, bool allowEmpty = false)
 
 bool validTransactionType(PrivacyTransactionType type)
 {
-    const int value = static_cast<int>(type);
-
-    return ((value >= static_cast<int>(PrivacyTransactionType::ProtectItem)) &&
-            (value <= static_cast<int>(PrivacyTransactionType::CreateCategory)));
+    return ((type == PrivacyTransactionType::ProtectItem) ||
+            (type == PrivacyTransactionType::UnprotectItem) ||
+            (type == PrivacyTransactionType::ChangePassword) ||
+            (type == PrivacyTransactionType::MigrateBackend) ||
+            (type == PrivacyTransactionType::CompatibilityUnlock) ||
+            (type == PrivacyTransactionType::ExternalCheckout) ||
+            (type == PrivacyTransactionType::DeleteProtectedItem) ||
+            (type == PrivacyTransactionType::ChangePresentation) ||
+            (type == PrivacyTransactionType::CreateCategory));
 }
 
 bool validStage(PrivacyJournalStage stage)

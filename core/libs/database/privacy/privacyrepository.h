@@ -99,9 +99,6 @@ public:
                                const PrivacyTransactionJournal& journal) const;
     bool beginCompatibilityUnlock(const PrivacyTransaction& transaction,
                                   const PrivacyTransactionJournal& journal) const;
-    bool beginCompatibilityRelock(const PrivacyTransaction& completedUnlock,
-                                  const PrivacyTransaction& relock,
-                                  const PrivacyTransactionJournal& journal) const;
     bool publishItemUnprotection(qlonglong imageId,
                                  const QString& itemUuid,
                                  const QString& categoryUuid,

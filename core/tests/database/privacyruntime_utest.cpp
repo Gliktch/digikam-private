@@ -772,13 +772,12 @@ void PrivacyRuntimeTest::testCompatibilityRecoverySnapshotHandoff()
     PrivacyTransaction replacement = makeCompatibilityTransaction();
     replacement.uuid = QLatin1String(
         "60000000-0000-0000-0000-000000000002");
-    replacement.type = PrivacyTransactionType::CompatibilityRelock;
     replacement.state = PrivacyTransactionState::NeedsReconciliation;
     replacement.generation = 2;
     PrivacyTransactionJournal replacementJournal = makeJournal();
     replacementJournal.transactionUuid = replacement.uuid;
     replacementJournal.journalRelativePath = QLatin1String(
-        "journals/compatibility-relock.cbor");
+        "journals/compatibility-reconciliation.cbor");
 
     const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
     verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);

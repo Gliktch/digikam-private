@@ -654,28 +654,6 @@ bool PrivacyRepository::beginCompatibilityUnlock(
                                                          normalizedJournal);
 }
 
-bool PrivacyRepository::beginCompatibilityRelock(
-    const PrivacyTransaction& completedUnlock,
-    const PrivacyTransaction& relock,
-    const PrivacyTransactionJournal& journal) const
-{
-    PrivacyTransaction normalizedUnlock = completedUnlock;
-    normalizedUnlock.uuid = normalizedUuid(completedUnlock.uuid);
-    normalizedUnlock.categoryUuid = normalizedUuid(completedUnlock.categoryUuid);
-    normalizedUnlock.itemUuid = normalizedUuid(completedUnlock.itemUuid);
-    PrivacyTransaction normalizedRelock = relock;
-    normalizedRelock.uuid = normalizedUuid(relock.uuid);
-    normalizedRelock.categoryUuid = normalizedUuid(relock.categoryUuid);
-    normalizedRelock.itemUuid = normalizedUuid(relock.itemUuid);
-    PrivacyTransactionJournal normalizedJournal = journal;
-    normalizedJournal.transactionUuid = normalizedUuid(journal.transactionUuid);
-    normalizedJournal.rootUuid = normalizedUuid(journal.rootUuid);
-    CoreDbAccess access;
-
-    return access.db()->beginPrivacyCompatibilityRelock(
-        normalizedUnlock, normalizedRelock, normalizedJournal);
-}
-
 bool PrivacyRepository::publishItemUnprotection(
     qlonglong imageId, const QString& itemUuid, const QString& categoryUuid,
     qlonglong expectedItemGeneration,

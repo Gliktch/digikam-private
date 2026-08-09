@@ -134,19 +134,6 @@ public:
     PrivacyJournalRootExpectation rootExpectation;
 };
 
-class DIGIKAM_DATABASE_EXPORT PrivacyCompatibilityRelockRequest
-{
-public:
-
-    qlonglong imageId = -1;
-    QString categoryUuid;
-    QString itemUuid;
-    QString unlockTransactionUuid;
-    QString relockTransactionUuid;
-    PrivacyStorageRoot publicRoot;
-    PrivacyJournalRootExpectation rootExpectation;
-};
-
 class DIGIKAM_DATABASE_EXPORT PrivacyStillItemPersistence
 {
 public:
@@ -165,10 +152,6 @@ public:
                                    const PrivacyTransactionJournal& journal) = 0;
     virtual bool beginCompatibilityUnlock(
         const PrivacyTransaction& transaction,
-        const PrivacyTransactionJournal& journal) = 0;
-    virtual bool beginCompatibilityRelock(
-        const PrivacyTransaction& completedUnlock,
-        const PrivacyTransaction& relock,
         const PrivacyTransactionJournal& journal) = 0;
     virtual bool publishUnprotection(qlonglong imageId,
                                      const QString& itemUuid,
@@ -204,10 +187,6 @@ public:
                            const PrivacyTransactionJournal& journal) override;
     bool beginCompatibilityUnlock(
         const PrivacyTransaction& transaction,
-        const PrivacyTransactionJournal& journal) override;
-    bool beginCompatibilityRelock(
-        const PrivacyTransaction& completedUnlock,
-        const PrivacyTransaction& relock,
         const PrivacyTransactionJournal& journal) override;
     bool publishUnprotection(qlonglong imageId,
                              const QString& itemUuid,
@@ -264,11 +243,7 @@ enum class PrivacyStillItemFaultPoint
     AfterCompatibilityUnlockDatabaseBegin,
     AfterCompatibilityUnlockStages,
     AfterCompatibilityUnlockApplying,
-    AfterCompatibilityUnlockPublicTransition,
-    AfterCompatibilityRelockDatabaseBegin,
-    AfterCompatibilityRelockStages,
-    AfterCompatibilityRelockApplying,
-    AfterCompatibilityRelockPublicTransition
+    AfterCompatibilityUnlockPublicTransition
 };
 
 /** One complete Casual item transaction over one exact associated-asset set. */
@@ -301,8 +276,6 @@ public:
     PrivacyStillItemTransactionResult compatibilityUnlock(
         const PrivacyCompatibilityUnlockRequest& request,
         const PrivacyPassword& password);
-    PrivacyStillItemTransactionResult compatibilityRelock(
-        const PrivacyCompatibilityRelockRequest& request);
 
     /**
      * Resumes one exact durable transaction without a retained password.

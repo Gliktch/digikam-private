@@ -105,7 +105,6 @@ enum class PrivacyTransactionType
     ChangePassword      = 3,
     MigrateBackend      = 4,
     CompatibilityUnlock = 5,
-    CompatibilityRelock = 6,
     ExternalCheckout   = 7,
     DeleteProtectedItem = 8,
     ChangePresentation = 9,

@@ -175,8 +175,7 @@ public:
                                associatedStagedRelativePath;
 
         const bool installedIsProxy =
-            ((type == PrivacyTransactionType::ProtectItem) ||
-             (type == PrivacyTransactionType::CompatibilityRelock));
+            (type == PrivacyTransactionType::ProtectItem);
         const QByteArray stagedBytes = installedIsProxy ? ProxyBytes : OriginalBytes;
         const QByteArray currentBytes = identicalPublicFacts
                                       ? stagedBytes
@@ -334,8 +333,7 @@ public:
         request.mode                        = mode;
 
         const bool installedIsProxy =
-            ((record.transactionType == PrivacyTransactionType::ProtectItem) ||
-             (record.transactionType == PrivacyTransactionType::CompatibilityRelock));
+            (record.transactionType == PrivacyTransactionType::ProtectItem);
         request.installedFact = installedIsProxy
                               ? PrivacyPublicTransitionFactKind::Proxy
                               : PrivacyPublicTransitionFactKind::Original;
@@ -810,20 +808,6 @@ void PrivacyPublicTransitionTest::testRejectJournalStageCasAndFactMismatch()
         PrivacyPublicTransitionEngine engine;
         QCOMPARE(engine.execute(fixture.request()).error,
                  PrivacyPublicTransitionError::JournalRejected);
-        QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
-        QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
-    }
-
-    {
-        TransitionFixture fixture;
-        QVERIFY(fixture.initialize(PrivacyTransactionType::CompatibilityRelock));
-        const QString alias = fixture.publicDirectory +
-                              QStringLiteral("/external-hardlink.jpg");
-        QCOMPARE(::link(QFile::encodeName(fixture.publicPath).constData(),
-                       QFile::encodeName(alias).constData()), 0);
-        PrivacyPublicTransitionEngine engine;
-        QCOMPARE(engine.execute(fixture.request()).error,
-                 PrivacyPublicTransitionError::HardlinkReconciliationRequired);
         QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
         QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
     }

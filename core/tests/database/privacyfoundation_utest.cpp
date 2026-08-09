@@ -48,7 +48,7 @@ private Q_SLOTS:
     void testSchemaActions();
     void testSqliteSchemaActionsExecute();
     void testSqlitePrivacyCopyRoundTrip();
-    void testCompatibilityTransactionHandoff();
+    void testCompatibilityTransactionExclusivity();
     void testManualTagQueryVisibility();
     void testStorageRecordValidation();
     void testSessionLockState();
@@ -890,7 +890,7 @@ void PrivacyFoundationTest::testSqlitePrivacyCopyRoundTrip()
     QSqlDatabase::removeDatabase(connectionName);
 }
 
-void PrivacyFoundationTest::testCompatibilityTransactionHandoff()
+void PrivacyFoundationTest::testCompatibilityTransactionExclusivity()
 {
     if (!QSqlDatabase::isDriverAvailable(DbEngineParameters::SQLiteDatabaseType()))
     {
@@ -933,8 +933,6 @@ void PrivacyFoundationTest::testCompatibilityTransactionHandoff()
         QLatin1String("60000000-0000-0000-0000-000000000011");
     const QString blockedUuid =
         QLatin1String("60000000-0000-0000-0000-000000000012");
-    const QString relockUuid =
-        QLatin1String("70000000-0000-0000-0000-000000000011");
     const QDateTime now = QDateTime::currentDateTimeUtc();
     PrivacyCategory category = makeCategory(categoryUuid,
                                              QLatin1String("Compatibility"));
@@ -1011,27 +1009,33 @@ void PrivacyFoundationTest::testCompatibilityTransactionHandoff()
     unlock.updatedAt = QDateTime::currentDateTimeUtc();
     QVERIFY(database->compareAndUpdatePrivacyTransaction(
         unlock, PrivacyTransactionState::Created, 0));
-    PrivacyTransaction completedUnlock = unlock;
-    completedUnlock.state = PrivacyTransactionState::Complete;
-    completedUnlock.generation = 2;
-    completedUnlock.updatedAt = QDateTime::currentDateTimeUtc();
-    const PrivacyTransaction relock = createdTransaction(
-        relockUuid, PrivacyTransactionType::CompatibilityRelock);
-    QVERIFY(database->beginPrivacyCompatibilityRelock(
-        completedUnlock, relock, createdJournal(relockUuid)));
 
     QList<PrivacyTransaction> active;
     QVERIFY(database->getActivePrivacyTransactions(&active));
     QCOMPARE(active.size(), 1);
-    QCOMPARE(active.constFirst().uuid, relockUuid);
-    QCOMPARE(active.constFirst().state, PrivacyTransactionState::Created);
+    QCOMPARE(active.constFirst().uuid, unlockUuid);
+    QCOMPARE(active.constFirst().state, PrivacyTransactionState::Exposed);
     QList<PrivacyTransactionJournal> activeJournals;
     QVERIFY(database->getActivePrivacyTransactionJournals(&activeJournals));
     QCOMPARE(activeJournals.size(), 1);
-    QCOMPARE(activeJournals.constFirst().transactionUuid, relockUuid);
+    QCOMPARE(activeJournals.constFirst().transactionUuid, unlockUuid);
+
+    PrivacyTransaction completedUnlock = unlock;
+    completedUnlock.state = PrivacyTransactionState::Complete;
+    completedUnlock.generation = 2;
+    completedUnlock.updatedAt = QDateTime::currentDateTimeUtc();
+    QVERIFY(database->compareAndUpdatePrivacyTransaction(
+        completedUnlock, PrivacyTransactionState::Exposed, 1));
+
+    active.clear();
+    QVERIFY(database->getActivePrivacyTransactions(&active));
+    QVERIFY(active.isEmpty());
+    activeJournals.clear();
+    QVERIFY(database->getActivePrivacyTransactionJournals(&activeJournals));
+    QVERIFY(activeJournals.isEmpty());
     QList<PrivacyTransaction> history;
     QVERIFY(database->getPrivacyTransactions(&history));
-    QCOMPARE(history.size(), 2);
+    QCOMPARE(history.size(), 1);
     const auto completedIt = std::find_if(
         history.cbegin(), history.cend(),
         [&unlockUuid](const PrivacyTransaction& transaction)

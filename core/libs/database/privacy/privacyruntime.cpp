@@ -1451,8 +1451,8 @@ PrivacyStartupReport PrivacyRuntimeCoordinator::initialize(
                 recoveredEveryRoot = false;
                 ++unresolvedTransactionsByRoot[root.uuid];
 
-                if ((transaction.type == PrivacyTransactionType::CompatibilityUnlock) ||
-                    (transaction.type == PrivacyTransactionType::CompatibilityRelock))
+                if (transaction.type ==
+                    PrivacyTransactionType::CompatibilityUnlock)
                 {
                     ++compatibilityExposuresByRoot[root.uuid];
                 }
@@ -1765,8 +1765,7 @@ PrivacyStartupReport PrivacyRuntimeCoordinator::initialize(
     {
         if (!transaction.isActive() ||
             !unresolvedTransactionUuids.contains(transaction.uuid) ||
-            ((transaction.type != PrivacyTransactionType::CompatibilityUnlock) &&
-             (transaction.type != PrivacyTransactionType::CompatibilityRelock)))
+            (transaction.type != PrivacyTransactionType::CompatibilityUnlock))
         {
             continue;
         }
@@ -3935,14 +3934,14 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
         {
             ++unresolvedCount;
 
-            if ((transaction.type == PrivacyTransactionType::CompatibilityUnlock) ||
-                (transaction.type == PrivacyTransactionType::CompatibilityRelock))
+            if (transaction.type ==
+                PrivacyTransactionType::CompatibilityUnlock)
             {
                 ++compatibilityCount;
             }
         }
-        else if ((transaction.type == PrivacyTransactionType::CompatibilityUnlock) ||
-                 (transaction.type == PrivacyTransactionType::CompatibilityRelock))
+        else if (transaction.type ==
+                 PrivacyTransactionType::CompatibilityUnlock)
         {
             recoveredCompatibilityTransactions << transaction;
             recoveredTransactionUuids.insert(transaction.uuid);
@@ -3990,10 +3989,8 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
 
             ++unresolvedCount;
 
-            if ((transaction.type ==
-                 PrivacyTransactionType::CompatibilityUnlock) ||
-                (transaction.type ==
-                 PrivacyTransactionType::CompatibilityRelock))
+            if (transaction.type ==
+                PrivacyTransactionType::CompatibilityUnlock)
             {
                 ++compatibilityCount;
             }

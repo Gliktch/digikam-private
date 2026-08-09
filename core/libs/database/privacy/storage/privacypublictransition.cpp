@@ -217,7 +217,6 @@ bool validFactMapping(PrivacyTransactionType type,
     switch (type)
     {
         case PrivacyTransactionType::ProtectItem:
-        case PrivacyTransactionType::CompatibilityRelock:
             return ((current == PrivacyPublicTransitionFactKind::Original) &&
                     (installed == PrivacyPublicTransitionFactKind::Proxy));
 

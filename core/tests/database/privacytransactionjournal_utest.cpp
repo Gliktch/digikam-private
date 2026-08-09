@@ -275,11 +275,22 @@ void PrivacyTransactionJournalTest::testCodecRejectsMalformedAndCollidingRecords
     QVERIFY(!PrivacyTransactionJournalCodec::validate(record, &detail));
 
     record = makeRecord(*store, expectation);
+    record.transactionType = static_cast<PrivacyTransactionType>(6);
+    QVERIFY(!PrivacyTransactionJournalCodec::validate(record, &detail));
+
+    record = makeRecord(*store, expectation);
     const QByteArray canonical = PrivacyTransactionJournalCodec::encode(record);
     QJsonObject object = QJsonDocument::fromJson(canonical).object();
-    object.insert(QStringLiteral("opaquePayload"), QStringLiteral("secret"));
+    object.insert(QStringLiteral("transactionType"), 6);
     PrivacyJournalRecord decoded;
     PrivacyJournalError error = PrivacyJournalError::None;
+    QVERIFY(!PrivacyTransactionJournalCodec::decode(
+        QJsonDocument(object).toJson(QJsonDocument::Compact), &decoded,
+        &error, &detail));
+    QCOMPARE(error, PrivacyJournalError::CorruptJournal);
+
+    object = QJsonDocument::fromJson(canonical).object();
+    object.insert(QStringLiteral("opaquePayload"), QStringLiteral("secret"));
     QVERIFY(!PrivacyTransactionJournalCodec::decode(
         QJsonDocument(object).toJson(QJsonDocument::Compact), &decoded,
         &error, &detail));

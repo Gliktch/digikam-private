@@ -243,7 +243,6 @@ bool PrivacyTransaction::isValid() const
                             (type == PrivacyTransactionType::ChangePassword)       ||
                             (type == PrivacyTransactionType::MigrateBackend)       ||
                             (type == PrivacyTransactionType::CompatibilityUnlock)  ||
-                            (type == PrivacyTransactionType::CompatibilityRelock)  ||
                             (type == PrivacyTransactionType::ExternalCheckout)     ||
                             (type == PrivacyTransactionType::DeleteProtectedItem)  ||
                             (type == PrivacyTransactionType::ChangePresentation)     ||

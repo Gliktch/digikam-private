@@ -523,10 +523,8 @@ PrivacyThreadImageIOStillItemTransactionOwner::actionContextForImage(
                     createdRecovery = &transaction;
                 }
 
-                if ((transaction.type ==
-                     PrivacyTransactionType::CompatibilityUnlock) ||
-                    (transaction.type ==
-                     PrivacyTransactionType::CompatibilityRelock))
+                if (transaction.type ==
+                    PrivacyTransactionType::CompatibilityUnlock)
                 {
                     activeCompatibility = &transaction;
                 }
@@ -670,15 +668,6 @@ PrivacyThreadImageIOStillItemTransactionOwner::actionContextForImage(
                         ReconciliationRequired;
                 result.compatibilityUnlockTransactionUuid =
                     activeCompatibility->uuid;
-            }
-            else if ((activeCompatibility->type ==
-                      PrivacyTransactionType::CompatibilityRelock) &&
-                     (activeCompatibility->state ==
-                      PrivacyTransactionState::NeedsReconciliation))
-            {
-                result.compatibilityAvailability =
-                    PrivacyCompatibilityActionAvailability::
-                        ReconciliationRequired;
             }
         }
 
@@ -1565,8 +1554,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::recoverRoot(
     if ((root.kind != PrivacyStorageRootKind::AlbumRoot) ||
         ((transaction.type != PrivacyTransactionType::ProtectItem) &&
          (transaction.type != PrivacyTransactionType::UnprotectItem) &&
-         (transaction.type != PrivacyTransactionType::CompatibilityUnlock) &&
-         (transaction.type != PrivacyTransactionType::CompatibilityRelock)) ||
+         (transaction.type != PrivacyTransactionType::CompatibilityUnlock)) ||
         (journals.size() != 1) ||
         (journals.constFirst().transactionUuid != transaction.uuid) ||
         (journals.constFirst().rootUuid != root.uuid))

@@ -2035,68 +2035,6 @@ bool CoreDB::beginPrivacyCompatibilityUnlock(
     return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
 }
 
-bool CoreDB::beginPrivacyCompatibilityRelock(
-    const PrivacyTransaction& completedUnlock,
-    const PrivacyTransaction& relock,
-    const PrivacyTransactionJournal& journal) const
-{
-    if (!completedUnlock.isValid() || !relock.isValid() || !journal.isValid() ||
-        completedUnlock.itemUuid.isEmpty() ||
-        (completedUnlock.type != PrivacyTransactionType::CompatibilityUnlock) ||
-        (completedUnlock.state != PrivacyTransactionState::Complete) ||
-        (completedUnlock.generation <= 0) ||
-        (relock.type != PrivacyTransactionType::CompatibilityRelock) ||
-        (relock.state != PrivacyTransactionState::Created) ||
-        (relock.generation != 0) ||
-        (completedUnlock.uuid == relock.uuid) ||
-        (completedUnlock.categoryUuid != relock.categoryUuid) ||
-        (completedUnlock.itemUuid != relock.itemUuid) ||
-        (journal.transactionUuid != relock.uuid) ||
-        (journal.stage != static_cast<int>(PrivacyJournalStage::Created)) ||
-        d->db->isInTransaction() ||
-        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
-    {
-        return false;
-    }
-
-    const auto abort = [this]()
-    {
-        d->db->rollbackTransactionAndFinish();
-        return false;
-    };
-
-    QVariantList expected;
-    QVariantList bindings;
-    bindings << completedUnlock.uuid << completedUnlock.itemUuid
-             << completedUnlock.categoryUuid
-             << static_cast<int>(PrivacyTransactionType::CompatibilityUnlock)
-             << static_cast<int>(PrivacyTransactionState::Exposed)
-             << (completedUnlock.generation - 1)
-             << relock.uuid << completedUnlock.itemUuid
-             << completedUnlock.uuid
-             << static_cast<int>(PrivacyTransactionState::Complete);
-    d->db->execSql(QString::fromUtf8(
-        "SELECT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? AND itemUuid=? "
-        "AND categoryUuid=? AND type=? AND state=? AND generation=?), "
-        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
-        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE itemUuid=? AND uuid<>? AND state<>?);"),
-        bindings, &expected);
-
-    if ((expected.size() != 3) ||
-        std::any_of(expected.cbegin(), expected.cend(),
-                    [](const QVariant& value) { return !value.toBool(); }) ||
-        !compareAndUpdatePrivacyTransaction(
-            completedUnlock, PrivacyTransactionState::Exposed,
-            completedUnlock.generation - 1) ||
-        !insertPrivacyTransaction(relock) ||
-        !insertPrivacyTransactionJournal(journal))
-    {
-        return abort();
-    }
-
-    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
-}
-
 bool CoreDB::publishPrivacyItemUnprotection(
     qlonglong imageId, const QString& itemUuid, const QString& categoryUuid,
     qlonglong expectedItemGeneration,
