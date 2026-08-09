@@ -168,7 +168,7 @@ PrivacyCategorySessionResult PrivacyCategorySessionOwner::unlockCategory(
     {
         if (d->presentationAvailability)
         {
-            d->presentationAvailability(categoryUuid, true);
+            (void)d->presentationAvailability(categoryUuid, true);
         }
 
         d->publishManualTagVisibilityChange(categoryUuid);
@@ -189,15 +189,19 @@ PrivacyCategorySessionResult PrivacyCategorySessionOwner::lockCategory(
 
     if (d->presentationAvailability)
     {
-        d->presentationAvailability(categoryUuid, false);
+        if (!d->presentationAvailability(categoryUuid, false))
+        {
+            (void)d->presentationAvailability(categoryUuid, true);
+            return { PrivacyCategorySessionStatus::TransactionBlocked };
+        }
     }
 
     const PrivacyCategorySessionResult result = d->coordinator.lockCategory(categoryUuid);
 
     if (d->presentationAvailability)
     {
-        d->presentationAvailability(categoryUuid,
-                                    d->runtime->isCategoryUnlocked(categoryUuid));
+        (void)d->presentationAvailability(
+            categoryUuid, d->runtime->isCategoryUnlocked(categoryUuid));
     }
 
     if (result.succeeded())
@@ -222,7 +226,11 @@ QList<PrivacyCategorySessionResult> PrivacyCategorySessionOwner::lockAllCategori
 
     if (d->presentationAvailability)
     {
-        d->presentationAvailability(QString(), false);
+        if (!d->presentationAvailability(QString(), false))
+        {
+            (void)d->presentationAvailability(QString(), true);
+            return { { PrivacyCategorySessionStatus::TransactionBlocked } };
+        }
     }
 
     const QList<PrivacyCategorySessionResult> results =
@@ -230,7 +238,7 @@ QList<PrivacyCategorySessionResult> PrivacyCategorySessionOwner::lockAllCategori
 
     if (d->presentationAvailability)
     {
-        d->presentationAvailability(QString(), true);
+        (void)d->presentationAvailability(QString(), true);
     }
 
     if (std::any_of(results.cbegin(), results.cend(),
@@ -309,7 +317,11 @@ PrivacyCategorySessionOwner::setCategoryUnlockedThumbnailMode(
 
     if (d->presentationAvailability)
     {
-        d->presentationAvailability(categoryUuid, false);
+        if (!d->presentationAvailability(categoryUuid, false))
+        {
+            (void)d->presentationAvailability(categoryUuid, true);
+            return { PrivacyCategorySessionStatus::TransactionBlocked };
+        }
     }
 
     const PrivacyCategorySessionResult result =
@@ -318,8 +330,8 @@ PrivacyCategorySessionOwner::setCategoryUnlockedThumbnailMode(
 
     if (d->presentationAvailability)
     {
-        d->presentationAvailability(categoryUuid,
-                                    d->runtime->isCategoryUnlocked(categoryUuid));
+        (void)d->presentationAvailability(
+            categoryUuid, d->runtime->isCategoryUnlocked(categoryUuid));
     }
 
     return result;
@@ -374,7 +386,7 @@ void PrivacyCategorySessionOwner::shutdown()
 
     if (d->presentationAvailability)
     {
-        d->presentationAvailability(QString(), false);
+        (void)d->presentationAvailability(QString(), false);
     }
 
     // Retry retained sessions when an earlier backend unmount failed. The

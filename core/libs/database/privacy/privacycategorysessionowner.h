@@ -39,7 +39,7 @@ class DIGIKAM_DATABASE_EXPORT PrivacyCategorySessionOwner
 public:
 
     using PresentationAvailabilityCallback =
-        std::function<void(const QString& categoryUuid, bool available)>;
+        std::function<bool(const QString& categoryUuid, bool available)>;
 
     static QSharedPointer<PrivacyCategorySessionOwner> create(
         const QSharedPointer<PrivacyRuntimeCoordinator>& runtime,

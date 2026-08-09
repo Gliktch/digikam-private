@@ -30,12 +30,18 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSet>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTemporaryFile>
+#include <QUuid>
 #include <QWeakPointer>
 
 // C++ includes
 
 #include <functional>
+#include <memory>
 
 // KDE includes
 
@@ -44,9 +50,13 @@
 
 // Local includes
 
+#include "loadingdescription.h"
 #include "privacyruntime.h"
+#include "privacycachetransition.h"
+#include "privacycasualoriginalreader.h"
 #include "privacycategorysessionowner.h"
 #include "privacyderivativestore.h"
+#include "privacyrepository.h"
 #include "loadingcacheinterface.h"
 #include "privacysourceresolver.h"
 #include "collectionlocation.h"
@@ -58,6 +68,30 @@ namespace Digikam
 
 namespace
 {
+
+constexpr qlonglong MaximumMaterializedOriginalBytes = 512LL * 1024LL * 1024LL;
+
+class MaterializedOriginal final
+{
+public:
+
+    ~MaterializedOriginal()
+    {
+        if (!physicalPath.isEmpty())
+        {
+            QFile::remove(physicalPath);
+        }
+    }
+
+public:
+
+    qlonglong                         imageId = -1;
+    QString                           categoryUuid;
+    QString                           logicalPath;
+    QString                           physicalPath;
+    QString                           cacheNamespace;
+    QSharedPointer<QTemporaryFile>    backing;
+};
 
 class StartupPrivacySourceProvider final : public PrivacySourceProvider
 {
@@ -74,9 +108,10 @@ public:
     {
     }
 
-    void setPresentationAvailable(const QString& categoryUuid, bool available)
+    bool setPresentationAvailable(const QString& categoryUuid, bool available)
     {
         QSet<QString> changedPaths;
+        QList<QSharedPointer<MaterializedOriginal> > originals;
 
         {
             QMutexLocker locker(&m_clearLock);
@@ -113,7 +148,90 @@ public:
             if (!available)
             {
                 m_clearBytes.clear();
+
+                for (const QSharedPointer<MaterializedOriginal>& original :
+                     std::as_const(m_originals))
+                {
+                    if (original &&
+                        (categoryUuid.isEmpty() ||
+                         (original->categoryUuid == categoryUuid)))
+                    {
+                        originals << original;
+                    }
+                }
             }
+        }
+
+        bool revoked = true;
+
+        for (const QSharedPointer<MaterializedOriginal>& original :
+             std::as_const(originals))
+        {
+            LoadingDescription description(
+                original->logicalPath, PreviewSettings(), 0,
+                LoadingDescription::NoColorConversion,
+                LoadingDescription::PreviewParameters::Thumbnail);
+            description.previewParameters.storageReference = original->imageId;
+            description.resolveSource();
+            const PrivacyCacheTransitionToken token =
+                PrivacyCacheTransition::begin(description.thumbnailIdentifier());
+            PrivacyCacheTransitionInventory inventory;
+            inventory.direction = PrivacyCacheTransitionInventory::Unprotect;
+            ThreadImageIOPrivacyCacheTransitionBackend backend;
+            const PrivacyCacheTransition::Result purge =
+                PrivacyCacheTransition::purge(token, inventory, &backend);
+
+            if (!token.isValid() ||
+                (purge.status != PrivacyCacheTransition::Complete))
+            {
+                if (token.isValid())
+                {
+                    (void)PrivacyCacheTransition::rollback(token);
+                }
+
+                revoked = false;
+                break;
+            }
+
+            {
+                QMutexLocker locker(&m_clearLock);
+
+                for (auto it = m_originals.begin(); it != m_originals.end(); )
+                {
+                    if (it.value() == original)
+                    {
+                        it = m_originals.erase(it);
+                    }
+                    else
+                    {
+                        ++it;
+                    }
+                }
+            }
+
+            if (!PrivacyCacheTransition::finish(token))
+            {
+                (void)PrivacyCacheTransition::rollback(token);
+                revoked = false;
+                break;
+            }
+        }
+
+        if (!revoked)
+        {
+            QMutexLocker locker(&m_clearLock);
+
+            if (categoryUuid.isEmpty())
+            {
+                m_allPresentationBlocked = false;
+                m_blockedCategories.clear();
+            }
+            else
+            {
+                m_blockedCategories.remove(categoryUuid);
+            }
+
+            return false;
         }
 
         for (const QString& path : std::as_const(changedPaths))
@@ -121,6 +239,8 @@ public:
             LoadingCacheInterface::cleanFileCache(path);
             LoadingCacheInterface::fileChanged(path, true);
         }
+
+        return true;
     }
 
     PrivacySourceResult resolve(const PrivacySourceRequest& request) const override
@@ -226,6 +346,33 @@ public:
                             bytes, clearThumbnailCacheNamespace(clearSource));
                     }
                 }
+            }
+
+            if ((request.consumer != PrivacySourceRequest::Thumbnail) &&
+                m_runtime->isCategoryUnlocked(itemState.categoryUuid))
+            {
+                {
+                    QMutexLocker locker(&m_clearLock);
+
+                    if (m_allPresentationBlocked ||
+                        m_blockedCategories.contains(itemState.categoryUuid))
+                    {
+                        return PrivacySourceResult::denied(cacheNamespace);
+                    }
+                }
+
+                const QSharedPointer<MaterializedOriginal> original =
+                    originalSource(imageId, request.logicalFilePath, itemState);
+
+                if (!original)
+                {
+                    return PrivacySourceResult::denied(
+                        QLatin1String("privacy-original-unavailable"));
+                }
+
+                return PrivacySourceResult::resolved(
+                    original->physicalPath, original->cacheNamespace,
+                    PrivacySourceResult::MemoryOnly);
             }
 
             return PrivacySourceResult::resolved(request.logicalFilePath,
@@ -337,12 +484,266 @@ private:
         return bytes;
     }
 
+    static bool sameLeaseState(const PrivacyLeaseCurrentState& left,
+                               const PrivacyLeaseCurrentState& right)
+    {
+        return ((left.itemUuid == right.itemUuid) &&
+                (left.itemGeneration == right.itemGeneration) &&
+                (left.categoryEpoch == right.categoryEpoch) &&
+                (left.publicRootEpoch == right.publicRootEpoch) &&
+                (left.storeRootEpoch == right.storeRootEpoch) &&
+                (left.categoryUnlocked == right.categoryUnlocked) &&
+                (left.publicRootAvailable == right.publicRootAvailable) &&
+                (left.storeRootAvailable == right.storeRootAvailable) &&
+                (left.unresolvedTransaction == right.unresolvedTransaction));
+    }
+
+    QString originalRuntimePath() const
+    {
+#if !defined(Q_OS_LINUX)
+        return {};
+#else
+        QMutexLocker locker(&m_clearLock);
+
+        if (m_originalRuntimeDir && m_originalRuntimeDir->isValid())
+        {
+            return m_originalRuntimeDir->path();
+        }
+
+        const QString runtime = QStandardPaths::writableLocation(
+            QStandardPaths::RuntimeLocation);
+        const QString parent = QDir(runtime).filePath(
+            QLatin1String("digikam-private"));
+
+        if (runtime.isEmpty() || !QDir().mkpath(parent) ||
+            !QFile::setPermissions(parent, QFileDevice::ReadOwner |
+                                           QFileDevice::WriteOwner |
+                                           QFileDevice::ExeOwner))
+        {
+            return {};
+        }
+
+        std::unique_ptr<QTemporaryDir> directory(new QTemporaryDir(
+            QDir(parent).filePath(QLatin1String("original-sources-XXXXXX"))));
+
+        if (!directory->isValid() ||
+            !QFile::setPermissions(directory->path(), QFileDevice::ReadOwner |
+                                                      QFileDevice::WriteOwner |
+                                                      QFileDevice::ExeOwner))
+        {
+            return {};
+        }
+
+        m_originalRuntimeDir = std::move(directory);
+        return m_originalRuntimeDir->path();
+#endif
+    }
+
+    QSharedPointer<MaterializedOriginal> originalSource(
+        qlonglong imageId, const QString& logicalPath,
+        const PrivacyActionItemState& actionState) const
+    {
+#if !defined(Q_OS_LINUX)
+        Q_UNUSED(imageId);
+        Q_UNUSED(logicalPath);
+        Q_UNUSED(actionState);
+        return {};
+#else
+        if (!m_sessions || !actionState.protectedItem ||
+            (actionState.access != PrivacyItemAccess::Unlocked) ||
+            !actionState.originalReady || actionState.unresolvedTransaction)
+        {
+            return {};
+        }
+
+        PrivacyCasualOriginalSource prepared;
+        PrivacyLeaseCurrentState before;
+        QSharedPointer<QTemporaryFile> backing;
+        QString linkPath;
+        bool restored = false;
+        const PrivacyCategoryOperationStatus operation =
+            m_sessions->runWithUnlockedSecret(
+                actionState.categoryUuid,
+                [this, imageId, &logicalPath, &prepared, &before,
+                 &backing, &linkPath, &restored](const PrivacyPassword& password)
+                {
+                    PrivacyRepositorySnapshot snapshot;
+                    PrivacyCasualOriginalReader reader;
+
+                    if (!PrivacyRepository().loadRuntimeSnapshot(&snapshot) ||
+                        !reader.prepare(snapshot, imageId, logicalPath, &prepared) ||
+                        !m_runtime->currentState(prepared.itemUuid, &before) ||
+                        !before.isValid() || !before.categoryUnlocked ||
+                        !before.publicRootAvailable || !before.storeRootAvailable ||
+                        before.unresolvedTransaction ||
+                        (before.itemGeneration != prepared.itemGeneration))
+                    {
+                        return;
+                    }
+
+                    const QString cacheNamespace =
+                        QLatin1String("privacy-original:v1:") + prepared.itemUuid +
+                        QLatin1Char(':') + QString::number(prepared.itemGeneration) +
+                        QLatin1Char(':') + QString::number(before.categoryEpoch) +
+                        QLatin1Char(':') + QString::number(before.publicRootEpoch) +
+                        QLatin1Char(':') + QString::number(before.storeRootEpoch) +
+                        QLatin1Char(':') + prepared.originalHash;
+
+                    {
+                        QMutexLocker locker(&m_clearLock);
+                        const auto existing = m_originals.constFind(cacheNamespace);
+
+                        if ((existing != m_originals.constEnd()) && existing.value() &&
+                            QFileInfo::exists(existing.value()->physicalPath))
+                        {
+                            restored = true;
+                            return;
+                        }
+
+                        qlonglong retainedBytes = 0;
+
+                        for (const QSharedPointer<MaterializedOriginal>& original :
+                             std::as_const(m_originals))
+                        {
+                            retainedBytes += (original && original->backing)
+                                           ? original->backing->size() : 0;
+                        }
+
+                        if ((prepared.originalSize > MaximumMaterializedOriginalBytes) ||
+                            (retainedBytes > (MaximumMaterializedOriginalBytes -
+                                              prepared.originalSize)))
+                        {
+                            return;
+                        }
+                    }
+
+                    const QString runtimePath = originalRuntimePath();
+
+                    if (runtimePath.isEmpty())
+                    {
+                        return;
+                    }
+
+                    backing.reset(new QTemporaryFile(
+                        QDir(runtimePath).filePath(QLatin1String("source-XXXXXX"))));
+
+                    if (!backing->open() ||
+                        !backing->setPermissions(QFileDevice::ReadOwner |
+                                                 QFileDevice::WriteOwner))
+                    {
+                        backing.clear();
+                        return;
+                    }
+
+                    PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
+
+                    if (!reader.restore(prepared, password, backing.data(), &error) ||
+                        !backing->flush() ||
+                        (backing->size() != prepared.originalSize) ||
+                        !backing->seek(0) ||
+                        !backing->setPermissions(QFileDevice::ReadOwner) ||
+                        (backing->handle() < 0))
+                    {
+                        backing.clear();
+                        return;
+                    }
+
+                    QString suffix = QFileInfo(prepared.originalName).suffix().toLower();
+
+                    if (!QRegularExpression(QLatin1String("^[a-z0-9]{1,16}$"))
+                             .match(suffix).hasMatch())
+                    {
+                        suffix.clear();
+                    }
+
+                    linkPath = QDir(runtimePath).filePath(
+                        QUuid::createUuid().toString(QUuid::WithoutBraces) +
+                        (suffix.isEmpty() ? QString() : (QLatin1Char('.') + suffix)));
+                    const QString temporaryPath = backing->fileName();
+
+                    if (!QFile::remove(temporaryPath) ||
+                        !QFile::link(QLatin1String("/proc/self/fd/") +
+                                         QString::number(backing->handle()),
+                                     linkPath))
+                    {
+                        QFile::remove(linkPath);
+                        backing.clear();
+                        linkPath.clear();
+                        return;
+                    }
+
+                    PrivacyLeaseCurrentState after;
+                    restored = m_runtime->currentState(prepared.itemUuid, &after) &&
+                               sameLeaseState(before, after);
+                });
+
+        if ((operation != PrivacyCategoryOperationStatus::Completed) || !restored)
+        {
+            QFile::remove(linkPath);
+            return {};
+        }
+
+        const QString cacheNamespace =
+            QLatin1String("privacy-original:v1:") + prepared.itemUuid +
+            QLatin1Char(':') + QString::number(prepared.itemGeneration) +
+            QLatin1Char(':') + QString::number(before.categoryEpoch) +
+            QLatin1Char(':') + QString::number(before.publicRootEpoch) +
+            QLatin1Char(':') + QString::number(before.storeRootEpoch) +
+            QLatin1Char(':') + prepared.originalHash;
+        QMutexLocker locker(&m_clearLock);
+        const auto existing = m_originals.constFind(cacheNamespace);
+
+        if ((existing != m_originals.constEnd()) && existing.value())
+        {
+            QFile::remove(linkPath);
+            return existing.value();
+        }
+
+        if (!backing || linkPath.isEmpty() || m_allPresentationBlocked ||
+            m_blockedCategories.contains(prepared.categoryUuid))
+        {
+            QFile::remove(linkPath);
+            return {};
+        }
+
+        qlonglong retainedBytes = 0;
+
+        for (const QSharedPointer<MaterializedOriginal>& retained :
+             std::as_const(m_originals))
+        {
+            retainedBytes += (retained && retained->backing)
+                           ? retained->backing->size() : 0;
+        }
+
+        if ((prepared.originalSize > MaximumMaterializedOriginalBytes) ||
+            (retainedBytes > (MaximumMaterializedOriginalBytes -
+                              prepared.originalSize)))
+        {
+            QFile::remove(linkPath);
+            return {};
+        }
+
+        QSharedPointer<MaterializedOriginal> original(new MaterializedOriginal);
+        original->imageId = imageId;
+        original->categoryUuid = prepared.categoryUuid;
+        original->logicalPath = QDir::cleanPath(logicalPath);
+        original->physicalPath = linkPath;
+        original->cacheNamespace = cacheNamespace;
+        original->backing = backing;
+        m_originals.insert(cacheNamespace, original);
+        m_knownPathsByCategory[prepared.categoryUuid].insert(original->logicalPath);
+        return original;
+#endif
+    }
+
 private:
 
     QSharedPointer<PrivacyRuntimeCoordinator> m_runtime;
     QSharedPointer<PrivacyCategorySessionOwner> m_sessions;
     mutable QMutex                            m_clearLock;
     mutable QCache<QString, QByteArray>        m_clearBytes;
+    mutable std::unique_ptr<QTemporaryDir>     m_originalRuntimeDir;
+    mutable QHash<QString, QSharedPointer<MaterializedOriginal> > m_originals;
     mutable QHash<QString, QSet<QString> >     m_knownPathsByCategory;
     mutable QSet<QString>                     m_blockedCategories;
     mutable bool                              m_allPresentationBlocked = false;
@@ -612,8 +1013,10 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
 
                 if (source)
                 {
-                    source->setPresentationAvailable(categoryUuid, available);
+                    return source->setPresentationAvailable(categoryUuid, available);
                 }
+
+                return false;
             });
     }
 

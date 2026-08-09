@@ -58,6 +58,7 @@ private Q_SLOTS:
     void testProtectedMutationsCannotBypassDioGate();
     void testProtectedPublicWritesRemainGated();
     void testEditorSavesCannotOverwriteProtectedItems();
+    void testUnlockedOriginalsUseRevocableMemorySources();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -309,6 +310,37 @@ void PrivacyAnalysisWiringTest::testEditorSavesCannotOverwriteProtectedItems()
                          QStringLiteral("PrivacyActionGate::mayMutatePublicItem(")), 1);
     QVERIFY(imageWindow.contains(QStringLiteral("PrivacyActionKind::InternalEdit")));
     QVERIFY(imageWindow.contains(QStringLiteral("Cannot Save Protected Item")));
+}
+
+void PrivacyAnalysisWiringTest::testUnlockedOriginalsUseRevocableMemorySources()
+{
+    const QString albumManager = source(QStringLiteral(
+        "core/libs/album/manager/albummanager_database.cpp"));
+    const QString sessionOwner = source(QStringLiteral(
+        "core/libs/database/privacy/privacycategorysessionowner.cpp"));
+
+    QVERIFY2(!albumManager.isEmpty(), "Unable to read album-manager source");
+    QVERIFY2(!sessionOwner.isEmpty(), "Unable to read session-owner source");
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "PrivacyCasualOriginalReader reader")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "m_sessions->runWithUnlockedSecret(")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "QLatin1String(\"/proc/self/fd/\")")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "PrivacySourceResult::MemoryOnly")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "MaximumMaterializedOriginalBytes")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "PrivacyCacheTransition::begin(")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "PrivacyCacheTransition::purge(")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "PrivacyCacheTransition::finish(")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "PrivacyCacheTransition::rollback(")));
+    QVERIFY(sessionOwner.contains(QStringLiteral(
+        "if (!d->presentationAvailability(categoryUuid, false))")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)
