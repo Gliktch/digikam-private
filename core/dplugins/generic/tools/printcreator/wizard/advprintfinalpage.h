@@ -62,6 +62,7 @@ private Q_SLOTS:
 private:
 
     bool print();
+    bool prepareItemAccess();
 
 private:
 

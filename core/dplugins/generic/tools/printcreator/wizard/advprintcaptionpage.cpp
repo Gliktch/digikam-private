@@ -21,8 +21,6 @@
 #include <QWidget>
 #include <QApplication>
 #include <QStyle>
-#include <QFileInfo>
-#include <QScopedPointer>
 
 // KDE includes
 
@@ -31,7 +29,6 @@
 // Local includes
 
 #include "digikam_debug.h"
-#include "dmetadata.h"
 #include "advprintwizard.h"
 #include "advprintphoto.h"
 
@@ -263,7 +260,7 @@ void AdvPrintCaptionPage::slotUpdateCaptions()
 
                     if (pPhoto->m_pAdvPrintCaptionInfo->m_captionType != AdvPrintSettings::NONE)
                     {
-                        cap = captionFormatter(pPhoto);
+                        cap = pPhoto->formattedCaption();
                     }
 
                     qCDebug(DIGIKAM_DPLUGIN_GENERIC_LOG) << cap;
@@ -277,108 +274,6 @@ void AdvPrintCaptionPage::slotUpdateCaptions()
     // create our photo sizes list
 
     d->wizard->previewPhotos();
-}
-
-QString AdvPrintCaptionPage::captionFormatter(AdvPrintPhoto* const photo)
-{
-    if (!photo->m_pAdvPrintCaptionInfo)
-    {
-        qCWarning(DIGIKAM_DPLUGIN_GENERIC_LOG) << "Internal caption info container is NULL for"
-                                               << photo->m_url;
-        return QString();
-    }
-
-    QString resolution;
-    QSize   imageSize;
-    QString format;
-
-    // %f filename
-    // %c comment
-    // %d date-time
-    // %t exposure time
-    // %i iso
-    // %r resolution
-    // %a aperture
-    // %l focal length
-
-    switch (photo->m_pAdvPrintCaptionInfo->m_captionType)
-    {
-        case AdvPrintSettings::FILENAME:
-        {
-            format = QLatin1String("%f");
-            break;
-        }
-
-        case AdvPrintSettings::DATETIME:
-        {
-            format = QLatin1String("%d");
-            break;
-        }
-
-        case AdvPrintSettings::COMMENT:
-        {
-            format = QLatin1String("%c");
-            break;
-        }
-
-        case AdvPrintSettings::CUSTOM:
-        {
-            format = photo->m_pAdvPrintCaptionInfo->m_captionText;
-            break;
-        }
-
-        default:
-        {
-            qCWarning(DIGIKAM_DPLUGIN_GENERIC_LOG) << "UNKNOWN caption type "
-                                                   << photo->m_pAdvPrintCaptionInfo->m_captionType;
-            break;
-        }
-    }
-
-    format.replace(QLatin1String("\\n"), QLatin1String("\n"));
-
-    if (photo->m_iface)
-    {
-        DItemInfo info(photo->m_iface->itemInfo(photo->m_url));
-        imageSize = info.dimensions();
-
-        format.replace(QString::fromUtf8("%c"), info.comment());
-        format.replace(QString::fromUtf8("%d"), QLocale().toString(info.dateTime(),
-                                                QLocale::ShortFormat));
-        format.replace(QString::fromUtf8("%f"), info.name());
-        format.replace(QString::fromUtf8("%t"), info.exposureTime());
-        format.replace(QString::fromUtf8("%i"), info.sensitivity());
-        format.replace(QString::fromUtf8("%a"), info.aperture());
-        format.replace(QString::fromUtf8("%l"), info.focalLength());
-    }
-    else
-    {
-        QFileInfo fi(photo->m_url.toLocalFile());
-        QScopedPointer<DMetadata> meta(new DMetadata(photo->m_url.toLocalFile()));
-        imageSize                    = meta->getItemDimensions();
-
-        format.replace(QString::fromUtf8("%c"), meta->getItemComments().value(QLatin1String("x-default")).caption);
-        format.replace(QString::fromUtf8("%d"), QLocale().toString(meta->getItemDateTime(), QLocale::ShortFormat));
-        format.replace(QString::fromUtf8("%f"), fi.fileName());
-
-        PhotoInfoContainer photoInfo = meta->getPhotographInformation();
-        format.replace(QString::fromUtf8("%t"), photoInfo.exposureTime);
-        format.replace(QString::fromUtf8("%i"), photoInfo.sensitivity);
-        format.replace(QString::fromUtf8("%a"), photoInfo.aperture);
-        format.replace(QString::fromUtf8("%l"), photoInfo.focalLength);
-    }
-
-    if (imageSize.isValid())
-    {
-        resolution = QString::fromUtf8("%1x%2").arg(imageSize.width()).arg(imageSize.height());
-    }
-
-    format.replace(QString::fromUtf8("%r"), resolution);
-
-    qCDebug(DIGIKAM_DPLUGIN_GENERIC_LOG) << "Caption for"
-                                         << photo->m_url
-                                         << ":" << format;
-    return format;
 }
 
 } // namespace DigikamGenericPrintCreatorPlugin

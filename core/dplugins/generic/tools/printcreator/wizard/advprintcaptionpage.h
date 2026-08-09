@@ -50,8 +50,6 @@ public:
     void initializePage()  override;
     bool validatePage()    override;
 
-    static QString captionFormatter(AdvPrintPhoto* const photo);
-
 public Q_SLOTS:
 
     void slotCaptionChanged(int);

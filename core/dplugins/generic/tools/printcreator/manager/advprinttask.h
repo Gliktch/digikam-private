@@ -27,6 +27,7 @@
 
 #include "advprintsettings.h"
 #include "actionthreadbase.h"
+#include "dinfointerface.h"
 
 using namespace Digikam;
 
@@ -51,7 +52,8 @@ public:
     explicit AdvPrintTask(AdvPrintSettings* const settings,
                           PrintMode mode,
                           const QSize& size = QSize(),        ///< For PREVIEW stage.
-                          int sizeIndex = 0);                 ///< For PREPAREPRINT stage.
+                          int sizeIndex = 0,                  ///< For PREPAREPRINT stage.
+                          const QSharedPointer<DItemAccessHandle>& accessHandle = {});
     ~AdvPrintTask()     override;
 
 Q_SIGNALS:
@@ -60,18 +62,26 @@ Q_SIGNALS:
     void signalComplete(bool);
     void signalPreview(const QImage&);
 
+public Q_SLOTS:
+
+    void cancel();
+
 private:
 
     /// @note disabled
     explicit AdvPrintTask(QObject*) = delete;
 
-private:
+protected:
 
     void run()          override;
+
+private:
 
     void        preparePrint();
     void        printPhotos();
     QStringList printPhotosToFile();
+    QList<AdvPrintPhoto*> accessiblePhotos() const;
+    QImage      loadPreparedPhoto(AdvPrintPhoto* const photo);
 
     double getMaxDPI(const QList<AdvPrintPhoto*>& photos,
                      const QList<QRect*>& layouts,

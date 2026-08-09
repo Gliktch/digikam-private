@@ -19,7 +19,9 @@
 // Qt includes
 
 #include <QFileInfo>
+#include <QLocale>
 #include <QPolygon>
+#include <QScopedPointer>
 
 // KDE includes
 
@@ -29,7 +31,17 @@
 
 #include "digikam_debug.h"
 #include "previewloadthread.h"
-#include "advprintwizard.h"
+#include "dmetadata.h"
+
+namespace
+{
+
+int normalizedInt(double value)
+{
+    return static_cast<int>(value + 0.5);
+}
+
+} // namespace
 
 namespace DigikamGenericPrintCreatorPlugin
 {
@@ -141,6 +153,82 @@ DImg AdvPrintPhoto::loadPhoto()
     return PreviewLoadThread::loadHighQualitySynchronously(m_url.toLocalFile());
 }
 
+QString AdvPrintPhoto::formattedCaption() const
+{
+    if (!m_pAdvPrintCaptionInfo)
+    {
+        qCWarning(DIGIKAM_DPLUGIN_GENERIC_LOG)
+            << "Internal caption info container is NULL for" << m_url;
+        return {};
+    }
+
+    QString resolution;
+    QSize imageSize;
+    QString format;
+
+    switch (m_pAdvPrintCaptionInfo->m_captionType)
+    {
+        case AdvPrintSettings::FILENAME: format = QLatin1String("%f"); break;
+        case AdvPrintSettings::DATETIME: format = QLatin1String("%d"); break;
+        case AdvPrintSettings::COMMENT:  format = QLatin1String("%c"); break;
+        case AdvPrintSettings::CUSTOM:
+        {
+            format = m_pAdvPrintCaptionInfo->m_captionText;
+            break;
+        }
+        default:
+        {
+            qCWarning(DIGIKAM_DPLUGIN_GENERIC_LOG)
+                << "UNKNOWN caption type" << m_pAdvPrintCaptionInfo->m_captionType;
+            break;
+        }
+    }
+
+    format.replace(QLatin1String("\\n"), QLatin1String("\n"));
+
+    if (m_iface)
+    {
+        const DItemInfo info(m_iface->itemInfo(m_url));
+        imageSize = info.dimensions();
+        format.replace(QString::fromUtf8("%c"), info.comment());
+        format.replace(QString::fromUtf8("%d"), QLocale().toString(
+                           info.dateTime(), QLocale::ShortFormat));
+        format.replace(QString::fromUtf8("%f"), info.name());
+        format.replace(QString::fromUtf8("%t"), info.exposureTime());
+        format.replace(QString::fromUtf8("%i"), info.sensitivity());
+        format.replace(QString::fromUtf8("%a"), info.aperture());
+        format.replace(QString::fromUtf8("%l"), info.focalLength());
+    }
+    else
+    {
+        const QFileInfo info(m_url.toLocalFile());
+        QScopedPointer<DMetadata> meta(new DMetadata(m_url.toLocalFile()));
+        imageSize = meta->getItemDimensions();
+        format.replace(QString::fromUtf8("%c"),
+                       meta->getItemComments().value(
+                           QLatin1String("x-default")).caption);
+        format.replace(QString::fromUtf8("%d"), QLocale().toString(
+                           meta->getItemDateTime(), QLocale::ShortFormat));
+        format.replace(QString::fromUtf8("%f"), info.fileName());
+
+        const PhotoInfoContainer photoInfo = meta->getPhotographInformation();
+        format.replace(QString::fromUtf8("%t"), photoInfo.exposureTime);
+        format.replace(QString::fromUtf8("%i"), photoInfo.sensitivity);
+        format.replace(QString::fromUtf8("%a"), photoInfo.aperture);
+        format.replace(QString::fromUtf8("%l"), photoInfo.focalLength);
+    }
+
+    if (imageSize.isValid())
+    {
+        resolution = QString::fromUtf8("%1x%2")
+                         .arg(imageSize.width())
+                         .arg(imageSize.height());
+    }
+
+    format.replace(QString::fromUtf8("%r"), resolution);
+    return format;
+}
+
 QSize& AdvPrintPhoto::size()
 {
     if (m_size == nullptr)
@@ -232,22 +320,22 @@ QTransform AdvPrintPhoto::updateCropRegion(int woutlay, int houtlay, bool autoRo
 
     if (w < h)
     {
-        h = AdvPrintWizard::normalizedInt((double)w * ((double)houtlay / (double)woutlay));
+        h = normalizedInt((double)w * ((double)houtlay / (double)woutlay));
 
         if (h > imgRect.height())
         {
             h = imgRect.height();
-            w = AdvPrintWizard::normalizedInt((double)h * ((double)woutlay / (double)houtlay));
+            w = normalizedInt((double)h * ((double)woutlay / (double)houtlay));
         }
     }
     else
     {
-        w = AdvPrintWizard::normalizedInt((double)h * ((double)woutlay / (double)houtlay));
+        w = normalizedInt((double)h * ((double)woutlay / (double)houtlay));
 
         if (w > imgRect.width())
         {
             w = imgRect.width();
-            h = AdvPrintWizard::normalizedInt((double)w * ((double)houtlay / (double)woutlay));
+            h = normalizedInt((double)w * ((double)houtlay / (double)woutlay));
         }
     }
 

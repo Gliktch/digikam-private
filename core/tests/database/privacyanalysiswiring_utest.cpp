@@ -360,6 +360,10 @@ void PrivacyAnalysisWiringTest::testPreparedPluginSourcesOwnLifetime()
         "core/dplugins/generic/webservices/filecopy/fcexportwindow.cpp"));
     const QString exportTask = source(QStringLiteral(
         "core/dplugins/generic/webservices/filecopy/fctask.cpp"));
+    const QString printFinalPage = source(QStringLiteral(
+        "core/dplugins/generic/tools/printcreator/wizard/advprintfinalpage.cpp"));
+    const QString printTask = source(QStringLiteral(
+        "core/dplugins/generic/tools/printcreator/manager/advprinttask.cpp"));
 
     QVERIFY2(!interface.isEmpty(), "Unable to read generic item interface");
     QVERIFY2(!databaseInterface.isEmpty(), "Unable to read DB item interface");
@@ -368,6 +372,8 @@ void PrivacyAnalysisWiringTest::testPreparedPluginSourcesOwnLifetime()
     QVERIFY2(!runtime.isEmpty(), "Unable to read privacy runtime source");
     QVERIFY2(!exportWindow.isEmpty(), "Unable to read File Copy window");
     QVERIFY2(!exportTask.isEmpty(), "Unable to read File Copy task");
+    QVERIFY2(!printFinalPage.isEmpty(), "Unable to read Print Creator final page");
+    QVERIFY2(!printTask.isEmpty(), "Unable to read Print Creator task");
     QVERIFY(interface.contains(QStringLiteral(
         "virtual QSharedPointer<DItemAccessHandle> prepareItemAccess")));
     QVERIFY(interface.contains(QStringLiteral(
@@ -426,6 +432,18 @@ void PrivacyAnalysisWiringTest::testPreparedPluginSourcesOwnLifetime()
         "DFileOperations::copyFileCancellable(")));
     QVERIFY(exportTask.contains(QStringLiteral(
         "DFileOperations::setPermissionsAndModificationTime(")));
+    QVERIFY(printFinalPage.contains(QStringLiteral(
+        "d->iface->prepareItemAccess(request)")));
+    QVERIFY(printFinalPage.contains(QStringLiteral(
+        "DItemAccessPurpose::Print")));
+    QVERIFY(printFinalPage.contains(QStringLiteral(
+        "d->preparedAccess = prepared")));
+    QVERIFY(printTask.contains(QStringLiteral(
+        "d->accessHandle->acquireSource(photo->m_url, d->cancellation)")));
+    QVERIFY(printTask.contains(QStringLiteral(
+        "source->validateAccess()")));
+    QVERIFY(printTask.contains(QStringLiteral(
+        "accessiblePhotos()")));
     QVERIFY(accessBroker.contains(QStringLiteral(
         "fileFactsForAsset(asset)")));
 }

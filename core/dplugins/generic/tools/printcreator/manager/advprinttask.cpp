@@ -21,8 +21,10 @@
 // Qt includes
 
 #include <QSize>
+#include <QDir>
 #include <QFileInfo>
 #include <QScopedPointer>
+#include <QSet>
 
 // KDE includes
 
@@ -30,17 +32,26 @@
 
 // Local includes
 
-#include "advprintwizard.h"
 #include "advprintphoto.h"
-#include "advprintcaptionpage.h"
 #include "dmetadata.h"
 #include "dfileoperations.h"
 #include "dimg.h"
+#include "previewloadthread.h"
 #include "digikam_debug.h"
 #include "digikam_config.h"
 
 namespace DigikamGenericPrintCreatorPlugin
 {
+
+namespace
+{
+
+int normalizedInt(double value)
+{
+    return static_cast<int>(value + 0.5);
+}
+
+} // namespace
 
 class Q_DECL_HIDDEN AdvPrintTask::Private
 {
@@ -56,6 +67,8 @@ public:
     QSize             size;
 
     int               sizeIndex;
+    QSharedPointer<DItemAccessHandle> accessHandle;
+    QSharedPointer<DItemAccessCancellationToken> cancellation;
 };
 
 // -------------------------------------------------------
@@ -63,7 +76,8 @@ public:
 AdvPrintTask::AdvPrintTask(AdvPrintSettings* const settings,
                            PrintMode mode,
                            const QSize& size,
-                           int sizeIndex)
+                           int sizeIndex,
+                           const QSharedPointer<DItemAccessHandle>& accessHandle)
     : ActionJob(),
       d        (new Private)
 {
@@ -71,6 +85,8 @@ AdvPrintTask::AdvPrintTask(AdvPrintSettings* const settings,
     d->mode      = mode;
     d->size      = size;
     d->sizeIndex = sizeIndex;
+    d->accessHandle = accessHandle;
+    d->cancellation.reset(new DItemAccessCancellationToken);
 }
 
 AdvPrintTask::~AdvPrintTask()
@@ -78,6 +94,16 @@ AdvPrintTask::~AdvPrintTask()
     cancel();
 
     delete d;
+}
+
+void AdvPrintTask::cancel()
+{
+    if (d->cancellation)
+    {
+        d->cancellation->cancel();
+    }
+
+    ActionJob::cancel();
 }
 
 void AdvPrintTask::run()
@@ -160,12 +186,10 @@ void AdvPrintTask::run()
 void AdvPrintTask::preparePrint()
 {
     int photoIndex = 0;
+    const QList<AdvPrintPhoto*> photos = accessiblePhotos();
 
-    for (QList<AdvPrintPhoto*>::iterator it = d->settings->photos.begin() ;
-         it != d->settings->photos.end() ; ++it)
+    for (AdvPrintPhoto* const photo : photos)
     {
-        AdvPrintPhoto* const photo = static_cast<AdvPrintPhoto*>(*it);
-
         if (photo && (photo->m_cropRegion == QRect(-1, -1, -1, -1)))
         {
             const QRect* const curr = d->settings->getLayout(photoIndex, d->sizeIndex);
@@ -197,9 +221,23 @@ void AdvPrintTask::printPhotos()
     Q_ASSERT(printer);
     Q_ASSERT(layouts->m_layouts.count() > 1);
 
-    QList<AdvPrintPhoto*> photos = d->settings->photos;
+    QList<AdvPrintPhoto*> photos = accessiblePhotos();
+
+    if (photos.isEmpty())
+    {
+        m_cancel = true;
+        Q_EMIT signalMessage(i18n("No safely prepared photos are available to print"), true);
+        return;
+    }
+
     QPainter p;
-    p.begin(printer);
+
+    if (!p.begin(printer))
+    {
+        m_cancel = true;
+        Q_EMIT signalMessage(i18n("Could not start the selected printer"), true);
+        return;
+    }
 
     int current   = 0;
     int pageCount = 1;
@@ -246,7 +284,14 @@ QStringList AdvPrintTask::printPhotosToFile()
     Q_ASSERT(!dir.isEmpty());
     Q_ASSERT(layouts->m_layouts.count() > 1);
 
-    QList<AdvPrintPhoto*> photos     = d->settings->photos;
+    QList<AdvPrintPhoto*> photos     = accessiblePhotos();
+
+    if (photos.isEmpty())
+    {
+        m_cancel = true;
+        Q_EMIT signalMessage(i18n("No safely prepared photos are available to print"), true);
+        return {};
+    }
 
     QStringList files;
     int current                      = 0;
@@ -267,12 +312,18 @@ QStringList AdvPrintTask::printPhotosToFile()
             (void)dpi; // Remove clang warnings.
         }
 
-        int w            = AdvPrintWizard::normalizedInt(srcPage->width());
-        int h            = AdvPrintWizard::normalizedInt(srcPage->height());
+        int w            = normalizedInt(srcPage->width());
+        int h            = normalizedInt(srcPage->height());
 
         QImage image(w, h, QImage::Format_ARGB32_Premultiplied);
         QPainter painter;
-        painter.begin(&image);
+
+        if (image.isNull() || !painter.begin(&image))
+        {
+            m_cancel = true;
+            Q_EMIT signalMessage(i18n("Could not allocate the output print page"), true);
+            break;
+        }
 
         QString ext      = d->settings->format();
         QString name     = QLatin1String("output");
@@ -299,8 +350,16 @@ QStringList AdvPrintTask::printPhotosToFile()
 
         painter.end();
 
+        if (m_cancel)
+        {
+            QFile::remove(filename);
+            break;
+        }
+
         if (!image.save(filename, nullptr, 100))
         {
+            QFile::remove(filename);
+            m_cancel = true;
             Q_EMIT signalMessage(i18n("Could not save file %1", filename), true);
 
             break;
@@ -364,22 +423,22 @@ bool AdvPrintTask::paintOnePage(QPainter& p,
 
     if (destW < destH)
     {
-        destH = AdvPrintWizard::normalizedInt((double) destW * ((double) srcH / (double) srcW));
+        destH = normalizedInt((double) destW * ((double) srcH / (double) srcW));
 
         if (destH > p.window().height())
         {
             destH = p.window().height();
-            destW = AdvPrintWizard::normalizedInt((double) destH * ((double) srcW / (double) srcH));
+            destW = normalizedInt((double) destH * ((double) srcW / (double) srcH));
         }
     }
     else
     {
-        destW = AdvPrintWizard::normalizedInt((double) destH * ((double) srcW / (double) srcH));
+        destW = normalizedInt((double) destH * ((double) srcW / (double) srcH));
 
         if (destW > p.window().width())
         {
             destW = p.window().width();
-            destH = AdvPrintWizard::normalizedInt((double) destW * ((double) srcH / (double) srcW));
+            destH = normalizedInt((double) destW * ((double) srcH / (double) srcW));
         }
     }
 
@@ -391,8 +450,8 @@ bool AdvPrintTask::paintOnePage(QPainter& p,
     // FIXME: may not want to erase the background page
 
     p.eraseRect(left, top,
-                AdvPrintWizard::normalizedInt((double) srcPage->width()  * xRatio1),
-                AdvPrintWizard::normalizedInt((double) srcPage->height() * yRatio1));
+                normalizedInt((double) srcPage->width()  * xRatio1),
+                normalizedInt((double) srcPage->height() * yRatio1));
 
     for ( ; (current < photos.count()) && !m_cancel ; ++current)
     {
@@ -408,7 +467,12 @@ bool AdvPrintTask::paintOnePage(QPainter& p,
         }
         else
         {
-            img = photo->loadPhoto().copyQImage();
+            img = loadPreparedPhoto(photo);
+
+            if (m_cancel || img.isNull())
+            {
+                return false;
+            }
         }
 
         // next, do we rotate?
@@ -439,10 +503,10 @@ bool AdvPrintTask::paintOnePage(QPainter& p,
                 yRatio2 = (double)photo->thumbnail().height() / (double)photo->height();
             }
 
-            int x1 = AdvPrintWizard::normalizedInt((double)photo->m_cropRegion.left()   * xRatio2);
-            int y1 = AdvPrintWizard::normalizedInt((double)photo->m_cropRegion.top()    * yRatio2);
-            int w  = AdvPrintWizard::normalizedInt((double)photo->m_cropRegion.width()  * xRatio2);
-            int h  = AdvPrintWizard::normalizedInt((double)photo->m_cropRegion.height() * yRatio2);
+            int x1 = normalizedInt((double)photo->m_cropRegion.left()   * xRatio2);
+            int y1 = normalizedInt((double)photo->m_cropRegion.top()    * yRatio2);
+            int w  = normalizedInt((double)photo->m_cropRegion.width()  * xRatio2);
+            int h  = normalizedInt((double)photo->m_cropRegion.height() * yRatio2);
             img    = img.copy(QRect(x1, y1, w, h));
         }
         else if (!cropDisabled)
@@ -450,10 +514,10 @@ bool AdvPrintTask::paintOnePage(QPainter& p,
             img = img.copy(photo->m_cropRegion);
         }
 
-        int x1 = AdvPrintWizard::normalizedInt((double) layout->left()   * xRatio1);
-        int y1 = AdvPrintWizard::normalizedInt((double) layout->top()    * yRatio1);
-        int w  = AdvPrintWizard::normalizedInt((double) layout->width()  * xRatio1);
-        int h  = AdvPrintWizard::normalizedInt((double) layout->height() * yRatio1);
+        int x1 = normalizedInt((double) layout->left()   * xRatio1);
+        int y1 = normalizedInt((double) layout->top()    * yRatio1);
+        int w  = normalizedInt((double) layout->width()  * xRatio1);
+        int h  = normalizedInt((double) layout->height() * yRatio1);
 
         QRect rectViewPort    = p.viewport();
         QRect newRectViewPort = QRect(x1 + left, y1 + top, w, h);
@@ -498,7 +562,7 @@ bool AdvPrintTask::paintOnePage(QPainter& p,
            )
         {
             p.save();
-            QString caption = AdvPrintCaptionPage::captionFormatter(photo);
+            QString caption = photo->formattedCaption();
 
             qCDebug(DIGIKAM_DPLUGIN_GENERIC_LOG) << "Caption for"
                                                  << photo->m_url
@@ -603,6 +667,91 @@ bool AdvPrintTask::paintOnePage(QPainter& p,
     // did we print the last photo?
 
     return (current < photos.count());
+}
+
+QList<AdvPrintPhoto*> AdvPrintTask::accessiblePhotos() const
+{
+    if (!d->accessHandle)
+    {
+        return d->settings->photos;
+    }
+
+    if (!d->accessHandle->isValid() || d->accessHandle->isCanceled())
+    {
+        return {};
+    }
+
+    QSet<QString> allowedPaths;
+
+    for (const DItemAccessEntry& entry : d->accessHandle->entries())
+    {
+        allowedPaths.insert(QDir::cleanPath(entry.logicalUrl.toLocalFile()));
+    }
+
+    QList<AdvPrintPhoto*> photos;
+
+    for (AdvPrintPhoto* const photo : d->settings->photos)
+    {
+        if (photo && allowedPaths.contains(
+                QDir::cleanPath(photo->m_url.toLocalFile())))
+        {
+            photos << photo;
+        }
+    }
+
+    return photos;
+}
+
+QImage AdvPrintTask::loadPreparedPhoto(AdvPrintPhoto* const photo)
+{
+    if (!photo)
+    {
+        m_cancel = true;
+        return {};
+    }
+
+    if (!d->accessHandle)
+    {
+        return photo->loadPhoto().copyQImage();
+    }
+
+    if (!d->cancellation || d->cancellation->isCanceled())
+    {
+        m_cancel = true;
+        return {};
+    }
+
+    const QSharedPointer<DItemAccessSourceHandle> source =
+        d->accessHandle->acquireSource(photo->m_url, d->cancellation);
+
+    if (!source || !source->validateAccess() ||
+        d->cancellation->isCanceled())
+    {
+        m_cancel = true;
+        Q_EMIT signalMessage(
+            i18n("A prepared private source became unavailable before printing"),
+            true);
+        return {};
+    }
+
+    const QString physicalPath = source->entry().physicalUrl.toLocalFile();
+    QImage image = PreviewLoadThread::loadHighQualitySynchronously(
+        physicalPath).copyQImage();
+
+    if (image.isNull())
+    {
+        image.load(physicalPath);
+    }
+
+    if (image.isNull())
+    {
+        m_cancel = true;
+        Q_EMIT signalMessage(i18n("Could not load a safely prepared photo for printing"),
+                             true);
+        return {};
+    }
+
+    return image;
 }
 
 double AdvPrintTask::getMaxDPI(const QList<AdvPrintPhoto*>& photos,

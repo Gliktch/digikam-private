@@ -385,6 +385,40 @@ target_include_directories(digikam-privacyfilecopyaccess_utest
 
 #------------------------------------------------------------------------
 
+ecm_add_test(${CMAKE_CURRENT_SOURCE_DIR}/privacyprintaccess_utest.cpp
+             ${CMAKE_SOURCE_DIR}/core/dplugins/generic/tools/printcreator/manager/advprintphoto.cpp
+             ${CMAKE_SOURCE_DIR}/core/dplugins/generic/tools/printcreator/manager/advprintsettings.cpp
+             ${CMAKE_SOURCE_DIR}/core/dplugins/generic/tools/printcreator/manager/advprinttask.cpp
+
+             TEST_NAME
+
+             digikam-privacyprintaccess_utest
+
+             LINK_LIBRARIES
+
+             digikamcore
+
+             Qt${QT_VERSION_MAJOR}::Core
+             Qt${QT_VERSION_MAJOR}::Gui
+             Qt${QT_VERSION_MAJOR}::Widgets
+             Qt${QT_VERSION_MAJOR}::PrintSupport
+
+             KF${QT_VERSION_MAJOR}::ConfigCore
+             KF${QT_VERSION_MAJOR}::I18n
+
+             ${COMMON_TEST_LINK}
+)
+
+target_include_directories(digikam-privacyprintaccess_utest
+                           PRIVATE
+                           ${CMAKE_SOURCE_DIR}/core/dplugins/generic/tools/printcreator/manager)
+
+set_tests_properties(digikam-privacyprintaccess_utest
+                     PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+#------------------------------------------------------------------------
+
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/databasesqliteinit_utest.cpp
 
               NAME_PREFIX

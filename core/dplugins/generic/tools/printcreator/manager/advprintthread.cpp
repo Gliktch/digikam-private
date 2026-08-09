@@ -34,14 +34,18 @@ AdvPrintThread::~AdvPrintThread()
     wait();
 }
 
-void AdvPrintThread::preparePrint(AdvPrintSettings* const settings, int sizeIndex)
+void AdvPrintThread::preparePrint(
+    AdvPrintSettings* const settings,
+    int sizeIndex,
+    const QSharedPointer<DItemAccessHandle>& accessHandle)
 {
     ActionJobCollection collection;
 
     AdvPrintTask* const t = new AdvPrintTask(settings,
                                              AdvPrintTask::PREPAREPRINT,
                                              QSize(),
-                                             sizeIndex);
+                                             sizeIndex,
+                                             accessHandle);
 
     connect(t, SIGNAL(signalProgress(int)),
             this, SIGNAL(signalProgress(int)));
@@ -57,12 +61,16 @@ void AdvPrintThread::preparePrint(AdvPrintSettings* const settings, int sizeInde
     appendJobs(collection);
 }
 
-void AdvPrintThread::print(AdvPrintSettings* const settings)
+void AdvPrintThread::print(
+    AdvPrintSettings* const settings,
+    const QSharedPointer<DItemAccessHandle>& accessHandle)
 {
     ActionJobCollection collection;
 
     AdvPrintTask* const t = new AdvPrintTask(settings,
-                                             AdvPrintTask::PRINT);
+                                             AdvPrintTask::PRINT,
+                                             QSize(), 0,
+                                             accessHandle);
 
     connect(t, SIGNAL(signalProgress(int)),
             this, SIGNAL(signalProgress(int)));

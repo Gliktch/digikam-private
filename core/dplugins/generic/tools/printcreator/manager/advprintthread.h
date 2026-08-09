@@ -19,6 +19,7 @@
 #include "advprintsettings.h"
 #include "advprinttask.h"
 #include "actionthreadbase.h"
+#include "dinfointerface.h"
 
 using namespace Digikam;
 
@@ -34,8 +35,11 @@ public:
     explicit AdvPrintThread(QObject* const parent);
     ~AdvPrintThread() override;
 
-    void preparePrint(AdvPrintSettings* const settings, int sizeIndex);
-    void print(AdvPrintSettings* const settings);
+    void preparePrint(AdvPrintSettings* const settings,
+                      int sizeIndex,
+                      const QSharedPointer<DItemAccessHandle>& accessHandle);
+    void print(AdvPrintSettings* const settings,
+               const QSharedPointer<DItemAccessHandle>& accessHandle);
     void preview(AdvPrintSettings* const settings, const QSize& size);
 
 Q_SIGNALS:

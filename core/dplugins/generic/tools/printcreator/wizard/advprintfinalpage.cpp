@@ -29,6 +29,7 @@
 #include <QMessageBox>
 #include <QDesktopServices>
 #include <QPrintDialog>
+#include <QSet>
 
 // KDE includes
 
@@ -38,6 +39,7 @@
 
 #include "advprintthread.h"
 #include "advprintwizard.h"
+#include "advprintphoto.h"
 #include "advprintcaptionpage.h"
 #include "advprintphotopage.h"
 #include "dlayoutbox.h"
@@ -75,6 +77,8 @@ public:
     AdvPrintThread*    printThread       = nullptr;
     AdvPrintPhotoPage* photoPage         = nullptr;
     DInfoInterface*    iface             = nullptr;
+    QSharedPointer<DItemAccessHandle> preparedAccess;
+    int                preparedPhotoCount = 0;
     bool               complete          = false;
 };
 
@@ -113,6 +117,8 @@ void AdvPrintFinalPage::setPhotoPage(AdvPrintPhotoPage* const photoPage)
 void AdvPrintFinalPage::initializePage()
 {
     d->complete = false;
+    d->preparedAccess.clear();
+    d->preparedPhotoCount = 0;
 
     Q_EMIT completeChanged();
 
@@ -138,14 +144,19 @@ void AdvPrintFinalPage::slotProcess()
     d->progressView->clear();
     d->progressBar->reset();
 
+    if (!prepareItemAccess())
+    {
+        return;
+    }
+
     d->progressView->addEntry(i18n("Starting to pre-process files..."),
                               DHistoryView::ProgressEntry);
 
-    d->progressView->addEntry(i18n("%1 items to process", d->settings->inputImages.count()),
+    d->progressView->addEntry(i18n("%1 items to process", d->preparedPhotoCount),
                               DHistoryView::ProgressEntry);
 
     d->progressBar->setMinimum(0);
-    d->progressBar->setMaximum(d->settings->photos.count());
+    d->progressBar->setMaximum(d->preparedPhotoCount);
 
     // set the default crop regions if not already set
 
@@ -162,7 +173,7 @@ void AdvPrintFinalPage::slotProcess()
     connect(d->printThread, SIGNAL(signalComplete(bool)),
             this, SLOT(slotPrint(bool)));
 
-    d->printThread->preparePrint(d->settings, sizeIndex);
+    d->printThread->preparePrint(d->settings, sizeIndex, d->preparedAccess);
     d->printThread->start();
 }
 
@@ -176,6 +187,7 @@ void AdvPrintFinalPage::slotPrint(bool b)
 
     if (!print())
     {
+        d->preparedAccess.clear();
         d->progressView->addEntry(i18n("Printing process aborted..."),
                                   DHistoryView::ErrorEntry);
         return;
@@ -187,7 +199,7 @@ void AdvPrintFinalPage::slotPrint(bool b)
     connect(d->printThread, SIGNAL(signalComplete(bool)),
             this, SLOT(slotDone(bool)));
 
-    d->printThread->print(d->settings);
+    d->printThread->print(d->settings, d->preparedAccess);
     d->printThread->start();
 }
 
@@ -197,6 +209,8 @@ void AdvPrintFinalPage::cleanupPage()
     {
         d->printThread->cancel();
     }
+
+    d->preparedAccess.clear();
 
     if (d->settings->gimpFiles.count() > 0)
     {
@@ -214,6 +228,7 @@ void AdvPrintFinalPage::slotDone(bool completed)
 {
     d->progressBar->progressCompleted();
     d->complete = completed;
+    d->preparedAccess.clear();
 
     if (!d->complete)
     {
@@ -263,6 +278,105 @@ void AdvPrintFinalPage::slotDone(bool completed)
     }
 
     Q_EMIT completeChanged();
+}
+
+bool AdvPrintFinalPage::prepareItemAccess()
+{
+    QList<QUrl> logicalUrls;
+    QSet<QString> logicalPaths;
+
+    for (AdvPrintPhoto* const photo : d->settings->photos)
+    {
+        if (!photo || !photo->m_url.isLocalFile())
+        {
+            d->progressView->addEntry(
+                i18n("A selected item does not have a safe local path and cannot be printed."),
+                DHistoryView::ErrorEntry);
+            return false;
+        }
+
+        const QString path = QDir::cleanPath(photo->m_url.toLocalFile());
+
+        if (!logicalPaths.contains(path))
+        {
+            logicalPaths.insert(path);
+            logicalUrls << photo->m_url;
+        }
+    }
+
+    DItemAccessRequest request;
+    request.consumerIdentity = QLatin1String("digikam-generic-print-creator");
+    request.logicalUrls = logicalUrls;
+    request.purpose = DItemAccessPurpose::Print;
+    request.mutation = DItemAccessMutation::MayCreateOutputs;
+    request.requestedSource = DItemAccessSource::InternalOriginal;
+    request.consumerScope = DItemAccessConsumerScope::SameProcess;
+    request.allowPlaceholderFallback = true;
+    request.allowPartialSelection = true;
+
+    const QSharedPointer<DItemAccessHandle> prepared = d->iface
+        ? d->iface->prepareItemAccess(request)
+        : DItemAccessHandle::passThrough(request);
+
+    if (!prepared)
+    {
+        d->progressView->addEntry(
+            i18n("digiKam could not safely prepare the selected items for printing."),
+            DHistoryView::ErrorEntry);
+        return false;
+    }
+
+    if (!prepared->isValid() || prepared->isCanceled())
+    {
+        return false;
+    }
+
+    if (!prepared->excludedLogicalUrls().isEmpty() &&
+        (QMessageBox::question(
+             this, i18nc("@title:window", "Items Will Be Skipped"),
+             i18np("One selected item could not be prepared safely and will "
+                   "be skipped. Continue printing the remaining items?",
+                   "%1 selected items could not be prepared safely and will "
+                   "be skipped. Continue printing the remaining items?",
+                   prepared->excludedLogicalUrls().size())) != QMessageBox::Yes))
+    {
+        return false;
+    }
+
+    int placeholderCount = 0;
+    QSet<QString> preparedPaths;
+
+    for (const DItemAccessEntry& entry : prepared->entries())
+    {
+        placeholderCount += entry.placeholder ? 1 : 0;
+        preparedPaths.insert(QDir::cleanPath(entry.logicalUrl.toLocalFile()));
+    }
+
+    for (AdvPrintPhoto* const photo : d->settings->photos)
+    {
+        if (photo && preparedPaths.contains(
+                QDir::cleanPath(photo->m_url.toLocalFile())))
+        {
+            ++d->preparedPhotoCount;
+        }
+    }
+
+    if (d->preparedPhotoCount == 0)
+    {
+        return false;
+    }
+
+    if (placeholderCount > 0)
+    {
+        d->progressView->addEntry(
+            i18np("One protected item will be printed as its public placeholder.",
+                  "%1 protected items will be printed as their public placeholders.",
+                  placeholderCount),
+            DHistoryView::WarningEntry);
+    }
+
+    d->preparedAccess = prepared;
+    return true;
 }
 
 bool AdvPrintFinalPage::isComplete() const

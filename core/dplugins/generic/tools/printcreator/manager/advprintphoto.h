@@ -113,6 +113,7 @@ public:
 
     DImg&  thumbnail();
     DImg   loadPhoto();
+    QString formattedCaption() const;
     int    width();
     int    height();
     QSize& size();
