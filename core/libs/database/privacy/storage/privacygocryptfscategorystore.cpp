@@ -106,27 +106,6 @@ bool secureDirectory(const QString& path)
                                         QFileDevice::ExeOwner));
 }
 
-bool syncDirectory(const QString& path)
-{
-#ifdef Q_OS_UNIX
-    const QByteArray encoded = QFile::encodeName(path);
-    const int descriptor = ::open(encoded.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-
-    if (descriptor < 0)
-    {
-        return false;
-    }
-
-    const bool success = (::fsync(descriptor) == 0);
-    ::close(descriptor);
-
-    return success;
-#else
-    Q_UNUSED(path);
-    return true;
-#endif
-}
-
 bool readConfig(const QString& cipherDirectory, QByteArray* const config)
 {
     if (!config)
