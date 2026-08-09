@@ -31,6 +31,41 @@ void DigikamApp::setupView()
 
 void DigikamApp::setupViewConnections()
 {
+    d->privacyProxyMismatchTimer = new QTimer(this);
+    d->privacyProxyMismatchTimer->setInterval(250);
+    d->privacyProxyMismatchTimer->setSingleShot(true);
+
+    connect(AlbumManager::instance(),
+            &AlbumManager::signalPrivacyPublicProxyValidationFailed,
+            this,
+            [this](qlonglong imageId)
+            {
+                d->pendingPrivacyProxyMismatchIds.insert(imageId);
+                d->privacyProxyMismatchTimer->start();
+            });
+
+    connect(d->privacyProxyMismatchTimer, &QTimer::timeout,
+            this,
+            [this]()
+            {
+                const int count = d->pendingPrivacyProxyMismatchIds.size();
+                d->pendingPrivacyProxyMismatchIds.clear();
+
+                if (count <= 0)
+                {
+                    return;
+                }
+
+                Q_EMIT signalNotificationError(
+                    i18ncp("@info",
+                           "A public privacy placeholder changed unexpectedly "
+                           "and the protected item remains blocked.",
+                           "%1 public privacy placeholders changed unexpectedly "
+                           "and the protected items remain blocked.",
+                           count),
+                    DNotificationWidget::Warning);
+            });
+
     connect(d->view, SIGNAL(signalAlbumSelected(Album*)),
             this, SLOT(slotAlbumSelected(Album*)));
 

@@ -188,6 +188,15 @@ QStringList privacyRootIssueLines(const PrivacyRootIntegritySummary& root)
                         root.changedProxySizeCount);
     }
 
+    if (root.failedProxyValidationCount > 0)
+    {
+        lines << i18ncp(
+            "@info",
+            "One public privacy placeholder no longer matches its recorded safe copy.",
+            "%1 public privacy placeholders no longer match their recorded safe copies.",
+            root.failedProxyValidationCount);
+    }
+
     if (root.unexpectedPublicAssetCount > 0)
     {
         lines << i18ncp(
@@ -237,6 +246,7 @@ bool privacyStartupIssueIsSevere(const PrivacyRootIntegritySummary& root)
 {
     return ((root.state == PrivacyRootRuntimeState::IdentityMismatch) ||
             (root.unexpectedPublicAssetCount > 0) ||
+            (root.failedProxyValidationCount > 0) ||
             (root.missingProtectedObjectCount > 0) ||
             (root.changedProtectedObjectSizeCount > 0) ||
             (root.unresolvedTransactionCount > 0) ||

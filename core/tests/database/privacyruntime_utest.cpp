@@ -578,27 +578,39 @@ void PrivacyRuntimeTest::testOnDisplayProxyValidation()
     PrivacyRuntimeCoordinator runtime;
     QCOMPARE(runtime.initialize(snapshot, verifier, {}, integrity).state,
              PrivacyStartupState::Ready);
-    QVERIFY(runtime.publicProxyMatchesForDisplay(42, proxyPath));
-    QVERIFY(!runtime.publicProxyMatchesForDisplay(
-        42, directory.filePath(QLatin1String("copy.jpg"))));
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::Verified);
+    QCOMPARE(runtime.validatePublicProxyForDisplay(
+                 42, directory.filePath(QLatin1String("copy.jpg"))),
+             PrivacyPublicProxyDisplayResult::Denied);
+    QCOMPARE(runtime.rootSummary(rootUuid).failedProxyValidationCount, 0);
 
     const QByteArray changedBytes(proxyBytes.size(), 'z');
     QVERIFY(proxy.open(QIODevice::WriteOnly | QIODevice::Truncate));
     QCOMPARE(proxy.write(changedBytes), qint64(changedBytes.size()));
     proxy.close();
-    QVERIFY(!runtime.publicProxyMatchesForDisplay(42, proxyPath));
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::NewlyFailedValidation);
+    QCOMPARE(runtime.rootSummary(rootUuid).failedProxyValidationCount, 1);
+    QCOMPARE(runtime.report().roots.constFirst().failedProxyValidationCount, 1);
+    QVERIFY(!runtime.report().hasOnlyProxySizeIssues());
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::Denied);
 
     QVERIFY(proxy.open(QIODevice::WriteOnly | QIODevice::Truncate));
     QCOMPARE(proxy.write(proxyBytes), qint64(proxyBytes.size()));
     proxy.close();
-    QVERIFY(runtime.publicProxyMatchesForDisplay(42, proxyPath));
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::Verified);
+    QCOMPARE(runtime.rootSummary(rootUuid).failedProxyValidationCount, 0);
 
     const QString targetPath = directory.filePath(
         QLatin1String("exact-proxy-target"));
     QVERIFY(QFile::rename(proxyPath, targetPath));
     QVERIFY(QFile::link(targetPath, proxyPath));
     QVERIFY(QFileInfo(proxyPath).isSymLink());
-    QVERIFY(!runtime.publicProxyMatchesForDisplay(42, proxyPath));
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::NewlyFailedValidation);
 
     QVERIFY(QFile::remove(proxyPath));
     QVERIFY(QFile::copy(targetPath, proxyPath));
@@ -607,7 +619,8 @@ void PrivacyRuntimeTest::testOnDisplayProxyValidation()
     QVERIFY(QFile::link(directory.filePath(QLatin1String("real-album")),
                         directory.filePath(QLatin1String("album"))));
     QVERIFY(QFileInfo(directory.filePath(QLatin1String("album"))).isSymLink());
-    QVERIFY(!runtime.publicProxyMatchesForDisplay(42, proxyPath));
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::Denied);
 }
 
 void PrivacyRuntimeTest::testOfflineAndMismatchedRoot()

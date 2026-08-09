@@ -25,6 +25,11 @@
 #endif
 
 #include <QFileInfo>
+#include <QPointer>
+
+// C++ includes
+
+#include <functional>
 
 // KDE includes
 
@@ -50,8 +55,10 @@ class StartupPrivacySourceProvider final : public PrivacySourceProvider
 public:
 
     explicit StartupPrivacySourceProvider(
-        const QSharedPointer<PrivacyRuntimeCoordinator>& runtime)
-        : m_runtime(runtime)
+        const QSharedPointer<PrivacyRuntimeCoordinator>& runtime,
+        const std::function<void(qlonglong)>& validationFailed)
+        : m_runtime(runtime),
+          m_validationFailed(validationFailed)
     {
     }
 
@@ -105,9 +112,19 @@ public:
         if ((disposition == PrivacyPublicSourceDisposition::LockedProxy) &&
             !cacheNamespace.isEmpty())
         {
-            if (!m_runtime->publicProxyMatchesForDisplay(
-                    imageId, request.logicalFilePath))
+            const PrivacyPublicProxyDisplayResult validation =
+                m_runtime->validatePublicProxyForDisplay(
+                    imageId, request.logicalFilePath);
+
+            if (validation != PrivacyPublicProxyDisplayResult::Verified)
             {
+                if ((validation ==
+                     PrivacyPublicProxyDisplayResult::NewlyFailedValidation) &&
+                    m_validationFailed)
+                {
+                    m_validationFailed(imageId);
+                }
+
                 return PrivacySourceResult::denied(cacheNamespace);
             }
 
@@ -124,6 +141,7 @@ public:
 private:
 
     QSharedPointer<PrivacyRuntimeCoordinator> m_runtime;
+    std::function<void(qlonglong)>             m_validationFailed;
 };
 
 } // namespace
@@ -353,7 +371,27 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
     const PrivacyStartupReport privacyReport = PrivacyStartupRecovery::run();
     PrivacySourceResolver::setProvider(
         QSharedPointer<const PrivacySourceProvider>(
-            new StartupPrivacySourceProvider(PrivacyStartupRecovery::coordinator())));
+            new StartupPrivacySourceProvider(
+                PrivacyStartupRecovery::coordinator(),
+                [guardedManager = QPointer<AlbumManager>(this)](qlonglong imageId)
+                {
+                    if (!guardedManager)
+                    {
+                        return;
+                    }
+
+                    QMetaObject::invokeMethod(
+                        guardedManager.data(),
+                        [guardedManager, imageId]()
+                        {
+                            if (guardedManager)
+                            {
+                                Q_EMIT guardedManager->
+                                    signalPrivacyPublicProxyValidationFailed(imageId);
+                            }
+                        },
+                        Qt::QueuedConnection);
+                })));
 
     if (privacyReport.state == PrivacyStartupState::Degraded)
     {

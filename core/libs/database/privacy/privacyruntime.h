@@ -95,6 +95,7 @@ public:
     int protectedItemCount = 0;
     int missingProxyCount = 0;
     int changedProxySizeCount = 0;
+    int failedProxyValidationCount = 0;
     int unexpectedPublicAssetCount = 0;
     int missingProtectedObjectCount = 0;
     int changedProtectedObjectSizeCount = 0;
@@ -142,6 +143,13 @@ enum class PrivacyPublicSourceDisposition
     Unprotected = 1,
     LockedProxy = 2,
     Denied      = 3
+};
+
+enum class PrivacyPublicProxyDisplayResult
+{
+    Verified              = 1,
+    Denied                = 2,
+    NewlyFailedValidation = 3
 };
 
 enum class PrivacyRootRecoveryResult
@@ -199,8 +207,8 @@ public:
     PrivacyPublicSourceDisposition publicSourceDisposition(qlonglong imageId) const;
     QString publicSourceCacheNamespace(qlonglong imageId) const;
     qlonglong expectedPublicProxySize(qlonglong imageId) const;
-    bool publicProxyMatchesForDisplay(qlonglong imageId,
-                                      const QString& absolutePath) const;
+    PrivacyPublicProxyDisplayResult validatePublicProxyForDisplay(
+        qlonglong imageId, const QString& absolutePath);
 
     bool setCategoryUnlocked(const QString& categoryUuid, bool unlocked);
     bool isCategoryUnlocked(const QString& categoryUuid) const;

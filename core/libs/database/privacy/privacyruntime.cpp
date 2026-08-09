@@ -748,6 +748,7 @@ void clearArtifactCounts(PrivacyRootIntegritySummary* summary)
 
     summary->missingProxyCount = 0;
     summary->changedProxySizeCount = 0;
+    summary->failedProxyValidationCount = 0;
     summary->unexpectedPublicAssetCount = 0;
     summary->missingProtectedObjectCount = 0;
     summary->changedProtectedObjectSizeCount = 0;
@@ -996,6 +997,7 @@ bool PrivacyRootIntegritySummary::hasReportableIssues(
     return ((state != PrivacyRootRuntimeState::VerifiedAvailable) ||
             (missingProxyCount > 0) ||
             (includeProxySizeChanges && (changedProxySizeCount > 0)) ||
+            (failedProxyValidationCount > 0) ||
             (unexpectedPublicAssetCount > 0) ||
             (missingProtectedObjectCount > 0) ||
             (changedProtectedObjectSizeCount > 0) ||
@@ -1073,6 +1075,7 @@ public:
     QHash<QString, qlonglong>               imageIdsByItemUuid;
     QSet<QString>                           conflictingItemUuids;
     QHash<QString, QSet<QString> >          proxyIssueItemsByRoot;
+    QHash<QString, QSet<QString> >          displayProxyIssueItemsByRoot;
     QHash<QString, QSet<QString> >          originalIssueItemsByRoot;
     QSet<QString>                           conflictingRootUuids;
     QSet<qlonglong>                         compatibilityExposedItems;
@@ -1121,6 +1124,23 @@ public:
                     reported = summary;
                     break;
                 }
+            }
+        }
+    }
+
+    void refreshDisplayProxyIssueCount(const QString& rootUuid)
+    {
+        PrivacyRootIntegritySummary summary = rootSummaries.value(rootUuid);
+        summary.failedProxyValidationCount =
+            displayProxyIssueItemsByRoot.value(rootUuid).size();
+        rootSummaries.insert(rootUuid, summary);
+
+        for (PrivacyRootIntegritySummary& reported : report.roots)
+        {
+            if (reported.rootUuid == rootUuid)
+            {
+                reported = summary;
+                break;
             }
         }
     }
@@ -1459,6 +1479,7 @@ PrivacyStartupReport PrivacyRuntimeCoordinator::initialize(
     d->imageIdsByItemUuid.clear();
     d->conflictingItemUuids.clear();
     d->proxyIssueItemsByRoot.clear();
+    d->displayProxyIssueItemsByRoot.clear();
     d->originalIssueItemsByRoot.clear();
     d->conflictingRootUuids = conflictingRootUuids;
     d->compatibilityExposedItems.clear();
@@ -1790,6 +1811,7 @@ void PrivacyRuntimeCoordinator::reset()
     d->imageIdsByItemUuid.clear();
     d->conflictingItemUuids.clear();
     d->proxyIssueItemsByRoot.clear();
+    d->displayProxyIssueItemsByRoot.clear();
     d->originalIssueItemsByRoot.clear();
     d->conflictingRootUuids.clear();
     d->compatibilityExposedItems.clear();
@@ -1891,19 +1913,26 @@ qlonglong PrivacyRuntimeCoordinator::expectedPublicProxySize(qlonglong imageId) 
     return d->items.value(imageId).expectedProxySize;
 }
 
-bool PrivacyRuntimeCoordinator::publicProxyMatchesForDisplay(
-    qlonglong imageId, const QString& absolutePath) const
+PrivacyPublicProxyDisplayResult
+PrivacyRuntimeCoordinator::validatePublicProxyForDisplay(
+    qlonglong imageId, const QString& absolutePath)
 {
     qlonglong expectedSize = -1;
     QByteArray expectedSha256;
     QString expectedAbsolutePath;
+    QString itemUuid;
+    QString publicRootUuid;
+    QString publicRelativePath;
+    qlonglong itemGeneration = -1;
+    int presentationVersion = -1;
+    quint64 rootEpoch = 0;
 
     {
         QReadLocker locker(&d->lock);
 
         if (!d->initialized || (imageId <= 0))
         {
-            return false;
+            return PrivacyPublicProxyDisplayResult::Denied;
         }
 
         const auto itemIt = d->items.constFind(imageId);
@@ -1917,12 +1946,18 @@ bool PrivacyRuntimeCoordinator::publicProxyMatchesForDisplay(
             d->proxyIssueItemsByRoot.value(itemIt->publicRootUuid).contains(
                 itemIt->item.uuid))
         {
-            return false;
+            return PrivacyPublicProxyDisplayResult::Denied;
         }
 
         expectedSize = itemIt->expectedProxySize;
         expectedSha256 = QByteArray::fromHex(
             itemIt->item.expectedProxyHash.toLatin1());
+        itemUuid = itemIt->item.uuid;
+        publicRootUuid = itemIt->publicRootUuid;
+        publicRelativePath = itemIt->publicRelativePath;
+        itemGeneration = itemIt->item.generation;
+        presentationVersion = itemIt->item.presentationVersion;
+        rootEpoch = d->rootEpochs.value(publicRootUuid);
 
         int rootCount = 0;
 
@@ -1938,19 +1973,68 @@ bool PrivacyRuntimeCoordinator::publicProxyMatchesForDisplay(
 
         if ((rootCount != 1) || itemIt->publicRelativePath.isEmpty())
         {
-            return false;
+            return PrivacyPublicProxyDisplayResult::Denied;
         }
     }
 
-    QByteArray actualSha256;
+    if ((QDir::cleanPath(absolutePath) !=
+         QDir::cleanPath(expectedAbsolutePath)) ||
+        (expectedSha256.size() !=
+         QCryptographicHash::hashLength(QCryptographicHash::Sha256)))
+    {
+        return PrivacyPublicProxyDisplayResult::Denied;
+    }
 
-    return ((QDir::cleanPath(absolutePath) ==
-             QDir::cleanPath(expectedAbsolutePath)) &&
-            (expectedSha256.size() ==
-             QCryptographicHash::hashLength(QCryptographicHash::Sha256)) &&
-            stablePublicProxySha256(absolutePath, expectedSize,
-                                    &actualSha256) &&
-            (actualSha256 == expectedSha256));
+    QByteArray actualSha256;
+    const bool verified = stablePublicProxySha256(
+                              absolutePath, expectedSize, &actualSha256) &&
+                          (actualSha256 == expectedSha256);
+
+    QWriteLocker locker(&d->lock);
+    const auto itemIt = d->items.constFind(imageId);
+
+    if (!d->initialized || (itemIt == d->items.constEnd()) ||
+        itemIt->mappingConflict ||
+        d->conflictingItemUuids.contains(itemUuid) ||
+        (itemIt->item.uuid != itemUuid) ||
+        (itemIt->item.generation != itemGeneration) ||
+        (itemIt->item.presentationVersion != presentationVersion) ||
+        (QByteArray::fromHex(itemIt->item.expectedProxyHash.toLatin1()) !=
+         expectedSha256) ||
+        (itemIt->expectedProxySize != expectedSize) ||
+        (itemIt->publicRootUuid != publicRootUuid) ||
+        (itemIt->publicRelativePath != publicRelativePath) ||
+        (d->rootEpochs.value(publicRootUuid) != rootEpoch) ||
+        (d->rootStates.value(publicRootUuid,
+                             PrivacyRootRuntimeState::Unknown) !=
+         PrivacyRootRuntimeState::VerifiedAvailable) ||
+        d->proxyIssueItemsByRoot.value(publicRootUuid).contains(itemUuid))
+    {
+        return PrivacyPublicProxyDisplayResult::Denied;
+    }
+
+    QSet<QString>& displayIssues = d->displayProxyIssueItemsByRoot[publicRootUuid];
+    const bool alreadyReported = displayIssues.contains(itemUuid);
+
+    if (verified)
+    {
+        displayIssues.remove(itemUuid);
+    }
+    else
+    {
+        displayIssues.insert(itemUuid);
+    }
+
+    d->refreshDisplayProxyIssueCount(publicRootUuid);
+
+    if (verified)
+    {
+        return PrivacyPublicProxyDisplayResult::Verified;
+    }
+
+    return alreadyReported
+         ? PrivacyPublicProxyDisplayResult::Denied
+         : PrivacyPublicProxyDisplayResult::NewlyFailedValidation;
 }
 
 bool PrivacyRuntimeCoordinator::setCategoryUnlocked(const QString& categoryUuid,
@@ -2351,7 +2435,9 @@ bool PrivacyRuntimeCoordinator::publishProtectedItem(
     for (const QString& rootUuid : std::as_const(facts.rootUuids))
     {
         d->proxyIssueItemsByRoot[rootUuid].remove(item.uuid);
+        d->displayProxyIssueItemsByRoot[rootUuid].remove(item.uuid);
         d->originalIssueItemsByRoot[rootUuid].remove(item.uuid);
+        d->refreshDisplayProxyIssueCount(rootUuid);
     }
 
     d->refreshProtectedRootFacts(facts.rootUuids);
@@ -2618,8 +2704,10 @@ bool PrivacyRuntimeCoordinator::publishProtectedItemForProtectRecovery(
         d->rootSummaries.insert(rootUuid, summary);
         d->proxyIssueItemsByRoot.insert(
             rootUuid, inspections.value(rootUuid).proxyIssueItemUuids);
+        d->displayProxyIssueItemsByRoot[rootUuid].remove(item.uuid);
         d->originalIssueItemsByRoot.insert(
             rootUuid, inspections.value(rootUuid).originalIssueItemUuids);
+        d->refreshDisplayProxyIssueCount(rootUuid);
     }
 
     d->refreshProtectedRootFacts(facts.rootUuids);
@@ -2999,7 +3087,9 @@ bool PrivacyRuntimeCoordinator::removeProtectedItemInternal(
     for (const QString& rootUuid : std::as_const(facts.rootUuids))
     {
         d->proxyIssueItemsByRoot[rootUuid].remove(item.uuid);
+        d->displayProxyIssueItemsByRoot[rootUuid].remove(item.uuid);
         d->originalIssueItemsByRoot[rootUuid].remove(item.uuid);
+        d->refreshDisplayProxyIssueCount(rootUuid);
     }
 
     d->refreshProtectedRootFacts(facts.rootUuids);
@@ -3387,6 +3477,7 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::registerAlbumRoot(
             summary.state    = PrivacyRootRuntimeState::Recovering;
             d->rootSummaries.insert(root.uuid, summary);
             d->proxyIssueItemsByRoot.insert(root.uuid, QSet<QString>());
+            d->displayProxyIssueItemsByRoot.insert(root.uuid, QSet<QString>());
             d->originalIssueItemsByRoot.insert(root.uuid, QSet<QString>());
             recoveryUuid = root.uuid;
         }
@@ -3476,6 +3567,7 @@ bool PrivacyRuntimeCoordinator::unregisterUnreferencedAlbumRoot(
     d->rootEpochs.remove(rootUuid);
     d->rootSummaries.remove(rootUuid);
     d->proxyIssueItemsByRoot.remove(rootUuid);
+    d->displayProxyIssueItemsByRoot.remove(rootUuid);
     d->originalIssueItemsByRoot.remove(rootUuid);
     d->conflictingRootUuids.remove(rootUuid);
 
@@ -3883,6 +3975,8 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
         inspection.summary.state = PrivacyRootRuntimeState::VerifiedAvailable;
         inspection.summary.unresolvedTransactionCount = 0;
         inspection.summary.compatibilityExposureCount = 0;
+        inspection.summary.failedProxyValidationCount =
+            d->displayProxyIssueItemsByRoot.value(rootUuid).size();
         inspection.summary.identityMismatch = false;
         d->rootSummaries.insert(rootUuid, inspection.summary);
         d->proxyIssueItemsByRoot.insert(rootUuid, inspection.proxyIssueItemUuids);

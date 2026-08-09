@@ -23,6 +23,7 @@
 #include <QMap>
 #include <QPointer>
 #include <QScopedPointer>
+#include <QSet>
 #include <QString>
 #include <QAction>
 #include <QActionGroup>
@@ -207,6 +208,8 @@ public:
     bool                                autoShowZoomToolTip                     = false;
     bool                                validIccPath                            = true;
     bool                                terminating                             = false;
+    QTimer*                             privacyProxyMismatchTimer               = nullptr;
+    QSet<qlonglong>                     pendingPrivacyProxyMismatchIds;
 
     QMenu*                              cameraMenu                              = nullptr;
     QMenu*                              usbMediaMenu                            = nullptr;
