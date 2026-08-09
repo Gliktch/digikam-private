@@ -173,6 +173,11 @@ target_include_directories(gui_digikam_obj
                            ${DIGIKAM_TARGET_INCLUDES}
 )
 
+target_link_libraries(gui_digikam_obj
+                      PRIVATE
+                      Qt${QT_VERSION_MAJOR}::Concurrent
+)
+
 ### digiKam GUI shared library objects declaration ##############################################################################
 
 set(DIGIKAMGUI_OBJECTS
@@ -261,6 +266,7 @@ target_link_libraries(digikamgui
                       PRIVATE
 
                       Qt${QT_VERSION_MAJOR}::Core
+                      Qt${QT_VERSION_MAJOR}::Concurrent
                       Qt${QT_VERSION_MAJOR}::Gui
                       Qt${QT_VERSION_MAJOR}::Widgets
                       Qt${QT_VERSION_MAJOR}::Sql

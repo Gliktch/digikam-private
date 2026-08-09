@@ -20,8 +20,104 @@
 
 #include "itemiconview_p.h"
 
+// C++ includes
+
+#include <utility>
+
+// Qt includes
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFutureWatcher>
+#include <QHash>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QPointer>
+#include <QProgressDialog>
+#include <QStringList>
+#include <QWaitCondition>
+#include <QtConcurrent>
+
+// Local includes
+
+#include "privacythreadimagestillitemtransactionowner.h"
+
 namespace Digikam
 {
+
+namespace
+{
+
+class PrivacyAliasAcknowledgementState
+{
+public:
+
+    QMutex mutex;
+    QWaitCondition changed;
+    bool completed = false;
+    bool abandoned = false;
+    bool accepted = false;
+    QMetaObject::Connection shutdownConnection;
+};
+
+QString privacyActionFailureText(
+    const PrivacyStillItemTransactionResult& result,
+    const QString& fallback)
+{
+    switch (result.status)
+    {
+        case PrivacyStillItemTransactionStatus::AuthenticationRequired:
+        {
+            return i18nc("@info", "The category password was not accepted.");
+        }
+
+        case PrivacyStillItemTransactionStatus::CategoryUnavailable:
+        {
+            return result.detail.isEmpty() ? fallback : result.detail;
+        }
+
+        case PrivacyStillItemTransactionStatus::AssociatedAssetSetUnsupported:
+        {
+            return i18nc("@info",
+                         "This item has associated files that are not supported yet.");
+        }
+
+        case PrivacyStillItemTransactionStatus::PreflightRejected:
+        {
+            return i18nc("@info",
+                         "The related-file safety check did not pass.");
+        }
+
+        case PrivacyStillItemTransactionStatus::SourceChanged:
+        {
+            return i18nc("@info",
+                         "The item or its related files changed during the safety check.");
+        }
+
+        case PrivacyStillItemTransactionStatus::RootUnavailable:
+        {
+            return i18nc("@info",
+                         "The collection storage is no longer safely available.");
+        }
+
+        case PrivacyStillItemTransactionStatus::RecoveryRequired:
+        case PrivacyStillItemTransactionStatus::CleanupPending:
+        {
+            return i18nc("@info",
+                         "The action could not finish safely. Restart digiKam to reconcile it.");
+        }
+
+        default:
+        {
+            return fallback;
+        }
+    }
+}
+
+} // namespace
 
 void ItemIconView::setHostWindowActions(const HostActionsMap& actions)
 {
@@ -322,6 +418,125 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
 
     // --------------------------------------------------------
 
+    QMenu* const privacyMenu = new QMenu(
+        i18nc("@action: private-media workflow", "Privacy"));
+    privacyMenu->setIcon(QIcon::fromTheme(QLatin1String("object-locked")));
+    QAction* privacyUnprotectAction = nullptr;
+    QAction* privacyResumeAction = nullptr;
+    bool privacyResumeRequiresFreshAuthentication = false;
+    PrivacyStillItemActionContext privacyActionContext;
+    QHash<const QAction*, PrivacyCategory> privacyProtectActions;
+    const QSharedPointer<PrivacyThreadImageIOStillItemTransactionOwner> privacyOwner =
+        PrivacyThreadImageIOStillItemTransactionOwner::current();
+    const bool oneStill = privacyOwner &&
+                          (selectedImageIds.size() == 1) &&
+                          (selectedImageIds.constFirst() == info.id()) &&
+                          (info.category() == DatabaseItem::Image);
+
+    if (!oneStill)
+    {
+        QAction* const unavailable = privacyMenu->addAction(
+            i18nc("@action: private-media workflow", "Select One Still Image"));
+        unavailable->setEnabled(false);
+    }
+    else
+    {
+        privacyActionContext = privacyOwner->actionContextForImage(info.id());
+
+        if (privacyActionContext.availability ==
+            PrivacyStillItemActionAvailability::Unprotectable)
+        {
+            privacyUnprotectAction = privacyMenu->addAction(
+                QIcon::fromTheme(QLatin1String("object-unlocked")),
+                i18nc("@action: restore a protected item", "Unprotect from %1...",
+                      privacyActionContext.protectedCategory.name));
+        }
+        else if ((privacyActionContext.availability ==
+                  PrivacyStillItemActionAvailability::ResumeProtectable) ||
+                 (privacyActionContext.availability ==
+                  PrivacyStillItemActionAvailability::ResumeUnprotectable))
+        {
+            privacyResumeRequiresFreshAuthentication =
+                (privacyActionContext.availability ==
+                 PrivacyStillItemActionAvailability::ResumeUnprotectable);
+            privacyResumeAction = privacyMenu->addAction(
+                QIcon::fromTheme(
+                    privacyResumeRequiresFreshAuthentication
+                        ? QLatin1String("object-unlocked")
+                        : QLatin1String("object-locked")),
+                privacyResumeRequiresFreshAuthentication
+                    ? i18nc("@action: resume restoring a protected item",
+                            "Resume Unprotecting from %1...",
+                            privacyActionContext.protectedCategory.name)
+                    : i18nc("@action: resume protecting an item",
+                            "Resume Protecting in %1...",
+                            privacyActionContext.protectedCategory.name));
+        }
+        else if (privacyActionContext.availability ==
+                 PrivacyStillItemActionAvailability::ProtectedUnavailable)
+        {
+            QString reason = i18nc("@item:inmenu", "Recovery Required");
+
+            if (privacyActionContext.publicRootState ==
+                PrivacyRootRuntimeState::Offline)
+            {
+                reason = i18nc("@item:inmenu", "Storage Offline");
+            }
+            else if (privacyActionContext.publicRootState ==
+                     PrivacyRootRuntimeState::IdentityMismatch)
+            {
+                reason = i18nc("@item:inmenu", "Storage Identity Mismatch");
+            }
+
+            QAction* const unavailable = privacyMenu->addAction(
+                i18nc("@action: private-media workflow",
+                      "Protected in %1 - %2",
+                      privacyActionContext.protectedCategory.name, reason));
+            unavailable->setEnabled(false);
+        }
+        else if (privacyActionContext.availability ==
+                 PrivacyStillItemActionAvailability::Protectable)
+        {
+            if (!info.isLocationAvailable())
+            {
+                QAction* const unavailable = privacyMenu->addAction(
+                    i18nc("@action: private-media workflow", "Item Unavailable"));
+                unavailable->setEnabled(false);
+            }
+            else
+            {
+                for (const PrivacyCategory& category :
+                     privacyActionContext.protectCategories)
+                {
+                    QAction* const action = privacyMenu->addAction(
+                        QIcon::fromTheme(QLatin1String("object-locked")),
+                        i18nc("@action: protect an item in a category", "Protect in %1...",
+                              category.name));
+                    privacyProtectActions.insert(action, category);
+                }
+
+                if (privacyActionContext.protectCategories.isEmpty())
+                {
+                    QAction* const unavailable = privacyMenu->addAction(
+                        i18nc("@action: private-media workflow",
+                              "No Active Casual Privacy Categories"));
+                    unavailable->setEnabled(false);
+                }
+            }
+        }
+        else
+        {
+            QAction* const unavailable = privacyMenu->addAction(
+                i18nc("@action: private-media workflow", "Privacy State Unavailable"));
+            unavailable->setEnabled(false);
+        }
+    }
+
+    cmHelper.addSubMenu(privacyMenu);
+    cmHelper.addSeparator();
+
+    // --------------------------------------------------------
+
     QMenu* const fmenu = new QMenu(i18nc("@action: face workflow", "Faces"));
     fmenu->setIcon(QIcon::fromTheme(QLatin1String("edit-image-face-show")));
     fmenu->addAction(DigikamApp::instance()->actionCollection()->action(QLatin1String("image_scan_for_faces")));
@@ -429,10 +644,416 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
     // --------------------------------------------------------
 
     const QAction* const choice = cmHelper.exec(event->globalPos());
+    const auto watchPrivacyAction =
+        [this](const QFuture<PrivacyStillItemTransactionResult>& future,
+               QProgressDialog* const progress,
+               const QString& failureTitle,
+               const QString& failureText)
+        {
+            auto* const watcher =
+                new QFutureWatcher<PrivacyStillItemTransactionResult>(this);
+
+            connect(watcher,
+                    &QFutureWatcher<PrivacyStillItemTransactionResult>::finished,
+                    this,
+                    [this, watcher, progress, failureTitle, failureText]()
+                    {
+                        const PrivacyStillItemTransactionResult result =
+                            watcher->result();
+                        progress->deleteLater();
+                        watcher->deleteLater();
+
+                        if (!result.succeeded() &&
+                            (result.status !=
+                             PrivacyStillItemTransactionStatus::AcknowledgementRequired))
+                        {
+                            QMessageBox message(
+                                QMessageBox::Warning, failureTitle,
+                                privacyActionFailureText(result, failureText),
+                                QMessageBox::Ok, this);
+
+                            if (!result.detail.isEmpty())
+                            {
+                                message.setDetailedText(result.detail);
+                            }
+
+                            message.exec();
+                        }
+                        else if (result.succeeded())
+                        {
+                            d->iconView->viewport()->update();
+                            d->tableView->update();
+                            slotNotificationError(
+                                (result.status ==
+                                 PrivacyStillItemTransactionStatus::Protected)
+                                    ? i18nc("@info", "The item is now protected.")
+                                    : i18nc("@info", "The item is now unprotected."),
+                                DNotificationWidget::Information);
+                        }
+                    });
+            watcher->setFuture(future);
+        };
 
     if (choice && (choice == viewAction))
     {
         slotTogglePreviewMode(info);
+    }
+    else if (choice && privacyOwner && (choice == privacyResumeAction))
+    {
+        QString password;
+        bool accepted = true;
+        const bool passwordRequired =
+            privacyResumeRequiresFreshAuthentication ||
+            !privacyOwner->categoryIsUnlocked(
+                privacyActionContext.protectedCategory.uuid);
+
+        if (passwordRequired)
+        {
+            password = QInputDialog::getText(
+                this,
+                i18nc("@title:window", "Resume Private Item Recovery"),
+                i18nc("@label", "Password for %1:",
+                      privacyActionContext.protectedCategory.name),
+                QLineEdit::Password, QString(), &accepted);
+        }
+
+        if (accepted)
+        {
+            auto* const progress = new QProgressDialog(
+                privacyResumeRequiresFreshAuthentication
+                    ? i18nc("@info:progress",
+                            "Resuming restoration of the protected original...")
+                    : i18nc("@info:progress",
+                            "Resuming protection of the selected item..."),
+                QString(), 0, 0, this);
+            progress->setWindowTitle(
+                i18nc("@title:window", "Recovering Private Item"));
+            progress->setCancelButton(nullptr);
+            progress->setWindowModality(Qt::WindowModal);
+            progress->setMinimumDuration(0);
+            progress->show();
+
+            const QString transactionUuid =
+                privacyActionContext.recoveryTransactionUuid;
+            const QSharedPointer<QString> passwordSecret =
+                QSharedPointer<QString>::create(std::move(password));
+            QFuture<PrivacyStillItemTransactionResult> future =
+                QtConcurrent::run(
+                    [privacyOwner, imageId = info.id(), transactionUuid,
+                     passwordSecret]()
+                    {
+                        PrivacyStillItemTransactionResult result;
+
+                        try
+                        {
+                            result = privacyOwner->resume(
+                                imageId, transactionUuid, *passwordSecret);
+                        }
+                        catch (...)
+                        {
+                            result.status =
+                                PrivacyStillItemTransactionStatus::RecoveryRequired;
+                            result.detail.clear();
+                        }
+
+                        passwordSecret->fill(QChar());
+                        return result;
+                    });
+            watchPrivacyAction(
+                future, progress,
+                i18nc("@title:window", "Private Recovery Failed"),
+                i18nc("@info", "The private item could not be recovered."));
+        }
+
+        password.fill(QChar());
+    }
+    else if (choice && privacyOwner && (choice == privacyUnprotectAction))
+    {
+        const bool confirmed = (QMessageBox::warning(
+            this,
+            i18nc("@title:window", "Remove Privacy Protection"),
+            i18nc("@info",
+                  "This will restore the original file to its public collection "
+                  "path and remove its privacy protection. Continue?"),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel) == QMessageBox::Yes);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        bool accepted = false;
+        QString password = QInputDialog::getText(
+            this,
+            i18nc("@title:window", "Unprotect Private Item"),
+            i18nc("@label", "Password for the private category:"),
+            QLineEdit::Password, QString(), &accepted);
+
+        if (accepted)
+        {
+            auto* const progress = new QProgressDialog(
+                i18nc("@info:progress", "Restoring the protected original..."),
+                QString(), 0, 0, this);
+            progress->setWindowTitle(i18nc("@title:window", "Unprotecting Item"));
+            progress->setCancelButton(nullptr);
+            progress->setWindowModality(Qt::WindowModal);
+            progress->setMinimumDuration(0);
+            progress->show();
+
+            const QSharedPointer<QString> passwordSecret =
+                QSharedPointer<QString>::create(std::move(password));
+            QFuture<PrivacyStillItemTransactionResult> future = QtConcurrent::run(
+                [privacyOwner, info, passwordSecret]()
+                {
+                    PrivacyStillItemTransactionResult result;
+
+                    try
+                    {
+                        result = privacyOwner->unprotect(info, *passwordSecret);
+                    }
+                    catch (...)
+                    {
+                        result.status =
+                            PrivacyStillItemTransactionStatus::RecoveryRequired;
+                        result.detail.clear();
+                    }
+
+                    passwordSecret->fill(QChar());
+                    return result;
+                });
+            watchPrivacyAction(
+                future, progress,
+                i18nc("@title:window", "Unprotect Failed"),
+                i18nc("@info", "The item could not be unprotected."));
+        }
+
+        password.fill(QChar());
+    }
+    else if (choice && privacyOwner && privacyProtectActions.contains(choice))
+    {
+        const PrivacyCategory category = privacyProtectActions.value(
+            choice);
+        const bool confirmed = (QMessageBox::warning(
+            this,
+            i18nc("@title:window", "Protect Private Item"),
+            i18nc("@info",
+                  "digiKam will replace the public file with a privacy-safe "
+                  "display proxy and invalidate its clear cached previews. "
+                  "Rebuilding privacy-safe views may take a moment. Continue?"),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel) == QMessageBox::Yes);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        QString password;
+        bool accepted = true;
+
+        if (!privacyOwner->categoryIsUnlocked(category.uuid))
+        {
+            password = QInputDialog::getText(
+                this,
+                i18nc("@title:window", "Unlock Private Category"),
+                i18nc("@label", "Password for %1:", category.name),
+                QLineEdit::Password, QString(), &accepted);
+        }
+
+        if (accepted)
+        {
+            auto* const progress = new QProgressDialog(
+                i18nc("@info:progress", "Protecting the selected item..."),
+                QString(), 0, 0, this);
+            progress->setWindowTitle(i18nc("@title:window", "Protecting Item"));
+            progress->setCancelButton(nullptr);
+            progress->setWindowModality(Qt::WindowModal);
+            progress->setMinimumDuration(0);
+            progress->show();
+
+            const QPointer<ItemIconView> view(this);
+            const QPointer<QProgressDialog> progressGuard(progress);
+            const QSharedPointer<QString> passwordSecret =
+                QSharedPointer<QString>::create(std::move(password));
+            QFuture<PrivacyStillItemTransactionResult> future = QtConcurrent::run(
+                [privacyOwner, info, category, view, progressGuard,
+                 passwordSecret]()
+                {
+                    PrivacyStillItemTransactionResult result;
+
+                    try
+                    {
+                        result = privacyOwner->protect(
+                                info, category.uuid, *passwordSecret,
+                                [view, progressGuard]
+                                (const PrivacyProtectPreflightResult& preflight)
+                            {
+                                if (!view)
+                                {
+                                    return false;
+                                }
+
+                                const QSharedPointer<
+                                    PrivacyAliasAcknowledgementState> state =
+                                        QSharedPointer<
+                                            PrivacyAliasAcknowledgementState>::create();
+                                QCoreApplication* const application =
+                                    QCoreApplication::instance();
+
+                                if (!application)
+                                {
+                                    return false;
+                                }
+
+                                state->shutdownConnection = QObject::connect(
+                                    application, &QCoreApplication::aboutToQuit,
+                                    application,
+                                    [state]()
+                                    {
+                                        QMutexLocker locker(&state->mutex);
+                                        state->abandoned = true;
+                                        state->completed = true;
+                                        state->changed.wakeAll();
+                                    },
+                                    Qt::DirectConnection);
+                                const bool invoked = QMetaObject::invokeMethod(
+                                    view.data(),
+                                    [state, preflight, view, progressGuard]()
+                                    {
+                                        {
+                                            QMutexLocker locker(&state->mutex);
+
+                                            if (state->abandoned)
+                                            {
+                                                state->completed = true;
+                                                state->changed.wakeAll();
+                                                return;
+                                            }
+                                        }
+
+                                        bool accepted = false;
+
+                                        if (view)
+                                        {
+                                            if (progressGuard)
+                                            {
+                                                progressGuard->hide();
+                                            }
+
+                                            const int warningCount =
+                                                preflight.bridge.items.isEmpty()
+                                                    ? 0
+                                                    : preflight.bridge.items.constFirst()
+                                                          .inventory.exposureWarnings.size();
+                                            QMessageBox message(
+                                                QMessageBox::Warning,
+                                                i18nc("@title:window",
+                                                      "Related Copies Detected"),
+                                                i18ncp(
+                                                    "@info",
+                                                    "One related copy may remain publicly accessible. "
+                                                    "Protect this item anyway?",
+                                                    "%1 related copies may remain publicly accessible. "
+                                                    "Protect this item anyway?",
+                                                    warningCount),
+                                                QMessageBox::Yes | QMessageBox::Cancel,
+                                                view.data());
+                                            message.setDefaultButton(
+                                                QMessageBox::Cancel);
+                                            QStringList aliasPaths;
+
+                                            if (!preflight.bridge.items.isEmpty())
+                                            {
+                                                const auto& warnings =
+                                                    preflight.bridge.items.constFirst()
+                                                        .inventory.exposureWarnings;
+
+                                                for (const auto& warning : warnings)
+                                                {
+                                                    aliasPaths << QDir(
+                                                        warning.alias.root.absolutePath)
+                                                        .filePath(
+                                                            warning.alias.relativePath);
+                                                }
+                                            }
+
+                                            aliasPaths.sort(Qt::CaseSensitive);
+                                            aliasPaths.removeDuplicates();
+
+                                            if (!aliasPaths.isEmpty())
+                                            {
+                                                message.setDetailedText(
+                                                    aliasPaths.join(QLatin1Char('\n')));
+                                            }
+
+                                            accepted = (message.exec() ==
+                                                        QMessageBox::Yes);
+
+                                            if (progressGuard)
+                                            {
+                                                progressGuard->show();
+                                            }
+                                        }
+
+                                        QMutexLocker locker(&state->mutex);
+
+                                        if (!state->abandoned)
+                                        {
+                                            state->accepted = accepted;
+                                        }
+
+                                        state->completed = true;
+                                        state->changed.wakeAll();
+                                    },
+                                    Qt::QueuedConnection);
+
+                                if (!invoked)
+                                {
+                                    QObject::disconnect(
+                                        state->shutdownConnection);
+                                    return false;
+                                }
+
+                                QMutexLocker locker(&state->mutex);
+
+                                while (!state->completed)
+                                {
+                                    if (QCoreApplication::closingDown() || !view)
+                                    {
+                                        state->abandoned = true;
+                                        locker.unlock();
+                                        QObject::disconnect(
+                                            state->shutdownConnection);
+                                        return false;
+                                    }
+
+                                    state->changed.wait(&state->mutex, 100);
+                                }
+
+                                const bool accepted = state->accepted;
+                                locker.unlock();
+                                QObject::disconnect(state->shutdownConnection);
+                                return accepted;
+                            });
+                    }
+                    catch (...)
+                    {
+                        result.status =
+                            PrivacyStillItemTransactionStatus::RecoveryRequired;
+                        result.detail.clear();
+                    }
+
+                    passwordSecret->fill(QChar());
+                    return result;
+                });
+            watchPrivacyAction(
+                future, progress,
+                i18nc("@title:window", "Protect Failed"),
+                i18nc("@info", "The item could not be protected."));
+        }
+
+        password.fill(QChar());
     }
 }
 

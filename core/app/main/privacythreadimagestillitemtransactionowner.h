@@ -10,27 +10,79 @@
 
 #pragma once
 
+// C++ includes
+
+#include <functional>
+
 // Qt includes
 
+#include <QList>
 #include <QScopedPointer>
 #include <QSharedPointer>
 
 // Local includes
 
+#include "digikam_export.h"
+#include "privacyprotectpreflight.h"
 #include "privacyruntime.h"
+#include "privacystillitemtransaction.h"
 
 namespace Digikam
 {
+
+class ItemInfo;
+
+enum class PrivacyStillItemActionAvailability
+{
+    Unavailable,
+    Protectable,
+    Unprotectable,
+    ResumeProtectable,
+    ResumeUnprotectable,
+    ProtectedUnavailable
+};
+
+class PrivacyStillItemActionContext
+{
+public:
+
+    PrivacyStillItemActionAvailability availability =
+        PrivacyStillItemActionAvailability::Unavailable;
+    PrivacyCategory protectedCategory;
+    QList<PrivacyCategory> protectCategories;
+    PrivacyRootRuntimeState publicRootState = PrivacyRootRuntimeState::Unknown;
+    QString recoveryTransactionUuid;
+};
 
 class PrivacyThreadImageIOStillItemTransactionOwner final
     : public PrivacyTransactionRecovery
 {
 public:
 
-    static QSharedPointer<const PrivacyTransactionRecovery> create(
+    using ProtectAcknowledgement =
+        std::function<bool(const PrivacyProtectPreflightResult&)>;
+
+    static DIGIKAM_GUI_EXPORT QSharedPointer<const PrivacyTransactionRecovery> create(
         PrivacyRuntimeCoordinator& runtime);
+    static QSharedPointer<PrivacyThreadImageIOStillItemTransactionOwner> current();
 
     ~PrivacyThreadImageIOStillItemTransactionOwner() override;
+
+    PrivacyStillItemActionContext actionContextForImage(qlonglong imageId) const;
+    bool categoryIsUnlocked(const QString& categoryUuid) const;
+
+    PrivacyStillItemTransactionResult protect(
+        const ItemInfo& info,
+        const QString& categoryUuid,
+        const QString& passwordText,
+        const ProtectAcknowledgement& acknowledgeWarnings = {});
+    PrivacyStillItemTransactionResult unprotect(
+        const ItemInfo& info,
+        const QString& passwordText);
+    PrivacyStillItemTransactionResult resume(
+        qlonglong imageId,
+        const QString& transactionUuid,
+        const QString& passwordText);
 
     PrivacyRecoveryDisposition recoverRoot(
         const PrivacyStorageRoot& root,
