@@ -15,12 +15,16 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QUuid>
 
 // Local includes
 
+#include "coredbcopymanager.h"
 #include "coredbschemaupdater.h"
+#include "dbengineparameters.h"
 #include "privacyservice.h"
 
 using namespace Digikam;
@@ -33,6 +37,7 @@ private Q_SLOTS:
 
     void testSchemaActions();
     void testSqliteSchemaActionsExecute();
+    void testSqlitePrivacyCopyRoundTrip();
     void testStorageRecordValidation();
     void testSessionLockState();
     void testDynamicSessionItems();
@@ -126,7 +131,10 @@ QStringList actionStatements(const QDomElement& database, const QString& actionN
     return {};
 }
 
-bool executeSqliteSchemaScenario(const QDomElement& database, bool update, QString* errorMessage)
+bool executeSqliteSchemaScenario(const QDomElement& database,
+                                 bool update,
+                                 const QString& databaseName,
+                                 QString* errorMessage)
 {
     const QString connectionName = QLatin1String("privacy-schema-") +
                                    QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -134,7 +142,7 @@ bool executeSqliteSchemaScenario(const QDomElement& database, bool update, QStri
 
     {
         QSqlDatabase db = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"), connectionName);
-        db.setDatabaseName(QLatin1String(":memory:"));
+        db.setDatabaseName(databaseName);
 
         if (!db.open())
         {
@@ -568,8 +576,108 @@ void PrivacyFoundationTest::testSqliteSchemaActionsExecute()
     QVERIFY(!sqlite.isNull());
 
     QString errorMessage;
-    QVERIFY2(executeSqliteSchemaScenario(sqlite, false, &errorMessage), qPrintable(errorMessage));
-    QVERIFY2(executeSqliteSchemaScenario(sqlite, true,  &errorMessage), qPrintable(errorMessage));
+    QVERIFY2(executeSqliteSchemaScenario(sqlite, false, QLatin1String(":memory:"), &errorMessage),
+             qPrintable(errorMessage));
+    QVERIFY2(executeSqliteSchemaScenario(sqlite, true, QLatin1String(":memory:"), &errorMessage),
+             qPrintable(errorMessage));
+}
+
+void PrivacyFoundationTest::testSqlitePrivacyCopyRoundTrip()
+{
+    if (!QSqlDatabase::isDriverAvailable(QLatin1String("QSQLITE")))
+    {
+        QSKIP("Qt SQLite driver is unavailable");
+    }
+
+    QFile file(QString::fromUtf8(PRIVACY_DB_CONFIG_PATH));
+    QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(file.errorString()));
+
+    QDomDocument document;
+    QVERIFY2(document.setContent(&file), "Database configuration XML is invalid");
+
+    const QDomElement sqlite = databaseElement(document, QLatin1String("QSQLITE"));
+    QVERIFY(!sqlite.isNull());
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString sourcePath = directory.filePath(QLatin1String("source.db"));
+    const QString targetPath = directory.filePath(QLatin1String("target.db"));
+    QString errorMessage;
+    QVERIFY2(executeSqliteSchemaScenario(sqlite, false, sourcePath, &errorMessage),
+             qPrintable(errorMessage));
+
+    DbEngineParameters sourceParameters;
+    sourceParameters.databaseType = DbEngineParameters::SQLiteDatabaseType();
+    sourceParameters.setCoreDatabasePath(sourcePath);
+    sourceParameters.legacyAndDefaultChecks();
+
+    DbEngineParameters targetParameters;
+    targetParameters.databaseType = DbEngineParameters::SQLiteDatabaseType();
+    targetParameters.setCoreDatabasePath(targetPath);
+    targetParameters.legacyAndDefaultChecks();
+
+    CoreDbCopyManager manager;
+    QSignalSpy finishedSpy(&manager, &CoreDbCopyManager::finished);
+    manager.copyDatabases(sourceParameters, targetParameters);
+
+    QCOMPARE(finishedSpy.size(), 1);
+    QCOMPARE(finishedSpy.constFirst().at(0).toInt(),
+             static_cast<int>(CoreDbCopyManager::success));
+    QVERIFY2(finishedSpy.constFirst().at(1).toString().isEmpty(),
+             qPrintable(finishedSpy.constFirst().at(1).toString()));
+
+    const QString connectionName = QLatin1String("privacy-copy-check-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    {
+        QSqlDatabase target = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"), connectionName);
+        target.setDatabaseName(targetPath);
+        QVERIFY2(target.open(), qPrintable(target.lastError().text()));
+
+        QSqlQuery query(target);
+        QVERIFY(query.exec(QLatin1String("SELECT name, tagVisibilityMode "
+                                        "FROM PrivacyCategories WHERE uuid="
+                                        "'10000000-0000-0000-0000-000000000001';")));
+        QVERIFY(query.next());
+        QCOMPARE(query.value(0).toString(), QLatin1String("Category"));
+        QCOMPARE(query.value(1).toInt(),
+                 static_cast<int>(PrivacyTagVisibilityMode::UnlockedOnly));
+
+        QVERIFY(query.exec(QLatin1String("SELECT COUNT(*), MIN(generation), MAX(generation) "
+                                        "FROM PrivacyCredentials;")));
+        QVERIFY(query.next());
+        QCOMPARE(query.value(0).toInt(), 2);
+        QCOMPARE(query.value(1).toInt(), 1);
+        QCOMPARE(query.value(2).toInt(), 2);
+
+        QVERIFY(query.exec(QLatin1String("SELECT originalName, publicRelativePath, originalHash, originalSize "
+                                        "FROM PrivacyAssets WHERE itemUuid="
+                                        "'20000000-0000-0000-0000-000000000001';")));
+        QVERIFY(query.next());
+        QCOMPARE(query.value(0).toString(), QLatin1String("proxy.jpg"));
+        QCOMPARE(query.value(1).toString(), QLatin1String("album/proxy.jpg"));
+        QCOMPARE(query.value(2).toString(), QLatin1String("original-hash"));
+        QCOMPARE(query.value(3).toLongLong(), 100LL);
+
+        QVERIFY(query.exec(QLatin1String("SELECT protectedRelativePath, derivativeHash, derivativeSize "
+                                        "FROM PrivacyDerivatives;")));
+        QVERIFY(query.next());
+        QCOMPARE(query.value(0).toString(), QLatin1String("clear/item/thumb.jpg"));
+        QCOMPARE(query.value(1).toString(), QLatin1String("derivative-hash"));
+        QCOMPARE(query.value(2).toLongLong(), 20LL);
+
+        QVERIFY(query.exec(QLatin1String("SELECT COUNT(*), MIN(stage), MAX(stage) "
+                                        "FROM PrivacyTransactionJournals;")));
+        QVERIFY(query.next());
+        QCOMPARE(query.value(0).toInt(), 2);
+        QCOMPARE(query.value(1).toInt(), 1);
+        QCOMPARE(query.value(2).toInt(), 1);
+
+        target.close();
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
 }
 
 void PrivacyFoundationTest::testStorageRecordValidation()

@@ -242,12 +242,41 @@ bool CoreDbCopyManager::copyTable(CoreDbBackend& fromDBbackend,
     qCDebug(DIGIKAM_COREDB_LOG) << "Core database: trying to copy contents from DB with ActionName: [" << fromActionName
                                 << "] to DB with ActionName [" << toActionName << "]";
 
+    const DbEngineAction fromAction = fromDBbackend.getDBAction(fromActionName);
+    const DbEngineAction toAction   = toDBbackend.getDBAction(toActionName);
+
+    if (fromAction.name.isNull() || toAction.name.isNull())
+    {
+        Q_EMIT finished(CoreDbCopyManager::failed,
+                        i18n("A database copy action is missing."));
+
+        return false;
+    }
+
+    // Some tables, such as the derived TagsTree, are rebuilt by triggers and
+    // deliberately define an empty read/write action pair. Do not turn that
+    // explicit no-op into an inactive-query failure, but reject an asymmetric
+    // pair because it indicates an incomplete database configuration.
+
+    if (fromAction.dbActionElements.isEmpty() || toAction.dbActionElements.isEmpty())
+    {
+        if (fromAction.dbActionElements.isEmpty() && toAction.dbActionElements.isEmpty())
+        {
+            return true;
+        }
+
+        Q_EMIT finished(CoreDbCopyManager::failed,
+                        i18n("A database copy action is incomplete."));
+
+        return false;
+    }
+
     QMap<QString, QVariant> bindingMap;
 
     // now perform the copy action
 
     QList<QString> columnNames;
-    QSqlQuery      result        = fromDBbackend.execDBActionQuery(fromDBbackend.getDBAction(fromActionName), bindingMap) ;
+    QSqlQuery      result        = fromDBbackend.execDBActionQuery(fromAction, bindingMap) ;
     int            resultSize    = -1;
     bool           isForwardOnly = result.isForwardOnly();
 
@@ -293,7 +322,7 @@ bool CoreDbCopyManager::copyTable(CoreDbBackend& fromDBbackend,
     if (isForwardOnly)
     {
         result.finish();
-        result = fromDBbackend.execDBActionQuery(fromDBbackend.getDBAction(fromActionName), bindingMap) ;
+        result = fromDBbackend.execDBActionQuery(fromAction, bindingMap) ;
 
         if (!result.isActive() && result.lastError().isValid())
         {
@@ -375,8 +404,7 @@ bool CoreDbCopyManager::copyTable(CoreDbBackend& fromDBbackend,
 
         // Insert the previous requested values to the DB
 
-        DbEngineAction action                        = toDBbackend.getDBAction(toActionName);
-        BdEngineBackend::QueryState queryStateResult = toDBbackend.execDBAction(action, tempBindingMap);
+        BdEngineBackend::QueryState queryStateResult = toDBbackend.execDBAction(toAction, tempBindingMap);
 
         if (queryStateResult != BdEngineBackend::NoErrors)
         {
