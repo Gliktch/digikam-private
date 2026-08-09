@@ -18,6 +18,8 @@ set(FFmpeg_Conf --prefix=${PREFIX_ext_ffmpeg}
                 --disable-doc
                 --disable-debug
                 --disable-programs
+                --enable-ffmpeg
+                --enable-ffprobe
                 --disable-outdevs
                 --enable-shared
                 --enable-gpl

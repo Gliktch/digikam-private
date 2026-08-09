@@ -322,6 +322,8 @@ echo -e "---------- Copy target binaries\n"
 
 cp /usr/bin/digikam                 ./usr/bin
 cp /usr/bin/showfoto                ./usr/bin
+cp /usr/bin/ffmpeg                  ./usr/bin
+cp /usr/bin/ffprobe                 ./usr/bin
 cp /usr/bin/gocryptfs               ./usr/bin
 cp /usr/bin/gocryptfs-xray          ./usr/bin
 
