@@ -14,6 +14,10 @@
 
 #include "mediaplayerview.h"
 
+// C++ includes
+
+#include <memory>
+
 // Qt includes
 
 #include <QApplication>
@@ -60,9 +64,56 @@
 #include "dlayoutbox.h"
 #include "metaengine.h"
 #include "dmetadata.h"
+#include "privacycachetransition.h"
+#include "privacysourceresolver.h"
 
 namespace Digikam
 {
+
+namespace
+{
+
+bool sameResolvedSource(const PrivacySourceResult& first,
+                        const PrivacySourceResult& second)
+{
+    return ((first.disposition == second.disposition) &&
+            (first.physicalFilePath == second.physicalFilePath) &&
+            (first.cacheNamespace == second.cacheNamespace) &&
+            (first.cachePolicy == second.cachePolicy) &&
+            (first.resolverGeneration == second.resolverGeneration));
+}
+
+QUrl acquirePlaybackSource(
+    const QUrl& logicalUrl,
+    std::unique_ptr<PrivacySourceUseGuard>* const sourceUse)
+{
+    if (!sourceUse || !logicalUrl.isLocalFile())
+    {
+        return logicalUrl;
+    }
+
+    sourceUse->reset();
+    PrivacySourceRequest request;
+    request.logicalFilePath = logicalUrl.toLocalFile();
+    request.consumer = PrivacySourceRequest::Preview;
+    const PrivacySourceResult initial = PrivacySourceResolver::resolve(request);
+    std::unique_ptr<PrivacySourceUseGuard> guard(
+        new PrivacySourceUseGuard(request.logicalFilePath, initial));
+    const PrivacySourceResult current = PrivacySourceResolver::resolve(request);
+
+    if (!guard->isAcquired() || !sameResolvedSource(initial, current))
+    {
+        return {};
+    }
+
+    const QUrl playback = (initial.disposition == PrivacySourceResult::Resolved)
+                        ? QUrl::fromLocalFile(initial.physicalFilePath)
+                        : logicalUrl;
+    *sourceUse = std::move(guard);
+    return playback;
+}
+
+} // namespace
 
 class Q_DECL_HIDDEN MediaPlayerMouseClickFilter : public QObject
 {
@@ -196,6 +247,8 @@ public:
     QMenu*               audioOutMenu       = nullptr;
 
     QUrl                 currentItem;
+    QUrl                 playbackItem;
+    std::unique_ptr<PrivacySourceUseGuard> sourceUse;
 
     int                       videoOrientation   = 0;
     bool                      motionPhotoMode    = false;
@@ -595,7 +648,7 @@ void MediaPlayerView::setInfoInterface(DInfoInterface* const iface)
 void MediaPlayerView::reload()
 {
     d->player->stop();
-    d->player->setSource(d->currentItem);
+    d->player->setSource(d->playbackItem);
     d->player->play();
 }
 
@@ -634,7 +687,10 @@ void MediaPlayerView::setCurrentItem(const QSharedPointer<QIODevice>& videoData,
     d->nextAction->setEnabled(hasNext);
 
     d->player->stop();
+    d->player->setSource(QUrl());
+    d->sourceUse.reset();
     d->currentItem = sourceUrl;
+    d->playbackItem = sourceUrl;
     d->ioDevice    = videoData;
 
     d->player->setSourceDevice(d->ioDevice.data(), sourceUrl);
@@ -808,10 +864,14 @@ void MediaPlayerView::escapePreview()
 {
     d->player->stop();
     d->player->setSource(d->dummyVideo);
+    d->sourceUse.reset();
+    d->currentItem = QUrl();
+    d->playbackItem = QUrl();
 }
 
 void MediaPlayerView::slotEscapePressed()
 {
+    escapePreview();
     Q_EMIT signalEscapePreview();
 }
 
@@ -1058,7 +1118,10 @@ void MediaPlayerView::setCurrentItem(const QUrl& url, bool hasPrevious, bool has
     if (url.isEmpty())
     {
         d->player->stop();
+        d->player->setSource(QUrl());
         d->currentItem = url;
+        d->playbackItem = url;
+        d->sourceUse.reset();
 
         return;
     }
@@ -1075,7 +1138,17 @@ void MediaPlayerView::setCurrentItem(const QUrl& url, bool hasPrevious, bool has
     }
 
     d->player->stop();
+    d->player->setSource(QUrl());
+    d->sourceUse.reset();
     d->currentItem  = url;
+    d->playbackItem = acquirePlaybackSource(url, &d->sourceUse);
+
+    if (d->playbackItem.isEmpty())
+    {
+        setPreviewMode(Private::MessageView);
+        d->msgLabel->setText(i18n("This private media source is unavailable."));
+        return;
+    }
 
     if (!d->motionPhotoMode)
     {
@@ -1118,7 +1191,7 @@ void MediaPlayerView::setCurrentItem(const QUrl& url, bool hasPrevious, bool has
         }
     }
 
-    d->player->setSource(d->currentItem);
+    d->player->setSource(d->playbackItem);
     setPreviewMode(Private::PlayerView);
 
     KSharedConfig::Ptr config = KSharedConfig::openConfig();

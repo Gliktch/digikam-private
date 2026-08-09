@@ -110,6 +110,33 @@ PrivacySourceUseGuard::PrivacySourceUseGuard(
     m_registered = true;
 }
 
+PrivacySourceUseGuard::PrivacySourceUseGuard(
+    const QString& logicalFilePath,
+    const PrivacySourceResult& resolvedSource)
+    : m_logicalFilePath    (logicalFilePath),
+      m_cacheNamespace     (resolvedSource.cacheNamespace),
+      m_resolverGeneration(resolvedSource.resolverGeneration)
+{
+    if (m_logicalFilePath.isEmpty() ||
+        (resolvedSource.disposition == PrivacySourceResult::Denied))
+    {
+        return;
+    }
+
+    QMutexLocker locker(&transitionData->mutex);
+
+    if (transitionData->active.contains(m_logicalFilePath))
+    {
+        return;
+    }
+
+    const QPair<QString, quint64> snapshot(m_cacheNamespace,
+                                           m_resolverGeneration);
+    transitionData->sourceUsers[m_logicalFilePath][snapshot] += 1;
+    m_acquired   = true;
+    m_registered = true;
+}
+
 PrivacySourceUseGuard::~PrivacySourceUseGuard()
 {
     release();

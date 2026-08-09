@@ -14,6 +14,10 @@
 
 #include "mediaplayerview.h"
 
+// C++ includes
+
+#include <memory>
+
 // Qt includes
 
 #include <QApplication>
@@ -46,9 +50,56 @@
 #include "metaengine.h"
 #include "dmetadata.h"
 #include "qaviodevice.h"
+#include "privacycachetransition.h"
+#include "privacysourceresolver.h"
 
 namespace Digikam
 {
+
+namespace
+{
+
+bool sameResolvedSource(const PrivacySourceResult& first,
+                        const PrivacySourceResult& second)
+{
+    return ((first.disposition == second.disposition) &&
+            (first.physicalFilePath == second.physicalFilePath) &&
+            (first.cacheNamespace == second.cacheNamespace) &&
+            (first.cachePolicy == second.cachePolicy) &&
+            (first.resolverGeneration == second.resolverGeneration));
+}
+
+QUrl acquirePlaybackSource(
+    const QUrl& logicalUrl,
+    std::unique_ptr<PrivacySourceUseGuard>* const sourceUse)
+{
+    if (!sourceUse || !logicalUrl.isLocalFile())
+    {
+        return logicalUrl;
+    }
+
+    sourceUse->reset();
+    PrivacySourceRequest request;
+    request.logicalFilePath = logicalUrl.toLocalFile();
+    request.consumer = PrivacySourceRequest::Preview;
+    const PrivacySourceResult initial = PrivacySourceResolver::resolve(request);
+    std::unique_ptr<PrivacySourceUseGuard> guard(
+        new PrivacySourceUseGuard(request.logicalFilePath, initial));
+    const PrivacySourceResult current = PrivacySourceResolver::resolve(request);
+
+    if (!guard->isAcquired() || !sameResolvedSource(initial, current))
+    {
+        return {};
+    }
+
+    const QUrl playback = (initial.disposition == PrivacySourceResult::Resolved)
+                        ? QUrl::fromLocalFile(initial.physicalFilePath)
+                        : logicalUrl;
+    *sourceUse = std::move(guard);
+    return playback;
+}
+
+} // namespace
 
 class Q_DECL_HIDDEN MediaPlayerMouseClickFilter : public QObject
 {
@@ -184,6 +235,8 @@ public:
     QLabel*              tlabel             = nullptr;
     QLabel*              speaker            = nullptr;
     QUrl                 currentItem;
+    QUrl                 playbackItem;
+    std::unique_ptr<PrivacySourceUseGuard> sourceUse;
 
     qint64               capturePosition    = 0;
     qint64               sliderTime         = 0;
@@ -398,7 +451,7 @@ void MediaPlayerView::reload()
     }
     else
     {
-        d->videoWidget->player()->setSource(d->currentItem.toLocalFile());
+        d->videoWidget->player()->setSource(d->playbackItem.toLocalFile());
     }
 
     d->videoWidget->player()->play();
@@ -441,10 +494,12 @@ void MediaPlayerView::setCurrentItem(const QSharedPointer<QIODevice>& videoData,
 
     d->videoWidget->player()->stop();
     d->videoWidget->player()->setSource(QString());
+    d->sourceUse.reset();
 
     d->ioDevice   = videoData;
     d->avioDevice.reset(new QAVIODevice(videoData));
     d->currentItem = sourceUrl;
+    d->playbackItem = sourceUrl;
 
     d->videoWidget->player()->setSource(QLatin1String("motion_photo.mp4"), d->avioDevice);
     setPreviewMode(Private::PlayerView);
@@ -511,7 +566,7 @@ void MediaPlayerView::slotMediaStatusChanged(QAVPlayer::MediaStatus newStatus)
             }
             else
             {
-                d->videoWidget->player()->setSource(d->currentItem.toLocalFile());
+                d->videoWidget->player()->setSource(d->playbackItem.toLocalFile());
             }
 
             if (d->playLoop)
@@ -537,6 +592,9 @@ void MediaPlayerView::escapePreview()
 {
     d->videoWidget->player()->stop();
     d->videoWidget->player()->setSource(QString());
+    d->sourceUse.reset();
+    d->currentItem = QUrl();
+    d->playbackItem = QUrl();
 }
 
 void MediaPlayerView::slotThemeChanged()
@@ -763,10 +821,11 @@ void MediaPlayerView::setCurrentItem(const QUrl& url, bool hasPrevious, bool has
 
     if (url.isEmpty())
     {
-        d->currentItem = url;
-
         d->videoWidget->player()->stop();
         d->videoWidget->player()->setSource(QString());
+        d->sourceUse.reset();
+        d->currentItem = url;
+        d->playbackItem = url;
 
         return;
     }
@@ -780,6 +839,15 @@ void MediaPlayerView::setCurrentItem(const QUrl& url, bool hasPrevious, bool has
 
     d->videoWidget->player()->stop();
     d->videoWidget->player()->setSource(QString());
+    d->sourceUse.reset();
+    d->playbackItem = acquirePlaybackSource(url, &d->sourceUse);
+
+    if (d->playbackItem.isEmpty())
+    {
+        setPreviewMode(Private::MessageView);
+        d->msgLabel->setText(i18n("This private media source is unavailable."));
+        return;
+    }
 
     if (!d->motionPhotoMode)
     {
@@ -822,7 +890,7 @@ void MediaPlayerView::setCurrentItem(const QUrl& url, bool hasPrevious, bool has
         }
     }
 
-    d->videoWidget->player()->setSource(d->currentItem.toLocalFile());
+    d->videoWidget->player()->setSource(d->playbackItem.toLocalFile());
     setPreviewMode(Private::PlayerView);
 
     KSharedConfig::Ptr config = KSharedConfig::openConfig();

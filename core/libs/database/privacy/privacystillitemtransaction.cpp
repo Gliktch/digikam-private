@@ -42,9 +42,11 @@
 // Local includes
 
 #include "privacycasualarchive.h"
+#include "privacyprocessrunner.h"
 #include "privacyproxygenerator.h"
 #include "privacypublictransition.h"
 #include "privacyrepository.h"
+#include "privacyvideoproxygenerator.h"
 #include "privacyposixstorage_p.h"
 
 namespace Digikam
@@ -54,6 +56,7 @@ namespace
 {
 
 constexpr qsizetype IoChunkBytes = 1024 * 1024;
+constexpr qsizetype MaximumPreparedProxyBytes = 8 * 1024 * 1024;
 
 class ScopedBooleanValue
 {
@@ -260,6 +263,27 @@ bool sameFact(const PrivacyJournalObjectFact& left,
     return ((left.presence == right.presence) && (left.size == right.size) &&
             (left.linkCount == right.linkCount) &&
             (left.sha256 == right.sha256));
+}
+
+bool preparedProxyPayloadMatches(const PrivacyTransaction& transaction,
+                                 const PrivacyJournalRecord& prepared,
+                                 const QByteArray& proxyBytes)
+{
+    if ((prepared.stage != PrivacyJournalStage::Prepared) ||
+        (prepared.assets.size() != 1))
+    {
+        return false;
+    }
+
+    if (transaction.state == PrivacyTransactionState::Complete)
+    {
+        return proxyBytes.isEmpty();
+    }
+
+    return ((transaction.state == PrivacyTransactionState::Prepared) &&
+            (proxyBytes.size() == prepared.assets.constFirst().proxy.size) &&
+            (QCryptographicHash::hash(proxyBytes, QCryptographicHash::Sha256) ==
+             prepared.assets.constFirst().proxy.sha256));
 }
 
 const PrivacyCategory* categoryFor(const PrivacyRepositorySnapshot& snapshot,
@@ -496,11 +520,13 @@ PrivacyJournalRecord recordAt(PrivacyJournalRecord record,
 QByteArray encodePreparedPayload(const PrivacyJournalRecord& stagedRecord,
                                  const QString& archiveStageRelativePath,
                                  const QDateTime& originalModificationDate,
-                                 const QByteArray& teardownSnapshot = {})
+                                 const QByteArray& teardownSnapshot = {},
+                                 const QByteArray& preparedProxyBytes = {})
 {
     const QByteArray journal = PrivacyTransactionJournalCodec::encode(stagedRecord);
 
     if (journal.isEmpty() || !originalModificationDate.isValid() ||
+        (preparedProxyBytes.size() > MaximumPreparedProxyBytes) ||
         archiveStageRelativePath.isEmpty() ||
         QDir::isAbsolutePath(archiveStageRelativePath) ||
         (QDir::cleanPath(archiveStageRelativePath) != archiveStageRelativePath))
@@ -516,6 +542,8 @@ QByteArray encodePreparedPayload(const PrivacyJournalRecord& stagedRecord,
                   QString::fromLatin1(journal.toBase64()));
     object.insert(QStringLiteral("originalModificationDate"),
                   originalModificationDate.toUTC().toString(Qt::ISODateWithMs));
+    object.insert(QStringLiteral("preparedProxyBytes"),
+                  QString::fromLatin1(preparedProxyBytes.toBase64()));
     object.insert(QStringLiteral("teardownSnapshot"),
                   QString::fromLatin1(teardownSnapshot.toBase64()));
     return QJsonDocument(object).toJson(QJsonDocument::Compact);
@@ -525,7 +553,8 @@ bool decodePreparedPayload(const QByteArray& bytes,
                            PrivacyJournalRecord* const record,
                            QString* const archiveStageRelativePath,
                            QDateTime* const originalModificationDate,
-                           QByteArray* const teardownSnapshot = nullptr)
+                           QByteArray* const teardownSnapshot = nullptr,
+                           QByteArray* const preparedProxyBytes = nullptr)
 {
     if (!record || !archiveStageRelativePath || !originalModificationDate ||
         bytes.isEmpty())
@@ -548,6 +577,7 @@ bool decodePreparedPayload(const QByteArray& bytes,
         QStringLiteral("archiveStageRelativePath"),
         QStringLiteral("formatVersion"), QStringLiteral("journal"),
         QStringLiteral("originalModificationDate"),
+        QStringLiteral("preparedProxyBytes"),
         QStringLiteral("teardownSnapshot")
     };
 
@@ -565,6 +595,17 @@ bool decodePreparedPayload(const QByteArray& bytes,
     const QDateTime modificationDate = QDateTime::fromString(
         object.value(QStringLiteral("originalModificationDate")).toString(),
         Qt::ISODateWithMs);
+    const QByteArray encodedProxy =
+        object.value(QStringLiteral("preparedProxyBytes")).toString().toLatin1();
+
+    if (encodedProxy.size() > (((MaximumPreparedProxyBytes + 2) / 3) * 4))
+    {
+        return false;
+    }
+
+    const QByteArray proxyBytes = QByteArray::fromBase64(
+        encodedProxy,
+        QByteArray::AbortOnBase64DecodingErrors);
     const QByteArray teardown = QByteArray::fromBase64(
         object.value(QStringLiteral("teardownSnapshot")).toString().toLatin1(),
         QByteArray::AbortOnBase64DecodingErrors);
@@ -573,6 +614,7 @@ bool decodePreparedPayload(const QByteArray& bytes,
     if (archiveStage.isEmpty() || QDir::isAbsolutePath(archiveStage) ||
         (QDir::cleanPath(archiveStage) != archiveStage) ||
         !modificationDate.isValid() ||
+        (proxyBytes.size() > MaximumPreparedProxyBytes) ||
         !PrivacyTransactionJournalCodec::decode(journal, record, &journalError))
     {
         return false;
@@ -584,6 +626,11 @@ bool decodePreparedPayload(const QByteArray& bytes,
     if (teardownSnapshot)
     {
         *teardownSnapshot = teardown;
+    }
+
+    if (preparedProxyBytes)
+    {
+        *preparedProxyBytes = proxyBytes;
     }
 
     return true;
@@ -912,13 +959,69 @@ class Q_DECL_HIDDEN PrivacyStillItemTransactionEngine::Private
 {
 public:
 
+    struct GeneratedProxy
+    {
+        QByteArray encodedBytes;
+        QByteArray sha256;
+
+        bool isValid() const
+        {
+            return (!encodedBytes.isEmpty() && (sha256.size() == 32));
+        }
+    };
+
     Private(PrivacyStillItemPersistence& persistenceValue,
             PrivacyRuntimeCoordinator& runtimeValue,
             PrivacyStillItemCacheGate& cacheValue)
         : persistence(persistenceValue),
           runtime(runtimeValue),
-          cache(cacheValue)
+          cache(cacheValue),
+          videoProxy(processRunner, PrivacyVideoToolPaths::discover())
     {
+    }
+
+    GeneratedProxy generateProxy(const QString& sourcePath,
+                                 const QString& publicFileName,
+                                 PrivacyPresentationMode presentation) const
+    {
+        GeneratedProxy generated;
+
+        if (PrivacyVideoProxyGenerator::isSameContainerCandidate(publicFileName))
+        {
+            PrivacyVideoProxyRequest request;
+            request.sourcePath = sourcePath;
+            request.publicFileName = publicFileName;
+            request.presentation =
+                (presentation == PrivacyPresentationMode::Blur)
+                    ? PrivacyVideoProxyPresentation::Blurred
+                    : PrivacyVideoProxyPresentation::Generic;
+            const PrivacyVideoProxyResult result = videoProxy.generate(request);
+
+            if (result.isValid())
+            {
+                generated.encodedBytes = result.encodedBytes;
+                generated.sha256 = result.sha256;
+            }
+
+            return generated;
+        }
+
+        PrivacyStillProxyRequest request;
+        request.sourcePath = sourcePath;
+        request.publicFileName = publicFileName;
+        request.presentation =
+            (presentation == PrivacyPresentationMode::Blur)
+                ? PrivacyStillProxyPresentation::Blurred
+                : PrivacyStillProxyPresentation::Generic;
+        const PrivacyStillProxyResult result = stillProxy.generate(request);
+
+        if (result.isValid())
+        {
+            generated.encodedBytes = result.encodedBytes;
+            generated.sha256 = result.sha256;
+        }
+
+        return generated;
     }
 
     bool fault(PrivacyStillItemFaultPoint point) const
@@ -1146,7 +1249,9 @@ public:
     PrivacyRuntimeCoordinator& runtime;
     PrivacyStillItemCacheGate& cache;
     PrivacyCasualArchiveEngine archive;
-    PrivacyStillProxyGenerator proxy;
+    PrivacyStillProxyGenerator stillProxy;
+    QProcessPrivacyProcessRunner processRunner;
+    PrivacyVideoProxyGenerator videoProxy;
     PrivacyPublicTransitionEngine transition;
     FaultHook faultHook;
     bool durableReplay = false;
@@ -1287,6 +1392,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     PrivacyJournalRecord prepared;
     QString storedArchiveStage;
     QByteArray protectMetadata;
+    QByteArray preparedProxyBytes;
 
     if (!existingTransaction)
     {
@@ -1407,9 +1513,12 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     if (!decodePreparedPayload(existingTransaction->payloadData, &created,
                                &storedArchiveStage,
-                               &originalModificationDate, &protectMetadata) ||
+                               &originalModificationDate, &protectMetadata,
+                               &preparedProxyBytes) ||
         !decodePortableMode(protectMetadata, &originalMode) ||
-        (storedArchiveStage != archiveStageRelativePath))
+        (storedArchiveStage != archiveStageRelativePath) ||
+        ((existingTransaction->state == PrivacyTransactionState::Created) &&
+         !preparedProxyBytes.isEmpty()))
     {
         return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                     QStringLiteral("Protect payload cannot be reconstructed"));
@@ -1439,14 +1548,9 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                         QStringLiteral("fault after filesystem Created journal"));
         }
 
-        PrivacyStillProxyRequest proxyRequest;
-        proxyRequest.sourcePath = sourcePath;
-        proxyRequest.publicFileName = QFileInfo(publicRelativePath).fileName();
-        proxyRequest.presentation =
-            (categoryValue.presentationMode == PrivacyPresentationMode::Blur)
-                ? PrivacyStillProxyPresentation::Blurred
-                : PrivacyStillProxyPresentation::Generic;
-        const PrivacyStillProxyResult proxyResult = d->proxy.generate(proxyRequest);
+        const Private::GeneratedProxy proxyResult = d->generateProxy(
+            sourcePath, QFileInfo(publicRelativePath).fileName(),
+            categoryValue.presentationMode);
 
         if (!proxyResult.isValid())
         {
@@ -1527,7 +1631,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         next.generation = 1;
         next.payloadData = encodePreparedPayload(
             prepared, archiveStageRelativePath, originalModificationDate,
-            protectMetadata);
+            protectMetadata, proxyResult.encodedBytes);
         next.updatedAt = QDateTime::currentDateTimeUtc();
 
         if (next.payloadData.isEmpty() ||
@@ -1538,14 +1642,21 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                         QStringLiteral("cannot publish exact Prepared transaction"));
         }
 
+        if (d->fault(PrivacyStillItemFaultPoint::AfterPreparedPayload))
+        {
+            return fail(PrivacyStillItemTransactionStatus::FaultInjected,
+                        QStringLiteral("fault after exact Prepared payload"));
+        }
+
         existingTransaction = nullptr;
     }
     else if (!decodePreparedPayload(existingTransaction->payloadData, &prepared,
                                     &storedArchiveStage,
-                                    &originalModificationDate,
-                                    &protectMetadata) ||
+                                    &originalModificationDate, &protectMetadata,
+                                    &preparedProxyBytes) ||
              !decodePortableMode(protectMetadata, &originalMode) ||
-             (prepared.stage != PrivacyJournalStage::Prepared))
+             !preparedProxyPayloadMatches(*existingTransaction, prepared,
+                                          preparedProxyBytes))
     {
         return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                     QStringLiteral("Prepared Protect payload is invalid"));
@@ -1563,8 +1674,11 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     if (!existingTransaction || !existingItem ||
         !decodePreparedPayload(existingTransaction->payloadData, &prepared,
                                &storedArchiveStage,
-                               &originalModificationDate, &protectMetadata) ||
-        !decodePortableMode(protectMetadata, &originalMode))
+                               &originalModificationDate, &protectMetadata,
+                               &preparedProxyBytes) ||
+        !decodePortableMode(protectMetadata, &originalMode) ||
+        !preparedProxyPayloadMatches(*existingTransaction, prepared,
+                                     preparedProxyBytes))
     {
         return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                     QStringLiteral("Prepared protection disappeared"));
@@ -1610,24 +1724,8 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         stageRequest.itemUuid = itemUuid;
         stageRequest.role = PrivacyAsset::PrimaryMediaRole;
         stageRequest.ordinal = 0;
-        PrivacyStillProxyRequest proxyRequest;
-        proxyRequest.sourcePath = sourcePath;
-        proxyRequest.publicFileName = QFileInfo(publicRelativePath).fileName();
-        proxyRequest.presentation =
-            (categoryValue.presentationMode == PrivacyPresentationMode::Blur)
-                ? PrivacyStillProxyPresentation::Blurred
-                : PrivacyStillProxyPresentation::Generic;
-        const PrivacyStillProxyResult proxyResult = d->proxy.generate(proxyRequest);
-
-        if (!proxyResult.isValid() ||
-            (proxyResult.sha256 != prepared.assets.constFirst().proxy.sha256))
-        {
-            return fail(PrivacyStillItemTransactionStatus::ProxyFailure,
-                        QStringLiteral("proxy replay bytes differ from Prepared facts"));
-        }
-
         const PrivacyPublicReplacementStageResult stageResult =
-            d->transition.stageReplacement(stageRequest, proxyResult.encodedBytes);
+            d->transition.stageReplacement(stageRequest, preparedProxyBytes);
 
         if (!stageResult.succeeded())
         {
@@ -1917,9 +2015,13 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     {
         completedTransaction.state = PrivacyTransactionState::Complete;
         completedTransaction.generation = 2;
+        completedTransaction.payloadData = encodePreparedPayload(
+            prepared, archiveStageRelativePath, originalModificationDate,
+            protectMetadata);
         completedTransaction.updatedAt = QDateTime::currentDateTimeUtc();
 
-        if (!d->persistence.publishProtection(publishedItem, container, assets,
+        if (completedTransaction.payloadData.isEmpty() ||
+            !d->persistence.publishProtection(publishedItem, container, assets,
                                               completedTransaction))
         {
             return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,

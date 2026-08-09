@@ -544,10 +544,12 @@ PrivacyThreadImageIOStillItemTransactionOwner::protect(
     const ProtectAcknowledgement& acknowledgeWarnings)
 {
     if (info.isNull() || (info.id() <= 0) ||
-        (info.category() != DatabaseItem::Image) || !info.isLocationAvailable())
+        ((info.category() != DatabaseItem::Image) &&
+         (info.category() != DatabaseItem::Video)) ||
+        !info.isLocationAvailable())
     {
         return actionFailure(PrivacyStillItemTransactionStatus::InvalidRequest,
-                             QStringLiteral("Select one available still image"));
+                             QStringLiteral("Select one available photo or video"));
     }
 
     QSharedPointer<PrivacyRuntimeCoordinator> runtime;
@@ -653,7 +655,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::protect(
                     result = actionFailure(
                         PrivacyStillItemTransactionStatus::AssociatedAssetSetUnsupported,
                         QStringLiteral(
-                            "This first action supports a still with no associated files"));
+                            "This action currently supports one photo or video with no associated files"));
                     return;
                 }
 
@@ -730,10 +732,12 @@ PrivacyThreadImageIOStillItemTransactionOwner::unprotect(
     const ItemInfo& info, const QString& passwordText)
 {
     if (info.isNull() || (info.id() <= 0) ||
-        (info.category() != DatabaseItem::Image) || !info.isLocationAvailable())
+        ((info.category() != DatabaseItem::Image) &&
+         (info.category() != DatabaseItem::Video)) ||
+        !info.isLocationAvailable())
     {
         return actionFailure(PrivacyStillItemTransactionStatus::InvalidRequest,
-                             QStringLiteral("Select one available protected still image"));
+                             QStringLiteral("Select one available protected photo or video"));
     }
 
     QSharedPointer<PrivacyRuntimeCoordinator> runtime;

@@ -2131,6 +2131,9 @@ bool PrivacyRuntimeCoordinator::publishProtectedItemForProtectRecovery(
         }
     }
 
+    // Prepared Protect retains exact proxy bytes for cold staging. The
+    // completed transaction deliberately retains only its compact journal
+    // identity, so both payloads must exist but are not byte-identical.
     if ((activeProtectCount != 1) || !activeProtect ||
         !activeProtect->isActive() ||
         (activeProtect->type != PrivacyTransactionType::ProtectItem) ||
@@ -2143,7 +2146,8 @@ bool PrivacyRuntimeCoordinator::publishProtectedItemForProtectRecovery(
         (activeProtect->payloadFormatVersion !=
          completedTransaction.payloadFormatVersion) ||
         ((activeProtect->state == PrivacyTransactionState::Prepared) &&
-         (activeProtect->payloadData != completedTransaction.payloadData)) ||
+         (activeProtect->payloadData.isEmpty() ||
+          completedTransaction.payloadData.isEmpty())) ||
         (activeProtect->createdAt != completedTransaction.createdAt) ||
         (activeProtect->fromCredentialGeneration !=
          completedTransaction.fromCredentialGeneration) ||

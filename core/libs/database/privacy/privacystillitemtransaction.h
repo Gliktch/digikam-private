@@ -189,6 +189,7 @@ enum class PrivacyStillItemFaultPoint
 {
     AfterDatabaseBegin,
     AfterFilesystemJournal,
+    AfterPreparedPayload,
     AfterReplacementStageCreated,
     AfterStagesPrepared,
     AfterArchivePublished,
@@ -202,8 +203,8 @@ enum class PrivacyStillItemFaultPoint
     AfterArchiveCleanup
 };
 
-/** One complete Casual, single-associated-asset still transaction. Multi-asset
- * sets are rejected before mutation until batch namespace publication exists. */
+/** One complete Casual, single-primary-media transaction. Multi-asset sets are
+ * rejected before mutation until batch namespace publication exists. */
 class DIGIKAM_DATABASE_EXPORT PrivacyStillItemTransactionEngine
 {
 public:

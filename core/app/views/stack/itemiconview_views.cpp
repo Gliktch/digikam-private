@@ -428,15 +428,16 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
     QHash<const QAction*, PrivacyCategory> privacyProtectActions;
     const QSharedPointer<PrivacyThreadImageIOStillItemTransactionOwner> privacyOwner =
         PrivacyThreadImageIOStillItemTransactionOwner::current();
-    const bool oneStill = privacyOwner &&
+    const bool oneMedia = privacyOwner &&
                           (selectedImageIds.size() == 1) &&
                           (selectedImageIds.constFirst() == info.id()) &&
-                          (info.category() == DatabaseItem::Image);
+                          ((info.category() == DatabaseItem::Image) ||
+                           (info.category() == DatabaseItem::Video));
 
-    if (!oneStill)
+    if (!oneMedia)
     {
         QAction* const unavailable = privacyMenu->addAction(
-            i18nc("@action: private-media workflow", "Select One Still Image"));
+            i18nc("@action: private-media workflow", "Select One Photo or Video"));
         unavailable->setEnabled(false);
     }
     else

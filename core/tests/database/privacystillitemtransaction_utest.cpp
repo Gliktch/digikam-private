@@ -12,6 +12,8 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -19,9 +21,11 @@
 #include <fcntl.h>
 
 #include "privacycontracts.h"
+#include "privacyprocessrunner.h"
 #include "privacyproxygenerator.h"
 #include "privacypublictransition.h"
 #include "privacystillitemtransaction.h"
+#include "privacyvideoproxygenerator.h"
 
 using namespace Digikam;
 
@@ -293,30 +297,23 @@ PrivacyCategory category()
     return value;
 }
 
-bool prepareSyntheticStill(QTemporaryDir& directory,
-                           QString* const sourcePath,
-                           PrivacyStorageRoot* const root,
-                           PrivacyJournalRootExpectation* const expectation,
-                           PrivacyStillProtectRequest* const protect)
+bool populateSyntheticRequest(QTemporaryDir& directory,
+                              const QString& relativePath,
+                              const QSize& pixelSize,
+                              QString* const sourcePath,
+                              PrivacyStorageRoot* const root,
+                              PrivacyJournalRootExpectation* const expectation,
+                              PrivacyStillProtectRequest* const protect)
 {
     if (!sourcePath || !root || !expectation || !protect ||
-        !directory.isValid())
+        !directory.isValid() || relativePath.isEmpty() || !pixelSize.isValid())
     {
         return false;
     }
 
-    const QString relativePath = QLatin1String("album/synthetic.jpg");
     *sourcePath = QDir(directory.path()).filePath(relativePath);
 
-    if (!QDir().mkpath(QFileInfo(*sourcePath).absolutePath()))
-    {
-        return false;
-    }
-
-    QImage source(24, 16, QImage::Format_RGB32);
-    source.fill(Qt::red);
-
-    if (!source.save(*sourcePath, "JPEG") ||
+    if (!QFileInfo(*sourcePath).isFile() ||
         (::chmod(QFile::encodeName(*sourcePath).constData(), 0640) != 0))
     {
         return false;
@@ -371,9 +368,82 @@ bool prepareSyntheticStill(QTemporaryDir& directory,
     protect->associatedAssetsAcknowledged = true;
     protect->publicRoot = *root;
     protect->rootExpectation = *expectation;
-    protect->originalPixelSize = source.size();
+    protect->originalPixelSize = pixelSize;
     protect->originalCreationDate = QFileInfo(*sourcePath).birthTime();
     return true;
+}
+
+bool prepareSyntheticStill(QTemporaryDir& directory,
+                           QString* const sourcePath,
+                           PrivacyStorageRoot* const root,
+                           PrivacyJournalRootExpectation* const expectation,
+                           PrivacyStillProtectRequest* const protect)
+{
+    if (!sourcePath || !directory.isValid())
+    {
+        return false;
+    }
+
+    const QString relativePath = QLatin1String("album/synthetic.jpg");
+    *sourcePath = QDir(directory.path()).filePath(relativePath);
+
+    if (!QDir().mkpath(QFileInfo(*sourcePath).absolutePath()))
+    {
+        return false;
+    }
+
+    QImage source(24, 16, QImage::Format_RGB32);
+    source.fill(Qt::red);
+
+    return (source.save(*sourcePath, "JPEG") &&
+            populateSyntheticRequest(directory, relativePath, source.size(),
+                                     sourcePath, root, expectation, protect));
+}
+
+bool prepareSyntheticVideo(QTemporaryDir& directory,
+                           const PrivacyVideoToolPaths& tools,
+                           QString* const sourcePath,
+                           PrivacyStorageRoot* const root,
+                           PrivacyJournalRootExpectation* const expectation,
+                           PrivacyStillProtectRequest* const protect)
+{
+    if (!tools.isValid() || !sourcePath || !directory.isValid())
+    {
+        return false;
+    }
+
+    const QString relativePath = QLatin1String("album/synthetic.mkv");
+    *sourcePath = QDir(directory.path()).filePath(relativePath);
+
+    if (!QDir().mkpath(QFileInfo(*sourcePath).absolutePath()))
+    {
+        return false;
+    }
+
+    PrivacyProcessSpec spec;
+    spec.program = tools.ffmpeg;
+    spec.arguments = {
+        QLatin1String("-nostdin"), QLatin1String("-hide_banner"),
+        QLatin1String("-loglevel"), QLatin1String("error"),
+        QLatin1String("-f"), QLatin1String("lavfi"),
+        QLatin1String("-i"), QLatin1String("testsrc2=s=160x96:r=2"),
+        QLatin1String("-t"), QLatin1String("2"),
+        QLatin1String("-g"), QLatin1String("2"),
+        QLatin1String("-c:v"), QLatin1String("libx264"),
+        QLatin1String("-pix_fmt"), QLatin1String("yuv420p"),
+        QLatin1String("-y"), *sourcePath
+    };
+    spec.environment = QProcessEnvironment::systemEnvironment();
+    spec.finishTimeoutMs = 30000;
+    spec.maximumStdout = 1024;
+    spec.maximumStderr = 16384;
+    spec.sensitiveOutput = true;
+    QProcessPrivacyProcessRunner runner;
+    PrivacyProcessResult result = runner.run(spec, {});
+
+    return (result.succeeded() &&
+            populateSyntheticRequest(directory, relativePath, QSize(160, 96),
+                                     sourcePath, root, expectation, protect));
 }
 
 } // namespace
@@ -388,6 +458,7 @@ private Q_SLOTS:
     void protectFaultReplay();
     void protectUnprotectAndReplayFinalCleanup_data();
     void protectUnprotectAndReplayFinalCleanup();
+    void videoPreparedReplayRetainsExactProxy();
     void rejectsUnsafeReplayInputs();
 };
 
@@ -397,6 +468,7 @@ void PrivacyStillItemTransactionTest::protectFaultReplay_data()
     const QList<PrivacyStillItemFaultPoint> points = {
         PrivacyStillItemFaultPoint::AfterDatabaseBegin,
         PrivacyStillItemFaultPoint::AfterFilesystemJournal,
+        PrivacyStillItemFaultPoint::AfterPreparedPayload,
         PrivacyStillItemFaultPoint::AfterReplacementStageCreated,
         PrivacyStillItemFaultPoint::AfterStagesPrepared,
         PrivacyStillItemFaultPoint::AfterArchivePublished,
@@ -754,6 +826,89 @@ void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup()
     }
     QCOMPARE(restoredStat.st_mtim.tv_sec, time_t(1700000000));
     QCOMPARE(restoredStat.st_mtim.tv_nsec, long(123000000));
+}
+
+void PrivacyStillItemTransactionTest::videoPreparedReplayRetainsExactProxy()
+{
+    const PrivacyVideoToolPaths tools = PrivacyVideoToolPaths::discover();
+
+    if (!tools.isValid())
+    {
+        QSKIP("ffmpeg and ffprobe are not installed in this test environment");
+    }
+
+    QTemporaryDir directory;
+    QString sourcePath;
+    PrivacyStorageRoot root;
+    PrivacyJournalRootExpectation expectation;
+    PrivacyStillProtectRequest protect;
+    QVERIFY(prepareSyntheticVideo(directory, tools, &sourcePath, &root,
+                                  &expectation, &protect));
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = source.readAll();
+    source.close();
+
+    FakePersistence persistence;
+    persistence.snapshot.categories << category();
+    persistence.snapshot.storageRoots << root;
+    QSharedPointer<VerifiedRoot> verifier(new VerifiedRoot);
+    QSharedPointer<VerifiedIntegrity> inspector(new VerifiedIntegrity);
+    PrivacyRuntimeCoordinator runtime;
+    runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+    QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+    FakeCache cache;
+    PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+    engine.setFaultHook([](PrivacyStillItemFaultPoint point)
+    {
+        return (point == PrivacyStillItemFaultPoint::AfterPreparedPayload);
+    });
+    const PrivacyPassword password = PrivacyPassword::fromUnicode(
+        QLatin1String("synthetic passphrase"));
+    QCOMPARE(engine.protect(protect, password).status,
+             PrivacyStillItemTransactionStatus::FaultInjected);
+    QCOMPARE(persistence.snapshot.transactions.size(), 1);
+    QCOMPARE(persistence.snapshot.transactions.constFirst().state,
+             PrivacyTransactionState::Prepared);
+    QVERIFY(!persistence.snapshot.transactions.constFirst().payloadData.isEmpty());
+
+    PrivacyRuntimeCoordinator restartedRuntime;
+    restartedRuntime.initialize(persistence.snapshot, verifier, {}, inspector);
+    FakeCache restartedCache;
+    PrivacyStillItemTransactionEngine restarted(
+        persistence, restartedRuntime, restartedCache);
+    const PrivacyStillItemTransactionResult recovered = restarted.recover(
+        root, ProtectUuid);
+    QVERIFY2(recovered.status == PrivacyStillItemTransactionStatus::Protected,
+             qPrintable(recovered.detail));
+    QCOMPARE(persistence.snapshot.transactions.size(), 1);
+    QCOMPARE(persistence.snapshot.transactions.constFirst().state,
+             PrivacyTransactionState::Complete);
+    const QJsonDocument completedPayload = QJsonDocument::fromJson(
+        persistence.snapshot.transactions.constFirst().payloadData);
+    QVERIFY(completedPayload.isObject());
+    QVERIFY(completedPayload.object()
+                .value(QLatin1String("preparedProxyBytes"))
+                .toString().isEmpty());
+    QVERIFY(QFileInfo::exists(sourcePath +
+                              QLatin1String(".digikam-private.zip")));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    QVERIFY(source.readAll() != originalBytes);
+    source.close();
+
+    PrivacyStillUnprotectRequest unprotect;
+    unprotect.imageId = protect.imageId;
+    unprotect.categoryUuid = protect.categoryUuid;
+    unprotect.transactionUuid = UnprotectUuid;
+    unprotect.publicRoot = root;
+    unprotect.rootExpectation = expectation;
+    unprotect.freshAuthenticationConfirmed = true;
+    const PrivacyStillItemTransactionResult restored = restarted.unprotect(
+        unprotect, password);
+    QVERIFY2(restored.status == PrivacyStillItemTransactionStatus::Unprotected,
+             qPrintable(restored.detail));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    QCOMPARE(source.readAll(), originalBytes);
 }
 
 void PrivacyStillItemTransactionTest::rejectsUnsafeReplayInputs()

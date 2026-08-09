@@ -660,7 +660,12 @@ void PrivacySourceResolverTest::testOrdinarySourceUseGuardDrainsAndBlocksNewcome
     QVERIFY(ordinary.sourceResolutionIsCurrent());
     QVERIFY(ordinary.privacyCacheNamespace().isEmpty());
 
-    PrivacySourceUseGuard incumbent(ordinary);
+    PrivacySourceRequest request;
+    request.logicalFilePath = path;
+    request.itemReference   = 42;
+    request.consumer        = PrivacySourceRequest::Preview;
+    const PrivacySourceResult initial = PrivacySourceResolver::resolve(request);
+    PrivacySourceUseGuard incumbent(path, initial);
     QVERIFY(incumbent.isAcquired());
 
     PrivacyCacheTransitionToken token;
@@ -681,10 +686,6 @@ void PrivacySourceResolverTest::testOrdinarySourceUseGuardDrainsAndBlocksNewcome
         std::this_thread::yield();
     }
 
-    PrivacySourceRequest request;
-    request.logicalFilePath = path;
-    request.itemReference   = 42;
-    request.consumer        = PrivacySourceRequest::Thumbnail;
     PrivacySourceResult blocked;
     QElapsedTimer timer;
     timer.start();
@@ -713,7 +714,7 @@ void PrivacySourceResolverTest::testOrdinarySourceUseGuardDrainsAndBlocksNewcome
         std::this_thread::yield();
     }
 
-    PrivacySourceUseGuard newcomer(ordinary);
+    PrivacySourceUseGuard newcomer(path, initial);
     const bool blockedObserved =
         (blocked.disposition == PrivacySourceResult::Denied);
     const bool firstReturnedBeforeRelease = beginReturned.load();

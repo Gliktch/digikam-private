@@ -29,6 +29,7 @@ namespace Digikam
 {
 
 class LoadingDescription;
+class PrivacySourceResult;
 
 class DIGIKAM_EXPORT PrivacySourceUseGuard
 {
@@ -41,6 +42,8 @@ public:
      * which Protect must drain most critically.
      */
     explicit PrivacySourceUseGuard(const LoadingDescription& description);
+    PrivacySourceUseGuard(const QString& logicalFilePath,
+                          const PrivacySourceResult& resolvedSource);
     ~PrivacySourceUseGuard();
 
     bool isAcquired() const;
