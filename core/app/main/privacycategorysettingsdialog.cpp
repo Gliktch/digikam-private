@@ -88,6 +88,13 @@ QString presentationText(PrivacyPresentationMode mode)
          : i18nc("@item:inlistbox private category presentation", "Generic privacy tile");
 }
 
+QString tagVisibilityText(PrivacyTagVisibilityMode mode)
+{
+    return (mode == PrivacyTagVisibilityMode::AlwaysVisible)
+         ? i18nc("@item:inlistbox private category tag visibility", "Always visible")
+         : i18nc("@item:inlistbox private category tag visibility", "Visible while unlocked");
+}
+
 QString passwordErrorText(PrivacyPasswordError error)
 {
     switch (error)
@@ -141,6 +148,11 @@ QString sessionFailureText(const PrivacyCategorySessionResult& result)
 
         case PrivacyCategorySessionStatus::LockFailed:
             return i18nc("@info", "The category store could not be safely locked.");
+
+        case PrivacyCategorySessionStatus::SettingsUpdateFailed:
+            return i18nc("@info",
+                         "The category setting could not be published consistently. "
+                         "The previous setting remains in effect.");
 
         case PrivacyCategorySessionStatus::Conflict:
             return i18nc("@info", "The category conflicts with existing durable state.");
@@ -211,10 +223,11 @@ public:
         layout->addWidget(introduction);
 
         table = new QTableWidget(q);
-        table->setColumnCount(5);
+        table->setColumnCount(6);
         table->setHorizontalHeaderLabels({
             i18nc("@title:column", "Category"),
             i18nc("@title:column", "Presentation"),
+            i18nc("@title:column", "Tags"),
             i18nc("@title:column", "Items"),
             i18nc("@title:column", "Session"),
             i18nc("@title:column", "Store Folder")
@@ -227,7 +240,8 @@ public:
         table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
         table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
         table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-        table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+        table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
         layout->addWidget(table, 1);
 
         auto* const actionLayout = new QHBoxLayout;
@@ -235,11 +249,15 @@ public:
             QIcon::fromTheme(QLatin1String("list-add")),
             i18nc("@action:button", "Create Category..."), q);
         sessionButton = new QPushButton(q);
+        tagVisibilityButton = new QPushButton(
+            QIcon::fromTheme(QLatin1String("tag")),
+            i18nc("@action:button", "Tag Visibility..."), q);
         lockAllButton = new QPushButton(
             QIcon::fromTheme(QLatin1String("object-locked")),
             i18nc("@action:button", "Lock All"), q);
         actionLayout->addWidget(createButton);
         actionLayout->addWidget(sessionButton);
+        actionLayout->addWidget(tagVisibilityButton);
         actionLayout->addWidget(lockAllButton);
         actionLayout->addStretch(1);
         layout->addLayout(actionLayout);
@@ -257,6 +275,8 @@ public:
                          q, [this]() { createCategory(); });
         QObject::connect(sessionButton, &QPushButton::clicked,
                          q, [this]() { runSelectedCategoryAction(); });
+        QObject::connect(tagVisibilityButton, &QPushButton::clicked,
+                         q, [this]() { editTagVisibility(); });
         QObject::connect(lockAllButton, &QPushButton::clicked,
                          q, [this]() { lockAll(); });
         QObject::connect(table, &QTableWidget::itemSelectionChanged,
@@ -372,11 +392,13 @@ public:
             table->setItem(row, 1, new QTableWidgetItem(
                                presentationText(category.presentationMode)));
             table->setItem(row, 2, new QTableWidgetItem(
+                               tagVisibilityText(category.tagVisibilityMode)));
+            table->setItem(row, 3, new QTableWidgetItem(
                                QString::number(itemCounts.value(category.uuid))));
-            table->setItem(row, 3, new QTableWidgetItem(sessionText));
+            table->setItem(row, 4, new QTableWidgetItem(sessionText));
             auto* const pathItem = new QTableWidgetItem(root.configuredPath);
             pathItem->setToolTip(root.configuredPath);
-            table->setItem(row, 4, pathItem);
+            table->setItem(row, 5, pathItem);
 
             if (category.uuid == selectedUuid)
             {
@@ -475,6 +497,7 @@ public:
         lockAllButton->setEnabled(!busy && sessions && !categories.isEmpty());
         sessionButton->setEnabled(false);
         sessionButton->setIcon(QIcon());
+        tagVisibilityButton->setEnabled(false);
 
         if (busy || !sessions || !category)
         {
@@ -505,6 +528,7 @@ public:
             unlocked ? QLatin1String("object-locked")
                      : QLatin1String("object-unlocked")));
         sessionButton->setEnabled(true);
+        tagVisibilityButton->setEnabled(!runtime.isNull());
     }
 
     void setBusy(bool value)
@@ -873,6 +897,96 @@ public:
                        i18nc("@info", "The category is unlocked for this digiKam session."));
     }
 
+    void editTagVisibility()
+    {
+        const PrivacyCategory* const selected = selectedCategory();
+
+        if (!sessions || !runtime || busy || !selected ||
+            (selected->lifecycleState != PrivacyCategoryLifecycleState::Active))
+        {
+            return;
+        }
+
+        const PrivacyCategory category = *selected;
+        const QStringList choices = {
+            tagVisibilityText(PrivacyTagVisibilityMode::UnlockedOnly),
+            tagVisibilityText(PrivacyTagVisibilityMode::AlwaysVisible)
+        };
+        const int currentIndex = (category.tagVisibilityMode ==
+                                  PrivacyTagVisibilityMode::AlwaysVisible) ? 1 : 0;
+        bool accepted = false;
+        const QString choice = QInputDialog::getItem(
+            q, i18nc("@title:window", "Private Tag Visibility"),
+            i18nc("@label",
+                  "When should manual tags for %1 be shown and searchable?",
+                  category.name),
+            choices, currentIndex, false, &accepted);
+
+        if (!accepted)
+        {
+            return;
+        }
+
+        const int selectedIndex = choices.indexOf(choice);
+
+        if (selectedIndex < 0)
+        {
+            return;
+        }
+
+        const PrivacyTagVisibilityMode mode = (selectedIndex == 1)
+                                            ? PrivacyTagVisibilityMode::AlwaysVisible
+                                            : PrivacyTagVisibilityMode::UnlockedOnly;
+
+        if (mode == category.tagVisibilityMode)
+        {
+            statusLabel->setText(i18nc("@info", "The tag visibility setting is unchanged."));
+            return;
+        }
+
+        QString password;
+
+        if (!sessions->ownsSecret(category.uuid))
+        {
+            password = QInputDialog::getText(
+                q, i18nc("@title:window", "Authenticate Privacy Category"),
+                i18nc("@label", "Password for %1:", category.name),
+                QLineEdit::Password, QString(), &accepted);
+
+            if (!accepted)
+            {
+                wipe(password);
+                return;
+            }
+        }
+
+        const QSharedPointer<QString> secret =
+            QSharedPointer<QString>::create(std::move(password));
+        const QSharedPointer<PrivacyCategorySessionOwner> owner = sessions;
+        const QFuture<PrivacyCategorySessionResult> future = QtConcurrent::run(
+            [owner, category, mode, secret]()
+            {
+                PrivacyCategorySessionResult result;
+
+                try
+                {
+                    result = owner->setCategoryTagVisibilityMode(
+                        category.uuid, mode, *secret);
+                }
+                catch (...)
+                {
+                    result.status = PrivacyCategorySessionStatus::SettingsUpdateFailed;
+                }
+
+                wipe(*secret);
+                return result;
+            });
+        watchOperation(future,
+                       i18nc("@title:window", "Updating Tag Visibility"),
+                       i18nc("@info:progress", "Updating the private tag policy..."),
+                       i18nc("@info", "The private tag visibility setting was updated."));
+    }
+
     void lockAll()
     {
         if (!sessions || busy)
@@ -948,6 +1062,7 @@ public:
     QTableWidget* table = nullptr;
     QPushButton* createButton = nullptr;
     QPushButton* sessionButton = nullptr;
+    QPushButton* tagVisibilityButton = nullptr;
     QPushButton* lockAllButton = nullptr;
     QLabel* statusLabel = nullptr;
     QDialogButtonBox* buttonBox = nullptr;

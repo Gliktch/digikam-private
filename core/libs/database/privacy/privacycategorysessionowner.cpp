@@ -185,6 +185,22 @@ PrivacyCategorySessionOwner::runWithFreshlyAuthenticatedSecret(
                allowedActiveItemTransactionUuid);
 }
 
+PrivacyCategorySessionResult
+PrivacyCategorySessionOwner::setCategoryTagVisibilityMode(
+    const QString& categoryUuid, PrivacyTagVisibilityMode mode,
+    const QString& passwordText)
+{
+    QReadLocker locker(&d->lifecycleLock);
+
+    if (d->closed)
+    {
+        return { PrivacyCategorySessionStatus::TransactionBlocked };
+    }
+
+    return d->coordinator.setCategoryTagVisibilityMode(categoryUuid, mode,
+                                                        passwordText);
+}
+
 bool PrivacyCategorySessionOwner::ownsSecret(const QString& categoryUuid) const
 {
     QReadLocker locker(&d->lifecycleLock);

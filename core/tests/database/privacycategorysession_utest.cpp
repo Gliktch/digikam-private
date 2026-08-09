@@ -164,6 +164,29 @@ public:
         return true;
     }
 
+    bool setCategoryTagVisibilityMode(
+        const QString& categoryUuid,
+        PrivacyTagVisibilityMode mode) override
+    {
+        ++tagVisibilityUpdateCalls;
+
+        if (failTagVisibilityUpdate)
+        {
+            return false;
+        }
+
+        for (PrivacyCategory& category : snapshot.categories)
+        {
+            if (category.uuid == categoryUuid)
+            {
+                category.tagVisibilityMode = mode;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     bool beginCreation(const PrivacyCategory& category,
                        const PrivacyStorageRoot& root,
                        const PrivacyStore& store,
@@ -279,9 +302,11 @@ public:
     std::atomic<int> beginCalls { 0 };
     std::atomic<int> publishCalls { 0 };
     std::atomic<int> journalUpdateCalls { 0 };
+    std::atomic<int> tagVisibilityUpdateCalls { 0 };
     bool failBegin = false;
     bool failPublish = false;
     bool failCompleteJournalUpdateOnce = false;
+    bool failTagVisibilityUpdate = false;
     PrivacyRepositorySnapshot snapshot;
 };
 
@@ -595,6 +620,8 @@ private Q_SLOTS:
     void testFreshAuthenticationDoesNotReplaceRetainedSecret();
     void testFreshAuthenticationRejectsWrongPasswordAndRecoversFromException();
     void testFreshAuthenticationSerializesLock();
+    void testTagVisibilityUpdateReusesUnlockedAuthentication();
+    void testTagVisibilityUpdateRequiresAuthenticationAndCompensatesFailure();
     void testCallbacksAndBlockingTeardownAreOutOfLock();
     void testDestructorForcesFailedLockTeardown();
 };
@@ -1380,6 +1407,83 @@ void PrivacyCategorySessionTest::testFreshAuthenticationSerializesLock()
     QCOMPARE(lockResult.status, PrivacyCategorySessionStatus::Locked);
     QVERIFY(lockFinished.load());
     QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+}
+
+void PrivacyCategorySessionTest::testTagVisibilityUpdateReusesUnlockedAuthentication()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+
+    QCOMPARE(coordinator.unlockCategory(CategoryUuid,
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Unlocked);
+    const quint64 initialEpoch = runtime.categoryEpoch(CategoryUuid);
+
+    QCOMPARE(coordinator.setCategoryTagVisibilityMode(
+                 CategoryUuid, PrivacyTagVisibilityMode::AlwaysVisible).status,
+             PrivacyCategorySessionStatus::SettingsUpdated);
+    QCOMPARE(repository.tagVisibilityUpdateCalls.load(), 1);
+    QCOMPARE(repository.snapshot.categories.constFirst().tagVisibilityMode,
+             PrivacyTagVisibilityMode::AlwaysVisible);
+    QVERIFY(runtime.categoryEpoch(CategoryUuid) > initialEpoch);
+
+    QCOMPARE(coordinator.setCategoryTagVisibilityMode(
+                 CategoryUuid, PrivacyTagVisibilityMode::UnlockedOnly).status,
+             PrivacyCategorySessionStatus::SettingsUpdated);
+    QCOMPARE(repository.tagVisibilityUpdateCalls.load(), 2);
+    QCOMPARE(repository.snapshot.categories.constFirst().tagVisibilityMode,
+             PrivacyTagVisibilityMode::UnlockedOnly);
+    QVERIFY(coordinator.ownsSecret(CategoryUuid));
+}
+
+void PrivacyCategorySessionTest::testTagVisibilityUpdateRequiresAuthenticationAndCompensatesFailure()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+    const quint64 initialEpoch = runtime.categoryEpoch(CategoryUuid);
+
+    QCOMPARE(coordinator.setCategoryTagVisibilityMode(
+                 CategoryUuid, PrivacyTagVisibilityMode::AlwaysVisible,
+                 QLatin1String("wrong")).status,
+             PrivacyCategorySessionStatus::AuthenticationFailed);
+    QCOMPARE(repository.tagVisibilityUpdateCalls.load(), 0);
+    QCOMPARE(runtime.categoryEpoch(CategoryUuid), initialEpoch);
+
+    QCOMPARE(coordinator.setCategoryTagVisibilityMode(
+                 CategoryUuid, PrivacyTagVisibilityMode::AlwaysVisible,
+                 QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::SettingsUpdated);
+    QCOMPARE(repository.snapshot.categories.constFirst().tagVisibilityMode,
+             PrivacyTagVisibilityMode::AlwaysVisible);
+    QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+
+    const quint64 exposedEpoch = runtime.categoryEpoch(CategoryUuid);
+    repository.failTagVisibilityUpdate = true;
+    QCOMPARE(coordinator.setCategoryTagVisibilityMode(
+                 CategoryUuid, PrivacyTagVisibilityMode::UnlockedOnly,
+                 QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::SettingsUpdateFailed);
+    QCOMPARE(repository.snapshot.categories.constFirst().tagVisibilityMode,
+             PrivacyTagVisibilityMode::AlwaysVisible);
+    QVERIFY(runtime.categoryEpoch(CategoryUuid) >= (exposedEpoch + 2));
+    QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+
+    QCOMPARE(coordinator.setCategoryTagVisibilityMode(
+                 CategoryUuid, static_cast<PrivacyTagVisibilityMode>(99),
+                 QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::InvalidRequest);
 }
 
 void PrivacyCategorySessionTest::testCallbacksAndBlockingTeardownAreOutOfLock()

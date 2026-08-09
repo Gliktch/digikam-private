@@ -54,7 +54,9 @@ enum class PrivacyCategorySessionStatus
     Canceled,
     LockFailed,
     FreshAuthenticationVerified,
-    CategoryLocked
+    CategoryLocked,
+    SettingsUpdated,
+    SettingsUpdateFailed
 };
 
 enum class PrivacyCategoryOperationStatus
@@ -102,6 +104,9 @@ public:
     virtual ~PrivacyCategorySessionRepository() = default;
 
     virtual bool loadSnapshot(PrivacyRepositorySnapshot* snapshot) const = 0;
+    virtual bool setCategoryTagVisibilityMode(
+        const QString& categoryUuid,
+        PrivacyTagVisibilityMode mode) = 0;
     virtual bool beginCreation(const PrivacyCategory& category,
                                const PrivacyStorageRoot& root,
                                const PrivacyStore& store,
@@ -123,6 +128,9 @@ class DIGIKAM_DATABASE_EXPORT PrivacyCoreDbCategorySessionRepository final
 public:
 
     bool loadSnapshot(PrivacyRepositorySnapshot* snapshot) const override;
+    bool setCategoryTagVisibilityMode(
+        const QString& categoryUuid,
+        PrivacyTagVisibilityMode mode) override;
     bool beginCreation(const PrivacyCategory& category,
                        const PrivacyStorageRoot& root,
                        const PrivacyStore& store,
@@ -284,6 +292,10 @@ public:
         const QString& passwordText,
         const std::function<void(const PrivacyPassword&)>& operation,
         const QString& allowedActiveItemTransactionUuid = QString());
+    PrivacyCategorySessionResult setCategoryTagVisibilityMode(
+        const QString& categoryUuid,
+        PrivacyTagVisibilityMode mode,
+        const QString& passwordText = QString());
 
     bool ownsSecret(const QString& categoryUuid) const;
 

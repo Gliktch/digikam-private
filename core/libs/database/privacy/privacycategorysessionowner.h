@@ -64,6 +64,10 @@ public:
         const QString& passwordText,
         const std::function<void(const PrivacyPassword&)>& operation,
         const QString& allowedActiveItemTransactionUuid = QString());
+    PrivacyCategorySessionResult setCategoryTagVisibilityMode(
+        const QString& categoryUuid,
+        PrivacyTagVisibilityMode mode,
+        const QString& passwordText = QString());
 
     bool ownsSecret(const QString& categoryUuid) const;
 

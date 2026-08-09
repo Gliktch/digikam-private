@@ -544,7 +544,8 @@ bool PrivacyCategorySessionResult::succeeded() const
             (status == PrivacyCategorySessionStatus::Locked) ||
             (status == PrivacyCategorySessionStatus::AlreadyUnlocked) ||
             (status == PrivacyCategorySessionStatus::AlreadyLocked) ||
-            (status == PrivacyCategorySessionStatus::FreshAuthenticationVerified));
+            (status == PrivacyCategorySessionStatus::FreshAuthenticationVerified) ||
+            (status == PrivacyCategorySessionStatus::SettingsUpdated));
 }
 
 bool PrivacyCategorySessionResult::recoveryRequired() const
@@ -557,6 +558,12 @@ bool PrivacyCoreDbCategorySessionRepository::loadSnapshot(
     PrivacyRepositorySnapshot* const snapshot) const
 {
     return PrivacyRepository().loadSnapshot(snapshot);
+}
+
+bool PrivacyCoreDbCategorySessionRepository::setCategoryTagVisibilityMode(
+    const QString& categoryUuid, PrivacyTagVisibilityMode mode)
+{
+    return PrivacyRepository().setCategoryTagVisibilityMode(categoryUuid, mode, true);
 }
 
 bool PrivacyCoreDbCategorySessionRepository::beginCreation(
@@ -1899,6 +1906,123 @@ PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
     Q_UNUSED(session); // Retain an existing session and lease for the callback.
 
     result.status = PrivacyCategorySessionStatus::FreshAuthenticationVerified;
+    return result;
+}
+
+PrivacyCategorySessionResult
+PrivacyCategorySessionCoordinator::setCategoryTagVisibilityMode(
+    const QString& categoryUuidText, PrivacyTagVisibilityMode mode,
+    const QString& passwordText)
+{
+    PrivacyCategorySessionResult result;
+    const QString categoryUuid = normalizedUuid(categoryUuidText);
+
+    if (categoryUuid.isEmpty() ||
+        ((mode != PrivacyTagVisibilityMode::UnlockedOnly) &&
+         (mode != PrivacyTagVisibilityMode::AlwaysVisible)))
+    {
+        result.status = PrivacyCategorySessionStatus::InvalidRequest;
+        return result;
+    }
+
+    bool updated = false;
+    const auto update = [this, &updated, categoryUuid, mode](const PrivacyPassword&)
+    {
+        PrivacyRepositorySnapshot snapshot;
+
+        if (!d->repository.loadSnapshot(&snapshot))
+        {
+            return;
+        }
+
+        PrivacyCategory category;
+        int matches = 0;
+
+        for (const PrivacyCategory& candidate : std::as_const(snapshot.categories))
+        {
+            if (candidate.uuid == categoryUuid)
+            {
+                category = candidate;
+                ++matches;
+            }
+        }
+
+        if ((matches != 1) || !category.isValid() ||
+            (category.lifecycleState != PrivacyCategoryLifecycleState::Active))
+        {
+            return;
+        }
+
+        const PrivacyTagVisibilityMode previous = category.tagVisibilityMode;
+
+        if (previous == mode)
+        {
+            updated = true;
+            return;
+        }
+
+        if (mode == PrivacyTagVisibilityMode::AlwaysVisible)
+        {
+            // Publish the less-private policy only after it is durable. A
+            // runtime failure leaves the current session more restrictive and
+            // the compensating write restores the durable policy.
+
+            if (!d->repository.setCategoryTagVisibilityMode(categoryUuid, mode))
+            {
+                return;
+            }
+
+            if (!d->runtime.setCategoryTagVisibilityMode(categoryUuid, mode, true))
+            {
+                d->repository.setCategoryTagVisibilityMode(categoryUuid, previous);
+                return;
+            }
+        }
+        else
+        {
+            // Hide immediately, then persist. If persistence fails, restore
+            // the prior durable policy so runtime and restart behavior agree.
+
+            if (!d->runtime.setCategoryTagVisibilityMode(categoryUuid, mode, true))
+            {
+                return;
+            }
+
+            if (!d->repository.setCategoryTagVisibilityMode(categoryUuid, mode))
+            {
+                d->runtime.setCategoryTagVisibilityMode(categoryUuid, previous, true);
+                return;
+            }
+        }
+
+        updated = true;
+    };
+
+    if (ownsSecret(categoryUuid))
+    {
+        const PrivacyCategoryOperationStatus operation =
+            runWithUnlockedSecret(categoryUuid, update);
+
+        if (operation != PrivacyCategoryOperationStatus::Completed)
+        {
+            result.status = (operation == PrivacyCategoryOperationStatus::TransactionBlocked)
+                          ? PrivacyCategorySessionStatus::TransactionBlocked
+                          : PrivacyCategorySessionStatus::CategoryLocked;
+            return result;
+        }
+    }
+    else
+    {
+        result = runWithFreshlyAuthenticatedSecret(categoryUuid, passwordText, update);
+
+        if (!result.succeeded())
+        {
+            return result;
+        }
+    }
+
+    result.status = updated ? PrivacyCategorySessionStatus::SettingsUpdated
+                            : PrivacyCategorySessionStatus::SettingsUpdateFailed;
     return result;
 }
 
