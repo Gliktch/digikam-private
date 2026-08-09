@@ -83,7 +83,8 @@ public:
         Moved,
         Removed,
         RemovedAll,
-        PropertiesChanged
+        PropertiesChanged,
+        VisibilityChanged
     };
 
 public:

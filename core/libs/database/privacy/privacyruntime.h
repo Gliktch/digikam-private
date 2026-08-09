@@ -273,6 +273,7 @@ public:
     bool currentState(const QString& itemUuid,
                       PrivacyLeaseCurrentState* state) const override;
     bool mayAccessManualTags(qlonglong imageId) const override;
+    QSet<QString> visibleManualTagCategoryUuids() const override;
     PrivacyAnalysisDisposition analysisDisposition(qlonglong imageId) const override;
 
     PrivacyScanDisposition evaluate(const PrivacyScanRequest& request) const override;
@@ -315,6 +316,24 @@ public:
     static QSharedPointer<const PrivacyLeaseStateProvider> leaseStateProvider();
     static QSharedPointer<const PrivacyManualTagVisibilityProvider>
         manualTagVisibilityProvider();
+};
+
+/**
+ * Process-wide manual-tag policy facade. The provider is installed during
+ * normal application database startup. Its absence preserves upstream
+ * behaviour for isolated database-library users and tests.
+ */
+class DIGIKAM_DATABASE_EXPORT PrivacyManualTagVisibilityGate
+{
+public:
+
+    static void setProvider(
+        const QSharedPointer<const PrivacyManualTagVisibilityProvider>& provider);
+    static void resetProvider();
+    static bool isInstalled();
+    static bool mayAccess(qlonglong imageId);
+    static QSet<QString> visibleCategoryUuids();
+    static bool queryState(QSet<QString>* visibleCategoryUuids);
 };
 
 } // namespace Digikam

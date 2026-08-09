@@ -40,9 +40,46 @@
 #include "dbengineactiontype.h"
 #include "tagscache.h"
 #include "privacytransactionjournal.h"
+#include "privacyruntime.h"
 
 namespace Digikam
 {
+
+namespace
+{
+
+QString manualTagVisibilitySql(const QString& imageIdExpression,
+                               QList<QVariant>* boundValues)
+{
+    QSet<QString> visibleCategorySet;
+
+    if (!PrivacyManualTagVisibilityGate::queryState(&visibleCategorySet))
+    {
+        return QString();
+    }
+
+    QStringList visibleCategories = visibleCategorySet.values();
+    std::sort(visibleCategories.begin(), visibleCategories.end());
+    QString sql = QString::fromUtf8(
+        " AND NOT EXISTS (SELECT 1 FROM PrivacyItems AS PrivacyTagItems "
+        "WHERE PrivacyTagItems.imageId=%1").arg(imageIdExpression);
+
+    if (!visibleCategories.isEmpty())
+    {
+        sql += QLatin1String(" AND PrivacyTagItems.categoryUuid NOT IN (");
+        CoreDB::addBoundValuePlaceholders(sql, visibleCategories.size());
+        sql += QLatin1Char(')');
+
+        for (const QString& categoryUuid : std::as_const(visibleCategories))
+        {
+            *boundValues << categoryUuid;
+        }
+    }
+
+    return sql + QLatin1Char(')');
+}
+
+} // namespace
 
 class Q_DECL_HIDDEN CoreDB::Private
 {
@@ -5536,6 +5573,7 @@ QHash<int, int> CoreDB::getNumberOfImagesInAlbums() const
 QHash<int, int> CoreDB::getNumberOfImagesInTags() const
 {
     QVariantList    values, allTagIDs;
+    QVariantList    boundValues;
     QHash<int, int> tagsStatHash;
     int             tagID, count;
 
@@ -5551,10 +5589,13 @@ QHash<int, int> CoreDB::getNumberOfImagesInTags() const
         tagsStatHash.insert(tagID, 0);
     }
 
-    d->db->execSql(QString::fromUtf8("SELECT tagid, COUNT(*) FROM ImageTags "
-                                     "LEFT JOIN Images ON Images.id=ImageTags.imageid "
-                                     " WHERE Images.status=1 GROUP BY tagid;"),
-                   &values);
+    QString sql = QString::fromUtf8("SELECT tagid, COUNT(*) FROM ImageTags "
+                                    "LEFT JOIN Images ON Images.id=ImageTags.imageid "
+                                    " WHERE Images.status=1");
+    sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                  &boundValues);
+    sql += QLatin1String(" GROUP BY tagid;");
+    d->db->execSql(sql, boundValues, &values);
 
     for (QList<QVariant>::const_iterator it = values.constBegin() ; it != values.constEnd() ; )
     {
@@ -5572,14 +5613,17 @@ QHash<int, int> CoreDB::getNumberOfImagesInTags() const
 QHash<int, int> CoreDB::getNumberOfImagesInTagProperties(const QString& property) const
 {
     QVariantList    values;
+    QVariantList    boundValues { property };
     QHash<int, int> tagsStatHash;
     int             tagID, count;
 
-    d->db->execSql(QString::fromUtf8("SELECT tagid, COUNT(*) FROM ImageTagProperties "
-                                     "LEFT JOIN Images ON Images.id=ImageTagProperties.imageid "
-                                     " WHERE ImageTagProperties.property=? AND Images.status=1 "
-                                     "  GROUP BY tagid;"),
-                   property, &values);
+    QString sql = QString::fromUtf8("SELECT tagid, COUNT(*) FROM ImageTagProperties "
+                                    "LEFT JOIN Images ON Images.id=ImageTagProperties.imageid "
+                                    " WHERE ImageTagProperties.property=? AND Images.status=1");
+    sql += manualTagVisibilitySql(QLatin1String("ImageTagProperties.imageid"),
+                                  &boundValues);
+    sql += QLatin1String(" GROUP BY tagid;");
+    d->db->execSql(sql, boundValues, &values);
 
     for (QList<QVariant>::const_iterator it = values.constBegin() ; it != values.constEnd() ; )
     {
@@ -5597,12 +5641,16 @@ QHash<int, int> CoreDB::getNumberOfImagesInTagProperties(const QString& property
 int CoreDB::getNumberOfImagesInTagProperties(int tagId, const QString& property) const
 {
     QVariantList values;
+    QVariantList boundValues { property, tagId };
 
-    d->db->execSql(QString::fromUtf8("SELECT COUNT(*) FROM ImageTagProperties "
-                                     "LEFT JOIN Images ON Images.id=ImageTagProperties.imageid "
-                                     " WHERE ImageTagProperties.property=? AND Images.status=1 "
-                                     " AND ImageTagProperties.tagid=?;"),
-                   property, tagId, &values);
+    QString sql = QString::fromUtf8("SELECT COUNT(*) FROM ImageTagProperties "
+                                    "LEFT JOIN Images ON Images.id=ImageTagProperties.imageid "
+                                    " WHERE ImageTagProperties.property=? AND Images.status=1 "
+                                    " AND ImageTagProperties.tagid=?");
+    sql += manualTagVisibilitySql(QLatin1String("ImageTagProperties.imageid"),
+                                  &boundValues);
+    sql += QLatin1Char(';');
+    d->db->execSql(sql, boundValues, &values);
 
     if (values.isEmpty())
     {
@@ -5615,17 +5663,21 @@ int CoreDB::getNumberOfImagesInTagProperties(int tagId, const QString& property)
 QList<qlonglong> CoreDB::getImagesWithImageTagProperty(int tagId, const QString& property) const
 {
     QVariantList     values;
+    QVariantList     boundValues { property, tagId };
     QList<qlonglong> imageIds;
 
-    d->db->execSql(QString::fromUtf8("SELECT DISTINCT Images.id FROM ImageTagProperties "
-                                     "LEFT JOIN Images ON Images.id=ImageTagProperties.imageid "
-                                     " WHERE ImageTagProperties.property=? AND Images.status=1 "
-                                     " AND ImageTagProperties.tagid=?;"),
-                   property, tagId, &values);
+    QString sql = QString::fromUtf8("SELECT DISTINCT Images.id FROM ImageTagProperties "
+                                    "LEFT JOIN Images ON Images.id=ImageTagProperties.imageid "
+                                    " WHERE ImageTagProperties.property=? AND Images.status=1 "
+                                    " AND ImageTagProperties.tagid=?");
+    sql += manualTagVisibilitySql(QLatin1String("ImageTagProperties.imageid"),
+                                  &boundValues);
+    sql += QLatin1Char(';');
+    d->db->execSql(sql, boundValues, &values);
 
     for (QList<QVariant>::const_iterator it = values.constBegin() ; it != values.constEnd() ; ++it)
     {
-        imageIds.append((*it).toInt());
+        imageIds.append((*it).toLongLong());
     }
 
     return imageIds;
@@ -6259,11 +6311,15 @@ QList<qlonglong> CoreDB::getItemIDsInTag(int tagID, bool recursive) const
 qlonglong CoreDB::getFirstItemWithFaceTag(int tagId) const
 {
     QVariantList values;
+    QVariantList boundValues { tagId, ImageTagPropertyName::tagRegion() };
 
-    d->db->execSql(QString::fromUtf8("SELECT imageid FROM ImageTagProperties "
-                                     "LEFT JOIN Images ON Images.id=ImageTagProperties.imageid "
-                                     " WHERE tagid=? AND property=? AND Images.status=1 LIMIT 1;"),
-                   tagId, ImageTagPropertyName::tagRegion(), &values);
+    QString sql = QString::fromUtf8("SELECT imageid FROM ImageTagProperties "
+                                    "LEFT JOIN Images ON Images.id=ImageTagProperties.imageid "
+                                    " WHERE tagid=? AND property=? AND Images.status=1");
+    sql += manualTagVisibilitySql(QLatin1String("ImageTagProperties.imageid"),
+                                  &boundValues);
+    sql += QLatin1String(" LIMIT 1;");
+    d->db->execSql(sql, boundValues, &values);
 
     if (values.isEmpty())
     {

@@ -21,6 +21,7 @@
 
 // C++ includes
 
+#include <algorithm>
 #include <cmath>
 
 // Qt includes

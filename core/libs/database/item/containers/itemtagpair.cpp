@@ -24,6 +24,7 @@
 #include "coredb.h"
 #include "coredbaccess.h"
 #include "iteminfo.h"
+#include "privacyruntime.h"
 #include "tagscache.h"
 
 namespace Digikam
@@ -43,6 +44,7 @@ public:
     ItemTagPairPriv() = default;
 
     bool isNull() const;
+    bool mayAccess() const;
     void init(const ItemInfo& info, int tagId);
     void checkProperties();
 
@@ -81,6 +83,11 @@ ItemTagPairPrivSharedPointer ItemTagPairPriv::createGuarded(qlonglong imageId, i
         return *imageTagPairPrivSharedNull;
     }
 
+    if (!PrivacyManualTagVisibilityGate::mayAccess(imageId))
+    {
+        return *imageTagPairPrivSharedNull;
+    }
+
     return ItemTagPairPrivSharedPointer(new ItemTagPairPriv);
 }
 
@@ -98,7 +105,14 @@ void ItemTagPairPriv::init(const ItemInfo& i, int t)
 
 void ItemTagPairPriv::checkProperties()
 {
-    if (!isNull() && !propertiesLoaded)
+    if (!mayAccess())
+    {
+        properties.clear();
+        propertiesLoaded = false;
+        return;
+    }
+
+    if (!propertiesLoaded)
     {
         QList<ImageTagProperty> props = CoreDbAccess().db()->getImageTagProperties(info.id(), tagId);
 
@@ -114,6 +128,11 @@ void ItemTagPairPriv::checkProperties()
 bool ItemTagPairPriv::isNull() const
 {
     return (this == imageTagPairPrivSharedNull->constData());
+}
+
+bool ItemTagPairPriv::mayAccess() const
+{
+    return (!isNull() && PrivacyManualTagVisibilityGate::mayAccess(info.id()));
 }
 
 // -----------------------------------------------------------------------
@@ -165,7 +184,7 @@ QList<ItemTagPair> ItemTagPair::availablePairs(const ItemInfo& info)
 {
     QList<ItemTagPair> pairs;
 
-    if (info.isNull())
+    if (info.isNull() || !PrivacyManualTagVisibilityGate::mayAccess(info.id()))
     {
         return pairs;
     }
@@ -192,12 +211,12 @@ int ItemTagPair::tagId() const
 
 bool ItemTagPair::isAssigned() const
 {
-    return d->isAssigned;
+    return (d->mayAccess() && d->isAssigned);
 }
 
 void ItemTagPair::assignTag()
 {
-    if (!d->isNull() && !d->isAssigned)
+    if (d->mayAccess() && !d->isAssigned)
     {
         d->info.setTag(d->tagId);
         d->isAssigned = true;
@@ -206,7 +225,7 @@ void ItemTagPair::assignTag()
 
 void ItemTagPair::unAssignTag()
 {
-    if (!d->isNull() && d->isAssigned)
+    if (d->mayAccess() && d->isAssigned)
     {
         d->info.removeTag(d->tagId);
         d->isAssigned = false;
@@ -285,7 +304,7 @@ QMultiMap<QString, QString> ItemTagPair::properties() const
 
 void ItemTagPair::setProperty(const QString& key, const QString& value)
 {
-    if (d->isNull() || d->info.isNull())
+    if (!d->mayAccess() || d->info.isNull())
     {
         return;
     }
@@ -301,7 +320,7 @@ void ItemTagPair::setProperty(const QString& key, const QString& value)
 
 void ItemTagPair::addProperty(const QString& key, const QString& value)
 {
-    if (d->isNull() || d->info.isNull())
+    if (!d->mayAccess() || d->info.isNull())
     {
         return;
     }
@@ -317,7 +336,7 @@ void ItemTagPair::addProperty(const QString& key, const QString& value)
 
 void ItemTagPair::removeProperty(const QString& key, const QString& value)
 {
-    if (d->isNull() || d->info.isNull())
+    if (!d->mayAccess() || d->info.isNull())
     {
         return;
     }
@@ -333,7 +352,7 @@ void ItemTagPair::removeProperty(const QString& key, const QString& value)
 
 void ItemTagPair::removeProperties(const QString& key)
 {
-    if (d->isNull() || d->info.isNull())
+    if (!d->mayAccess() || d->info.isNull())
     {
         return;
     }
@@ -349,7 +368,7 @@ void ItemTagPair::removeProperties(const QString& key)
 
 void ItemTagPair::clearProperties()
 {
-    if (d->isNull() || d->info.isNull())
+    if (!d->mayAccess() || d->info.isNull())
     {
         return;
     }

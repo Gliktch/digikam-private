@@ -25,7 +25,9 @@
 #include "coredbcopymanager.h"
 #include "coredbschemaupdater.h"
 #include "dbengineparameters.h"
+#include "itemquerybuilder.h"
 #include "privacyservice.h"
+#include "privacyruntime.h"
 
 using namespace Digikam;
 
@@ -35,9 +37,11 @@ class PrivacyFoundationTest : public QObject
 
 private Q_SLOTS:
 
+    void cleanup();
     void testSchemaActions();
     void testSqliteSchemaActionsExecute();
     void testSqlitePrivacyCopyRoundTrip();
+    void testManualTagQueryVisibility();
     void testStorageRecordValidation();
     void testSessionLockState();
     void testDynamicSessionItems();
@@ -46,6 +50,26 @@ private Q_SLOTS:
 
 namespace
 {
+
+class FakeManualTagVisibilityProvider final : public PrivacyManualTagVisibilityProvider
+{
+public:
+
+    bool mayAccessManualTags(qlonglong imageId) const override
+    {
+        return !hiddenImageIds.contains(imageId);
+    }
+
+    QSet<QString> visibleManualTagCategoryUuids() const override
+    {
+        return visibleCategoryUuids;
+    }
+
+public:
+
+    QSet<qlonglong> hiddenImageIds;
+    QSet<QString> visibleCategoryUuids;
+};
 
 PrivacyCategory makeCategory(const QString& uuid, const QString& name)
 {
@@ -477,6 +501,11 @@ bool executeSqliteSchemaScenario(const QDomElement& database,
 
 } // namespace
 
+void PrivacyFoundationTest::cleanup()
+{
+    PrivacyManualTagVisibilityGate::resetProvider();
+}
+
 void PrivacyFoundationTest::testSchemaActions()
 {
     QCOMPARE(CoreDbSchemaUpdater::schemaVersion(), 18);
@@ -557,6 +586,161 @@ void PrivacyFoundationTest::testSchemaActions()
             QVERIFY(updateText.contains(QLatin1String("CREATE TABLE IF NOT EXISTS PrivacyCategories")));
         }
     }
+}
+
+void PrivacyFoundationTest::testManualTagQueryVisibility()
+{
+    const QString categoryUuid =
+        QLatin1String("10000000-0000-0000-0000-000000000001");
+    const QString connectionName = QLatin1String("privacy-tag-query-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QSharedPointer<FakeManualTagVisibilityProvider> provider(
+        new FakeManualTagVisibilityProvider);
+    provider->hiddenImageIds.insert(1);
+    PrivacyManualTagVisibilityGate::setProvider(provider);
+
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"),
+                                                    connectionName);
+        db.setDatabaseName(QLatin1String(":memory:"));
+        QVERIFY2(db.open(), qPrintable(db.lastError().text()));
+
+        QSqlQuery setup(db);
+        QVERIFY(setup.exec(QLatin1String(
+            "CREATE TABLE Images (id INTEGER PRIMARY KEY, name TEXT NOT NULL);")));
+        QVERIFY(setup.exec(QLatin1String(
+            "CREATE TABLE ImageTags (imageid INTEGER NOT NULL, tagid INTEGER NOT NULL);")));
+        QVERIFY(setup.exec(QLatin1String(
+            "CREATE TABLE Tags (id INTEGER PRIMARY KEY, pid INTEGER, name TEXT NOT NULL);")));
+        QVERIFY(setup.exec(QLatin1String(
+            "CREATE TABLE TagsTree (id INTEGER NOT NULL, pid INTEGER NOT NULL);")));
+        QVERIFY(setup.exec(QLatin1String(
+            "CREATE TABLE ImageTagProperties (imageid INTEGER NOT NULL, tagid INTEGER NOT NULL, "
+            "property TEXT NOT NULL, value TEXT);")));
+        QVERIFY(setup.exec(QLatin1String(
+            "CREATE TABLE PrivacyItems (imageId INTEGER PRIMARY KEY, categoryUuid TEXT NOT NULL);")));
+        QVERIFY(setup.exec(QLatin1String(
+            "INSERT INTO Images VALUES (1, 'visible-by-name.jpg'), (2, 'other.jpg');")));
+        QVERIFY(setup.exec(QLatin1String(
+            "INSERT INTO ImageTags VALUES (1, 10), (2, 10);")));
+        QVERIFY(setup.exec(QLatin1String(
+            "INSERT INTO Tags VALUES (10, 20, 'PrivateTag'), (20, 0, 'ParentTag');")));
+        QVERIFY(setup.exec(QLatin1String(
+            "INSERT INTO TagsTree VALUES (10, 20);")));
+        QVERIFY(setup.exec(QLatin1String(
+            "INSERT INTO ImageTagProperties VALUES "
+            "(1, 10, 'tagRegion', '0,0,10,10'), "
+            "(2, 10, 'tagRegion', '0,0,10,10');")));
+        QVERIFY(setup.exec(QString::fromUtf8(
+            "INSERT INTO PrivacyItems VALUES (1, '%1');").arg(categoryUuid)));
+
+        auto runSearch = [&db](const QString& xml, bool* success)
+        {
+            QList<QVariant> boundValues;
+            ItemQueryPostHooks hooks;
+            const QString predicate = ItemQueryBuilder().buildQuery(
+                xml, &boundValues, &hooks);
+            QSqlQuery query(db);
+            *success = query.prepare(QLatin1String("SELECT Images.id FROM Images WHERE ") +
+                                     predicate + QLatin1String(" ORDER BY Images.id;"));
+
+            for (const QVariant& value : std::as_const(boundValues))
+            {
+                query.addBindValue(value);
+            }
+
+            *success = (*success && query.exec());
+            QList<qlonglong> imageIds;
+
+            while (*success && query.next())
+            {
+                imageIds << query.value(0).toLongLong();
+            }
+
+            return imageIds;
+        };
+
+        SearchXmlWriter tagWriter;
+        tagWriter.writeGroup();
+        tagWriter.writeField(QLatin1String("tagid"), SearchXml::Equal);
+        tagWriter.writeValue(10);
+        tagWriter.finishField();
+        tagWriter.finishGroup();
+
+        bool success = false;
+        QCOMPARE(runSearch(tagWriter.xml(), &success), QList<qlonglong>() << 2);
+        QVERIFY(success);
+
+        SearchXmlWriter unequalWriter;
+        unequalWriter.writeGroup();
+        unequalWriter.writeField(QLatin1String("tagid"), SearchXml::Unequal);
+        unequalWriter.writeValue(10);
+        unequalWriter.finishField();
+        unequalWriter.finishGroup();
+        QCOMPARE(runSearch(unequalWriter.xml(), &success), QList<qlonglong>() << 1);
+        QVERIFY(success);
+
+        SearchXmlWriter treeWriter;
+        treeWriter.writeGroup();
+        treeWriter.writeField(QLatin1String("tagid"), SearchXml::InTree);
+        treeWriter.writeValue(20);
+        treeWriter.finishField();
+        treeWriter.finishGroup();
+        QCOMPARE(runSearch(treeWriter.xml(), &success), QList<qlonglong>() << 2);
+        QVERIFY(success);
+
+        SearchXmlWriter nameWriter;
+        nameWriter.writeGroup();
+        nameWriter.writeField(QLatin1String("tagname"), SearchXml::Equal);
+        nameWriter.writeValue(QLatin1String("PrivateTag"));
+        nameWriter.finishField();
+        nameWriter.finishGroup();
+        QCOMPARE(runSearch(nameWriter.xml(), &success), QList<qlonglong>() << 2);
+        QVERIFY(success);
+
+        SearchXmlWriter propertyWriter;
+        propertyWriter.writeGroup();
+        propertyWriter.writeField(QLatin1String("imagetagproperty"), SearchXml::Equal);
+        propertyWriter.writeValue(QLatin1String("tagRegion"));
+        propertyWriter.finishField();
+        propertyWriter.finishGroup();
+        QCOMPARE(runSearch(propertyWriter.xml(), &success), QList<qlonglong>() << 2);
+        QVERIFY(success);
+
+        SearchXmlWriter noTagWriter;
+        noTagWriter.writeGroup();
+        noTagWriter.writeField(QLatin1String("notag"), SearchXml::Equal);
+        noTagWriter.finishField();
+        noTagWriter.finishGroup();
+        QCOMPARE(runSearch(noTagWriter.xml(), &success), QList<qlonglong>() << 1);
+        QVERIFY(success);
+
+        SearchXmlWriter mixedWriter;
+        mixedWriter.writeGroup();
+        mixedWriter.setDefaultFieldOperator(SearchXml::Or);
+        mixedWriter.writeField(QLatin1String("imageid"), SearchXml::Equal);
+        mixedWriter.writeValue(1);
+        mixedWriter.finishField();
+        mixedWriter.writeField(QLatin1String("tagid"), SearchXml::Equal);
+        mixedWriter.writeValue(10);
+        mixedWriter.finishField();
+        mixedWriter.finishGroup();
+
+        QCOMPARE(runSearch(mixedWriter.xml(), &success),
+                 (QList<qlonglong>() << 1 << 2));
+        QVERIFY(success);
+
+        provider->visibleCategoryUuids.insert(categoryUuid);
+        QCOMPARE(runSearch(tagWriter.xml(), &success),
+                 (QList<qlonglong>() << 1 << 2));
+        QVERIFY(success);
+        QVERIFY(runSearch(noTagWriter.xml(), &success).isEmpty());
+        QVERIFY(success);
+
+        db.close();
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
 }
 
 void PrivacyFoundationTest::testSqliteSchemaActionsExecute()

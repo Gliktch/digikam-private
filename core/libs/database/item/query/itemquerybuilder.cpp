@@ -21,8 +21,51 @@
 
 #include <QRegularExpression>
 
+// Local includes
+
+#include "privacyruntime.h"
+
 namespace Digikam
 {
+
+namespace
+{
+
+QString manualTagVisibilitySql(const QString& imageIdExpression,
+                               QList<QVariant>* boundValues)
+{
+    QSet<QString> visibleCategorySet;
+
+    if (!PrivacyManualTagVisibilityGate::queryState(&visibleCategorySet))
+    {
+        return QString();
+    }
+
+    QStringList visibleCategories = visibleCategorySet.values();
+    std::sort(visibleCategories.begin(), visibleCategories.end());
+
+    QString sql = QString::fromUtf8(
+        " AND NOT EXISTS (SELECT 1 FROM PrivacyItems AS PrivacyTagItems "
+        "WHERE PrivacyTagItems.imageId=%1").arg(imageIdExpression);
+
+    if (!visibleCategories.isEmpty())
+    {
+        sql += QLatin1String(" AND PrivacyTagItems.categoryUuid NOT IN (");
+        CoreDB::addBoundValuePlaceholders(sql, visibleCategories.size());
+        sql += QLatin1Char(')');
+
+        for (const QString& categoryUuid : std::as_const(visibleCategories))
+        {
+            *boundValues << categoryUuid;
+        }
+    }
+
+    sql += QLatin1String(") ");
+
+    return sql;
+}
+
+} // namespace
 
 ItemQueryBuilder::ItemQueryBuilder()
 {
@@ -228,15 +271,21 @@ bool ItemQueryBuilder::buildField(QString& sql, SearchXmlCachingReader& reader, 
         {
             sql += QString::fromUtf8(" (Images.id IN "
                    "   (SELECT imageid FROM ImageTags "
-                   "    WHERE tagid = ?)) ");
+                   "    WHERE tagid = ?");
             *boundValues << reader.valueToInt();
+            sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                          boundValues);
+            sql += QLatin1String(")) ");
         }
         else if (relation == SearchXml::Unequal)
         {
             sql += QString::fromUtf8(" (Images.id NOT IN "
                    "   (SELECT imageid FROM ImageTags "
-                   "    WHERE tagid = ?)) ");
+                   "    WHERE tagid = ?");
             *boundValues << reader.valueToInt();
+            sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                          boundValues);
+            sql += QLatin1String(")) ");
         }
         else if ((relation == SearchXml::InTree) || (relation == SearchXml::NotInTree))
         {
@@ -270,6 +319,8 @@ bool ItemQueryBuilder::buildField(QString& sql, SearchXmlCachingReader& reader, 
                 *boundValues << tagID << tagID;
             }
 
+            sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                          boundValues);
             sql += QString::fromUtf8(" )) ");
 
             if (name == QLatin1String("labels"))
@@ -304,6 +355,8 @@ bool ItemQueryBuilder::buildField(QString& sql, SearchXmlCachingReader& reader, 
                                      << TagsCache::instance()->tagForColorLabel(LastColorLabel);
                     }
 
+                    sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                                  boundValues);
                     sql += QString::fromUtf8(" )) ");
                 }
             }
@@ -323,12 +376,19 @@ bool ItemQueryBuilder::buildField(QString& sql, SearchXmlCachingReader& reader, 
                 sql += QString::fromUtf8(" SELECT imageid FROM ImageTags "
                    "    WHERE tagid IN (");
                 CoreDB::addBoundValuePlaceholders(sql, values.size());
-                sql += QLatin1String("))) ");
+                sql += QLatin1Char(')');
             }
 
             for (int tagID : std::as_const(values))
             {
                 *boundValues << tagID;
+            }
+
+            if (!searchForNull)
+            {
+                sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                              boundValues);
+                sql += QLatin1String(")) ");
             }
         }
         else if (relation == SearchXml::AllOf)
@@ -345,8 +405,11 @@ bool ItemQueryBuilder::buildField(QString& sql, SearchXmlCachingReader& reader, 
                 firstCondition = false;
                 sql += QString::fromUtf8(" (Images.id IN "
                    "   (SELECT imageid FROM ImageTags "
-                   "    WHERE tagid = ?)) ");
+                   "    WHERE tagid = ?");
                 *boundValues << tagID;
+                sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                              boundValues);
+                sql += QLatin1String(")) ");
             }
         }
     }
@@ -359,47 +422,65 @@ bool ItemQueryBuilder::buildField(QString& sql, SearchXmlCachingReader& reader, 
             sql += QString::fromUtf8(" (Images.id IN "
                    "   (SELECT imageid FROM ImageTags "
                    "    WHERE tagid IN "
-                   "   (SELECT id FROM Tags WHERE name LIKE ?))) ");
+                   "   (SELECT id FROM Tags WHERE name LIKE ?)");
             *boundValues << tagname;
+            sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                          boundValues);
+            sql += QLatin1String(")) ");
         }
         else if (relation == SearchXml::Unequal || relation == SearchXml::NotLike)
         {
             sql += QString::fromUtf8(" (Images.id NOT IN "
                    "   (SELECT imageid FROM ImageTags "
                    "    WHERE tagid IN "
-                   "   (SELECT id FROM Tags WHERE name LIKE ?))) ");
+                   "   (SELECT id FROM Tags WHERE name LIKE ?)");
             *boundValues << tagname;
+            sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                          boundValues);
+            sql += QLatin1String(")) ");
         }
         else if (relation == SearchXml::InTree)
         {
             sql += QString::fromUtf8(" (Images.id IN "
                    "   (SELECT ImageTags.imageid FROM ImageTags INNER JOIN TagsTree ON ImageTags.tagid = TagsTree.id "
-                   "    WHERE TagsTree.pid = (SELECT id FROM Tags WHERE name LIKE ?) "
-                   "    OR ImageTags.tagid = (SELECT id FROM Tags WHERE name LIKE ?) )) ");
+                   "    WHERE (TagsTree.pid = (SELECT id FROM Tags WHERE name LIKE ?) "
+                   "    OR ImageTags.tagid = (SELECT id FROM Tags WHERE name LIKE ?)) ");
             *boundValues << tagname << tagname;
+            sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                          boundValues);
+            sql += QLatin1String(")) ");
         }
         else if (relation == SearchXml::NotInTree)
         {
             sql += QString::fromUtf8(" (Images.id NOT IN "
                    "   (SELECT ImageTags.imageid FROM ImageTags INNER JOIN TagsTree ON ImageTags.tagid = TagsTree.id "
-                   "    WHERE TagsTree.pid = (SELECT id FROM Tags WHERE name LIKE ?) "
-                   "    OR ImageTags.tagid = (SELECT id FROM Tags WHERE name LIKE ?) )) ");
+                   "    WHERE (TagsTree.pid = (SELECT id FROM Tags WHERE name LIKE ?) "
+                   "    OR ImageTags.tagid = (SELECT id FROM Tags WHERE name LIKE ?)) ");
             *boundValues << tagname << tagname;
+            sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                          boundValues);
+            sql += QLatin1String(")) ");
         }
     }
     else if (name == QLatin1String("nottagged"))
     {
         reader.readToEndOfElement();
         sql += QString::fromUtf8(" (Images.id NOT IN (SELECT imageid FROM ImageTags "
-               "    WHERE tagid NOT IN (SELECT id FROM Tags "
-               "    WHERE pid IN (SELECT id FROM Tags "
-               "    WHERE name = '_Digikam_Internal_Tags_') ))) ");
+                   "    WHERE tagid NOT IN (SELECT id FROM Tags "
+                   "    WHERE pid IN (SELECT id FROM Tags "
+                   "    WHERE name = '_Digikam_Internal_Tags_') )");
+        sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                      boundValues);
+        sql += QLatin1String(")) ");
     }
     else if (name == QLatin1String("notag"))
     {
         reader.readToEndOfElement();
         sql += QString::fromUtf8(" (Images.id NOT IN "
-               "   (SELECT imageid FROM ImageTags)) ");
+               "   (SELECT imageid FROM ImageTags WHERE 1=1");
+        sql += manualTagVisibilitySql(QLatin1String("ImageTags.imageid"),
+                                      boundValues);
+        sql += QLatin1String(")) ");
     }
     else if (name == QLatin1String("imageid"))
     {
@@ -1394,6 +1475,8 @@ bool ItemQueryBuilder::buildField(QString& sql, SearchXmlCachingReader& reader, 
             {
                 sql += QString::fromUtf8(" ( ");
                 sql += selectQuery.arg(QString::fromUtf8("ImageTagProperties."));
+                sql += manualTagVisibilitySql(
+                           QLatin1String("ImageTagProperties.imageid"), boundValues);
                 sql += QString::fromUtf8(" ) ");
             }
             else
@@ -1401,6 +1484,8 @@ bool ItemQueryBuilder::buildField(QString& sql, SearchXmlCachingReader& reader, 
                 sql += QString::fromUtf8(" (Images.id IN "
                        " (SELECT imageid FROM ImageTagProperties WHERE ");
                 sql += selectQuery.arg(QString());
+                sql += manualTagVisibilitySql(
+                           QLatin1String("ImageTagProperties.imageid"), boundValues);
                 sql += QString::fromUtf8(" )) ");
             }
         }

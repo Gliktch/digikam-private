@@ -29,13 +29,7 @@ namespace
 
 bool privacyMayAccessManualTags(qlonglong imageId)
 {
-    const QSharedPointer<const PrivacyManualTagVisibilityProvider> provider =
-        PrivacyStartupRecovery::manualTagVisibilityProvider();
-
-    // The provider is installed during normal application database startup.
-    // Preserve the upstream behaviour for isolated database users and tests
-    // which do not initialize the privacy runtime.
-    return (!provider || provider->mayAccessManualTags(imageId));
+    return PrivacyManualTagVisibilityGate::mayAccess(imageId);
 }
 
 } // namespace

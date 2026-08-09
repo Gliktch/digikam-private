@@ -1074,6 +1074,7 @@ void AlbumManager::slotImageTagChange(const ImageTagChangeset& changeset)
         // updated. This adoption should fix the problem.
 
         case ImageTagChangeset::PropertiesChanged:
+        case ImageTagChangeset::VisibilityChanged:
         {
             const auto ids = changeset.tags();
 
@@ -1088,6 +1089,11 @@ void AlbumManager::slotImageTagChange(const ImageTagChangeset& changeset)
             if (!d->tagItemCountTimer->isActive())
             {
                 d->tagItemCountTimer->start();
+            }
+
+            if (changeset.operation() == ImageTagChangeset::VisibilityChanged)
+            {
+                Q_EMIT signalAlbumCurrentChanged(d->currentAlbums);
             }
 
             break;

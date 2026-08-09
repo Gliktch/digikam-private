@@ -10,6 +10,10 @@
 
 #include "privacycategorysessionowner.h"
 
+// C++ includes
+
+#include <algorithm>
+
 // Qt includes
 
 #include <QDir>
@@ -18,6 +22,10 @@
 
 // Local includes
 
+#include "coredb.h"
+#include "coredbaccess.h"
+#include "coredbbackend.h"
+#include "coredbchangesets.h"
 #include "privacygocryptfscategorystore.h"
 #include "privacyprocessrunner.h"
 
@@ -52,6 +60,42 @@ public:
     {
         return QDir(QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation))
             .filePath(QLatin1String("digikam-private/category-stores"));
+    }
+
+    void publishManualTagVisibilityChange(const QString& categoryUuid = QString())
+    {
+        PrivacyRepositorySnapshot snapshot;
+
+        if (!repository.loadSnapshot(&snapshot))
+        {
+            return;
+        }
+
+        QList<qlonglong> imageIds;
+        QSet<int> tagIds;
+        CoreDbAccess access;
+
+        for (const PrivacyItem& item : std::as_const(snapshot.items))
+        {
+            if (!categoryUuid.isEmpty() && (item.categoryUuid != categoryUuid))
+            {
+                continue;
+            }
+
+            imageIds << item.imageId;
+
+            const QList<int> itemTagIds = access.db()->getItemTagIDs(item.imageId);
+            tagIds.unite(QSet<int>(itemTagIds.cbegin(), itemTagIds.cend()));
+        }
+
+        if (!imageIds.isEmpty())
+        {
+            std::sort(imageIds.begin(), imageIds.end());
+            QList<int> affectedTagIds = tagIds.values();
+            std::sort(affectedTagIds.begin(), affectedTagIds.end());
+            access.backend()->recordChangeset(ImageTagChangeset(
+                imageIds, affectedTagIds, ImageTagChangeset::VisibilityChanged));
+        }
     }
 
 public:
@@ -115,7 +159,15 @@ PrivacyCategorySessionResult PrivacyCategorySessionOwner::unlockCategory(
         return { PrivacyCategorySessionStatus::TransactionBlocked };
     }
 
-    return d->coordinator.unlockCategory(categoryUuid, passwordText);
+    const PrivacyCategorySessionResult result =
+        d->coordinator.unlockCategory(categoryUuid, passwordText);
+
+    if (result.succeeded())
+    {
+        d->publishManualTagVisibilityChange(categoryUuid);
+    }
+
+    return result;
 }
 
 PrivacyCategorySessionResult PrivacyCategorySessionOwner::lockCategory(
@@ -128,7 +180,14 @@ PrivacyCategorySessionResult PrivacyCategorySessionOwner::lockCategory(
         return { PrivacyCategorySessionStatus::TransactionBlocked };
     }
 
-    return d->coordinator.lockCategory(categoryUuid);
+    const PrivacyCategorySessionResult result = d->coordinator.lockCategory(categoryUuid);
+
+    if (result.succeeded())
+    {
+        d->publishManualTagVisibilityChange(categoryUuid);
+    }
+
+    return result;
 }
 
 QList<PrivacyCategorySessionResult> PrivacyCategorySessionOwner::lockAllCategories()
@@ -143,7 +202,19 @@ QList<PrivacyCategorySessionResult> PrivacyCategorySessionOwner::lockAllCategori
         return { result };
     }
 
-    return d->coordinator.lockAllCategories();
+    const QList<PrivacyCategorySessionResult> results =
+        d->coordinator.lockAllCategories();
+
+    if (std::any_of(results.cbegin(), results.cend(),
+                    [](const PrivacyCategorySessionResult& result)
+                    {
+                        return result.succeeded();
+                    }))
+    {
+        d->publishManualTagVisibilityChange();
+    }
+
+    return results;
 }
 
 PrivacyCategoryOperationStatus PrivacyCategorySessionOwner::runWhileUnlocked(
@@ -197,8 +268,16 @@ PrivacyCategorySessionOwner::setCategoryTagVisibilityMode(
         return { PrivacyCategorySessionStatus::TransactionBlocked };
     }
 
-    return d->coordinator.setCategoryTagVisibilityMode(categoryUuid, mode,
-                                                        passwordText);
+    const PrivacyCategorySessionResult result =
+        d->coordinator.setCategoryTagVisibilityMode(categoryUuid, mode,
+                                                    passwordText);
+
+    if (result.succeeded())
+    {
+        d->publishManualTagVisibilityChange(categoryUuid);
+    }
+
+    return result;
 }
 
 bool PrivacyCategorySessionOwner::ownsSecret(const QString& categoryUuid) const

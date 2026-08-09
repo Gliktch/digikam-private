@@ -351,6 +351,7 @@ class PrivacyRuntimeTest : public QObject
 
 private Q_SLOTS:
 
+    void cleanup();
     void testActionContracts();
     void testRootIdentityCodec();
     void testManagedRootMarkerVerification();
@@ -373,6 +374,11 @@ private Q_SLOTS:
     void testRootEpochTransition();
     void testTransactionStates();
 };
+
+void PrivacyRuntimeTest::cleanup()
+{
+    PrivacyManualTagVisibilityGate::resetProvider();
+}
 
 void PrivacyRuntimeTest::testActionContracts()
 {
@@ -1052,6 +1058,11 @@ void PrivacyRuntimeTest::testManualTagVisibilityProvider()
              PrivacyStartupState::Ready);
 
     const QSharedPointer<const PrivacyManualTagVisibilityProvider> provider = runtime;
+    PrivacyManualTagVisibilityGate::setProvider(provider);
+    QVERIFY(PrivacyManualTagVisibilityGate::isInstalled());
+    QSet<QString> visibleCategories;
+    QVERIFY(PrivacyManualTagVisibilityGate::queryState(&visibleCategories));
+    QVERIFY(visibleCategories.isEmpty());
     QVERIFY(!provider->mayAccessManualTags(42));
     QVERIFY(provider->mayAccessManualTags(999));
     QVERIFY(!provider->mayAccessManualTags(-1));
@@ -1062,23 +1073,34 @@ void PrivacyRuntimeTest::testManualTagVisibilityProvider()
     QVERIFY(runtime->setCategoryTagVisibilityMode(
         categoryUuid, PrivacyTagVisibilityMode::AlwaysVisible, true));
     QVERIFY(provider->mayAccessManualTags(42));
+    QCOMPARE(PrivacyManualTagVisibilityGate::visibleCategoryUuids(),
+             QSet<QString>() << categoryUuid);
 
     QVERIFY(runtime->setCategoryTagVisibilityMode(
         categoryUuid, PrivacyTagVisibilityMode::UnlockedOnly, false));
     QVERIFY(!provider->mayAccessManualTags(42));
+    QVERIFY(PrivacyManualTagVisibilityGate::visibleCategoryUuids().isEmpty());
     QVERIFY(runtime->setCategoryUnlocked(categoryUuid, true));
     QVERIFY(provider->mayAccessManualTags(42));
+    QCOMPARE(PrivacyManualTagVisibilityGate::visibleCategoryUuids(),
+             QSet<QString>() << categoryUuid);
     QVERIFY(!runtime->setCategoryTagVisibilityMode(
         categoryUuid, static_cast<PrivacyTagVisibilityMode>(99), true));
 
     runtime->reset();
     QVERIFY(!provider->mayAccessManualTags(42));
+    QVERIFY(PrivacyManualTagVisibilityGate::visibleCategoryUuids().isEmpty());
 
     PrivacyRepositorySnapshot invalid = makeSnapshot();
     invalid.categories[0].tagVisibilityMode = static_cast<PrivacyTagVisibilityMode>(99);
     QCOMPARE(runtime->initialize(invalid, verifier, {}, integrity).state,
              PrivacyStartupState::Ready);
     QVERIFY(!provider->mayAccessManualTags(42));
+
+    PrivacyManualTagVisibilityGate::resetProvider();
+    QVERIFY(!PrivacyManualTagVisibilityGate::isInstalled());
+    QVERIFY(!PrivacyManualTagVisibilityGate::queryState(&visibleCategories));
+    QVERIFY(PrivacyManualTagVisibilityGate::mayAccess(42));
 }
 
 void PrivacyRuntimeTest::testAnalysisProvider()

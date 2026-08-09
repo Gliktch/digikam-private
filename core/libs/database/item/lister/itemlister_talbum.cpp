@@ -17,6 +17,10 @@
 
 #include "itemlister_p.h"
 
+// Local includes
+
+#include "privacyruntime.h"
+
 namespace Digikam
 {
 
@@ -82,6 +86,11 @@ void ItemLister::listTag(ItemListerReceiver* const receiver,
             ++it2;
 
             if (d->listOnlyAvailableImages && !albumRoots.contains(record.albumRootID))
+            {
+                continue;
+            }
+
+            if (!PrivacyManualTagVisibilityGate::mayAccess(record.imageID))
             {
                 continue;
             }
@@ -222,6 +231,11 @@ void ItemLister::listImageTagPropertySearch(ItemListerReceiver* const receiver, 
         record.extraValues << tagId;
 
         if (d->listOnlyAvailableImages && !albumRoots.contains(record.albumRootID))
+        {
+            continue;
+        }
+
+        if (!PrivacyManualTagVisibilityGate::mayAccess(record.imageID))
         {
             continue;
         }

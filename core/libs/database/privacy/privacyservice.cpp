@@ -441,6 +441,32 @@ bool PrivacyService::mayAccessManualTags(qlonglong imageId) const
             m_categoryUnlockState.value(categoryUuid, false));
 }
 
+QSet<QString> PrivacyService::visibleManualTagCategoryUuids() const
+{
+    QSet<QString> categoryUuids;
+    QReadLocker locker(&m_lock);
+
+    if (!m_initialized)
+    {
+        return categoryUuids;
+    }
+
+    for (auto it = m_categoryUnlockState.constBegin() ;
+         it != m_categoryUnlockState.constEnd() ; ++it)
+    {
+        const auto modeIt = m_categoryTagVisibilityModes.constFind(it.key());
+
+        if ((modeIt != m_categoryTagVisibilityModes.constEnd()) &&
+            ((modeIt.value() == PrivacyTagVisibilityMode::AlwaysVisible) ||
+             it.value()))
+        {
+            categoryUuids.insert(it.key());
+        }
+    }
+
+    return categoryUuids;
+}
+
 quint64 PrivacyService::advanceEpoch()
 {
     if (++m_epochCounter == 0)

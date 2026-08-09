@@ -53,6 +53,7 @@ private Q_SLOTS:
     void testBqmCannotBypassGate();
     void testAutomatedFacePipelinesRemainGated();
     void testManualTagsCannotBypassVisibility();
+    void testTagQueriesAndPeopleListingsConsumeVisibility();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -100,7 +101,7 @@ void PrivacyAnalysisWiringTest::testManualTagsCannotBypassVisibility()
 
     QVERIFY2(!itemTags.isEmpty(), "Unable to read ItemInfo tag source");
     QVERIFY(itemTags.contains(QStringLiteral(
-        "PrivacyStartupRecovery::manualTagVisibilityProvider()")));
+        "PrivacyManualTagVisibilityGate::mayAccess(imageId)")));
     QVERIFY(occurrences(itemTags,
                         QStringLiteral("privacyMayAccessManualTags(m_data->id)")) >= 5);
 
@@ -110,6 +111,50 @@ void PrivacyAnalysisWiringTest::testManualTagsCannotBypassVisibility()
 
     QVERIFY(visibilityCheck >= 0);
     QVERIFY(cacheRead > visibilityCheck);
+}
+
+void PrivacyAnalysisWiringTest::testTagQueriesAndPeopleListingsConsumeVisibility()
+{
+    const QString queryBuilder = source(QStringLiteral(
+        "core/libs/database/item/query/itemquerybuilder.cpp"));
+    const QString tagLister = source(QStringLiteral(
+        "core/libs/database/item/lister/itemlister_talbum.cpp"));
+    const QString coreDb = source(QStringLiteral(
+        "core/libs/database/coredb/coredb.cpp"));
+    const QString tagPair = source(QStringLiteral(
+        "core/libs/database/item/containers/itemtagpair.cpp"));
+    const QString faceEditor = source(QStringLiteral(
+        "core/libs/database/tags/facetagseditor.cpp"));
+    const QString sessionOwner = source(QStringLiteral(
+        "core/libs/database/privacy/privacycategorysessionowner.cpp"));
+    const QString albumManager = source(QStringLiteral(
+        "core/libs/album/manager/albummanager_talbum.cpp"));
+
+    QVERIFY2(!queryBuilder.isEmpty(), "Unable to read item query builder source");
+    QVERIFY2(!tagLister.isEmpty(), "Unable to read tag lister source");
+    QVERIFY2(!coreDb.isEmpty(), "Unable to read CoreDB source");
+    QVERIFY2(!tagPair.isEmpty(), "Unable to read ItemTagPair source");
+    QVERIFY2(!faceEditor.isEmpty(), "Unable to read FaceTagsEditor source");
+    QVERIFY2(!sessionOwner.isEmpty(), "Unable to read category session owner source");
+    QVERIFY2(!albumManager.isEmpty(), "Unable to read album manager source");
+    QVERIFY(queryBuilder.contains(QStringLiteral(
+        "PrivacyManualTagVisibilityGate::queryState")));
+    QVERIFY(occurrences(queryBuilder,
+                        QStringLiteral("manualTagVisibilitySql(")) >= 14);
+    QVERIFY(occurrences(tagLister,
+                        QStringLiteral("PrivacyManualTagVisibilityGate::mayAccess")) >= 2);
+    QVERIFY(coreDb.contains(QStringLiteral(
+        "PrivacyManualTagVisibilityGate::queryState")));
+    QVERIFY(occurrences(coreDb,
+                        QStringLiteral("manualTagVisibilitySql(")) >= 6);
+    QVERIFY(tagPair.contains(QStringLiteral(
+        "PrivacyManualTagVisibilityGate::mayAccess(info.id())")));
+    QVERIFY(occurrences(faceEditor,
+                        QStringLiteral("PrivacyManualTagVisibilityGate::mayAccess")) >= 10);
+    QVERIFY(sessionOwner.contains(QStringLiteral(
+        "ImageTagChangeset::VisibilityChanged")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "case ImageTagChangeset::VisibilityChanged")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)

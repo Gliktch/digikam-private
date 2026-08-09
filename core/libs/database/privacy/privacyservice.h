@@ -14,6 +14,7 @@
 
 #include <QHash>
 #include <QReadWriteLock>
+#include <QSet>
 
 // Local includes
 
@@ -40,6 +41,10 @@ public:
     /// Answers whether manual catalogue tags, including People associations,
     /// may be shown, searched or edited for this item. Failure is false.
     virtual bool mayAccessManualTags(qlonglong imageId) const = 0;
+
+    /// Returns category UUIDs whose associations may participate in current
+    /// SQL-backed tag queries. An empty set fails protected associations closed.
+    virtual QSet<QString> visibleManualTagCategoryUuids() const = 0;
 
 private:
 
@@ -93,6 +98,7 @@ public:
     bool mayAccessOriginal(qlonglong imageId) const;
     bool mayAnalyze(qlonglong imageId) const;
     bool mayAccessManualTags(qlonglong imageId) const;
+    QSet<QString> visibleManualTagCategoryUuids() const;
 
 private:
 

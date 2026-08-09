@@ -24,6 +24,7 @@
 #include "coredboperationgroup.h"
 #include "iteminfo.h"
 #include "itemtagpair.h"
+#include "privacyruntime.h"
 #include "tagproperties.h"
 #include "tagscache.h"
 #include "tagregion.h"
@@ -216,6 +217,11 @@ FaceTagsIface FaceTagsEditor::confirmedEntry(const FaceTagsIface& face, int tagI
 
 FaceTagsIface FaceTagsEditor::addManually(const FaceTagsIface& face)
 {
+    if (!PrivacyManualTagVisibilityGate::mayAccess(face.imageId()))
+    {
+        return FaceTagsIface();
+    }
+
     ItemTagPair pair(face.imageId(), face.tagId());
     addFaceAndTag(pair, face, FaceTagsIface::attributesForFlags(face.type()), false);
 
@@ -224,6 +230,11 @@ FaceTagsIface FaceTagsEditor::addManually(const FaceTagsIface& face)
 
 FaceTagsIface FaceTagsEditor::changeSuggestedName(const FaceTagsIface& previousEntry, int unconfirmedNameTagId)
 {
+    if (!PrivacyManualTagVisibilityGate::mayAccess(previousEntry.imageId()))
+    {
+        return previousEntry;
+    }
+
     if (previousEntry.isConfirmedName())
     {
         qCDebug(DIGIKAM_DATABASE_LOG) << "Refusing to reset a confirmed name to an unconfirmed name";
@@ -304,6 +315,11 @@ FaceTagsIface FaceTagsEditor::confirmName(const FaceTagsIface& face,
                                           int tagId,
                                           const TagRegion& confirmedRegion)
 {
+    if (!PrivacyManualTagVisibilityGate::mayAccess(face.imageId()))
+    {
+        return face;
+    }
+
     FaceTagsIface newEntry = confirmedEntry(face, tagId, confirmedRegion, face.rejectedFaceTagList());
 
     if (
@@ -359,6 +375,11 @@ FaceTagsIface FaceTagsEditor::confirmName(const FaceTagsIface& face,
 
 FaceTagsIface FaceTagsEditor::add(qlonglong imageId, int tagId, const TagRegion& region, bool trainFace)
 {
+    if (!PrivacyManualTagVisibilityGate::mayAccess(imageId))
+    {
+        return FaceTagsIface();
+    }
+
     qCDebug(DIGIKAM_DATABASE_LOG) << "Adding face with rectangle  " << region.toRect () << " to database";
 
     FaceTagsIface newEntry(FaceTagsIface::ConfirmedName, imageId, tagId, region);
@@ -369,6 +390,11 @@ FaceTagsIface FaceTagsEditor::add(qlonglong imageId, int tagId, const TagRegion&
 
 void FaceTagsEditor::add(const FaceTagsIface& face, bool trainFace)
 {
+    if (!PrivacyManualTagVisibilityGate::mayAccess(face.imageId()))
+    {
+        return;
+    }
+
     ItemTagPair pair(face.imageId(), face.tagId());
     FaceTagsIface::TypeFlags flags = FaceTagsIface::ConfirmedName;
 
@@ -385,6 +411,11 @@ void FaceTagsEditor::addFaceAndTag(ItemTagPair& pair,
                                    const QStringList& properties,
                                    bool addTag)
 {
+    if (pair.isNull())
+    {
+        return;
+    }
+
     FaceTags::ensureIsPerson(face.tagId());
     QString region = face.region().toXml();
 
@@ -405,6 +436,11 @@ void FaceTagsEditor::addFaceAndTag(ItemTagPair& pair,
 
 void FaceTagsEditor::removeAllFaces(qlonglong imageid)
 {
+    if (!PrivacyManualTagVisibilityGate::mayAccess(imageid))
+    {
+        return;
+    }
+
     QList<int>  tagsToRemove;
     QStringList attributes = FaceTagsIface::attributesForFlags(FaceTagsIface::AllTypes);
     const auto pairs       = faceItemTagPairs(imageid, FaceTagsIface::AllTypes);
@@ -431,6 +467,11 @@ void FaceTagsEditor::removeAllFaces(qlonglong imageid)
 
 void FaceTagsEditor::removeFace(qlonglong imageid, const QRect& rect)
 {
+    if (!PrivacyManualTagVisibilityGate::mayAccess(imageid))
+    {
+        return;
+    }
+
     QList<int>  tagsToRemove;
     QStringList attributes = FaceTagsIface::attributesForFlags(FaceTagsIface::AllTypes);
     const auto pairs       = faceItemTagPairs(imageid, FaceTagsIface::AllTypes);
@@ -463,7 +504,8 @@ void FaceTagsEditor::removeFace(qlonglong imageid, const QRect& rect)
 
 void FaceTagsEditor::removeFace(const FaceTagsIface& face, bool touchTags)
 {
-    if (face.isNull())
+    if (face.isNull() ||
+        !PrivacyManualTagVisibilityGate::mayAccess(face.imageId()))
     {
         return;
     }
@@ -488,6 +530,11 @@ void FaceTagsEditor::removeFaces(const QList<FaceTagsIface>& faces)
 
 void FaceTagsEditor::removeFaceAndTag(ItemTagPair& pair, const FaceTagsIface& face, bool touchTags)
 {
+    if (pair.isNull())
+    {
+        return;
+    }
+
     QString regionString = face.region().toXml();
 
     face.removeFaceTraining();
@@ -534,7 +581,8 @@ void FaceTagsEditor::removeFaceAndTag(ItemTagPair& pair, const FaceTagsIface& fa
 
 FaceTagsIface FaceTagsEditor::changeRegion(const FaceTagsIface& face, const TagRegion& newRegion)
 {
-    if (face.isNull() || (face.region() == newRegion))
+    if (face.isNull() || (face.region() == newRegion) ||
+        !PrivacyManualTagVisibilityGate::mayAccess(face.imageId()))
     {
         return face;
     }
@@ -562,7 +610,8 @@ FaceTagsIface FaceTagsEditor::changeRegion(const FaceTagsIface& face, const TagR
 
 FaceTagsIface FaceTagsEditor::changeTag(const FaceTagsIface& face, int newTagId)
 {
-    if (face.isNull() || (face.tagId() == newTagId) || !FaceTags::isPerson(newTagId))
+    if (face.isNull() || (face.tagId() == newTagId) || !FaceTags::isPerson(newTagId) ||
+        !PrivacyManualTagVisibilityGate::mayAccess(face.imageId()))
     {
         return face;
     }
@@ -604,7 +653,8 @@ FaceTagsIface FaceTagsEditor::changeTag(const FaceTagsIface& face, int newTagId)
 
 FaceTagsIface FaceTagsEditor::rejectSuggestedTag(const FaceTagsIface& face)
 {
-    if (face.isNull() || !face.isUnconfirmedName())
+    if (face.isNull() || !face.isUnconfirmedName() ||
+        !PrivacyManualTagVisibilityGate::mayAccess(face.imageId()))
     {
         // Process only unconfirmed faces.
 
@@ -794,7 +844,8 @@ void FaceTagsEditor::removeAllRejectedFaceTags()
 
 FaceTagsIface FaceTagsEditor::removeRejectedFaceTagList(const FaceTagsIface& face)
 {
-    if (face.isNull())
+    if (face.isNull() ||
+        !PrivacyManualTagVisibilityGate::mayAccess(face.imageId()))
     {
         return face;
     }

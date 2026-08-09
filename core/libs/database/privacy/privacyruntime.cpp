@@ -995,6 +995,17 @@ public:
 
 Q_GLOBAL_STATIC(PrivacyStartupData, startupData)
 
+class PrivacyManualTagVisibilityGateData
+{
+public:
+
+    QReadWriteLock lock;
+    QSharedPointer<const PrivacyManualTagVisibilityProvider> provider;
+    quint64 generation = 0;
+};
+
+Q_GLOBAL_STATIC(PrivacyManualTagVisibilityGateData, manualTagGateData)
+
 } // namespace
 
 bool PrivacyRootIntegritySummary::hasReportableIssues(
@@ -3237,6 +3248,18 @@ bool PrivacyRuntimeCoordinator::mayAccessManualTags(qlonglong imageId) const
     return d->service.mayAccessManualTags(imageId);
 }
 
+QSet<QString> PrivacyRuntimeCoordinator::visibleManualTagCategoryUuids() const
+{
+    QReadLocker locker(&d->lock);
+
+    if (!d->initialized || !d->conflictingItemUuids.isEmpty())
+    {
+        return QSet<QString>();
+    }
+
+    return d->service.visibleManualTagCategoryUuids();
+}
+
 PrivacyAnalysisDisposition PrivacyRuntimeCoordinator::analysisDisposition(
     qlonglong imageId) const
 {
@@ -4239,6 +4262,7 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
 
     PrivacyScanGate::setProvider(runtime);
     PrivacyAnalysisGate::setProvider(runtime);
+    PrivacyManualTagVisibilityGate::setProvider(runtime);
 
     QSharedPointer<PrivacyRuntimeCoordinator> previousRuntime;
     QSharedPointer<PrivacyCategorySessionOwner> previousCategorySessions;
@@ -4277,6 +4301,7 @@ void PrivacyStartupRecovery::reset()
     QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
     PrivacyScanGate::setProvider(runtime);
     PrivacyAnalysisGate::setProvider(runtime);
+    PrivacyManualTagVisibilityGate::setProvider(runtime);
 
     QSharedPointer<PrivacyRuntimeCoordinator> previousRuntime;
     QSharedPointer<PrivacyCategorySessionOwner> previousCategorySessions;
@@ -4344,6 +4369,104 @@ PrivacyStartupRecovery::manualTagVisibilityProvider()
     QReadLocker locker(&startupData->lock);
 
     return startupData->coordinator;
+}
+
+void PrivacyManualTagVisibilityGate::setProvider(
+    const QSharedPointer<const PrivacyManualTagVisibilityProvider>& provider)
+{
+    QWriteLocker locker(&manualTagGateData->lock);
+    manualTagGateData->provider = provider;
+
+    if (++manualTagGateData->generation == 0)
+    {
+        ++manualTagGateData->generation;
+    }
+}
+
+void PrivacyManualTagVisibilityGate::resetProvider()
+{
+    setProvider(QSharedPointer<const PrivacyManualTagVisibilityProvider>());
+}
+
+bool PrivacyManualTagVisibilityGate::isInstalled()
+{
+    QReadLocker locker(&manualTagGateData->lock);
+
+    return bool(manualTagGateData->provider);
+}
+
+bool PrivacyManualTagVisibilityGate::mayAccess(qlonglong imageId)
+{
+    QSharedPointer<const PrivacyManualTagVisibilityProvider> provider;
+    quint64 generation = 0;
+
+    {
+        QReadLocker locker(&manualTagGateData->lock);
+        provider   = manualTagGateData->provider;
+        generation = manualTagGateData->generation;
+    }
+
+    const bool allowed = (!provider || provider->mayAccessManualTags(imageId));
+
+    {
+        QReadLocker locker(&manualTagGateData->lock);
+
+        if ((generation != manualTagGateData->generation) ||
+            (provider != manualTagGateData->provider))
+        {
+            return false;
+        }
+    }
+
+    return allowed;
+}
+
+QSet<QString> PrivacyManualTagVisibilityGate::visibleCategoryUuids()
+{
+    QSet<QString> categoryUuids;
+    queryState(&categoryUuids);
+
+    return categoryUuids;
+}
+
+bool PrivacyManualTagVisibilityGate::queryState(
+    QSet<QString>* visibleCategoryUuids)
+{
+    if (!visibleCategoryUuids)
+    {
+        return true;
+    }
+
+    visibleCategoryUuids->clear();
+    QSharedPointer<const PrivacyManualTagVisibilityProvider> provider;
+    quint64 generation = 0;
+
+    {
+        QReadLocker locker(&manualTagGateData->lock);
+        provider   = manualTagGateData->provider;
+        generation = manualTagGateData->generation;
+    }
+
+    if (!provider)
+    {
+        return false;
+    }
+
+    const QSet<QString> categoryUuids = provider->visibleManualTagCategoryUuids();
+
+    {
+        QReadLocker locker(&manualTagGateData->lock);
+
+        if ((generation != manualTagGateData->generation) ||
+            (provider != manualTagGateData->provider))
+        {
+            return true;
+        }
+    }
+
+    *visibleCategoryUuids = categoryUuids;
+
+    return true;
 }
 
 } // namespace Digikam
