@@ -196,6 +196,9 @@ public:
     /// Contents of .digikam-private/root-marker-v1.json.
     static QByteArray encodeManagedRootMarkerV1(const QString& rootUuid,
                                                 const QString& markerUuid);
+    static bool decodeManagedRootMarkerV1(const QByteArray& markerData,
+                                          QString* rootUuid,
+                                          QString* markerUuid);
     static bool matchesManagedRootMarkerV1(const QByteArray& markerData,
                                            const QString& rootUuid,
                                            const QString& markerUuid);

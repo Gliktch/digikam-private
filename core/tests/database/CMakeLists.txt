@@ -127,6 +127,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyposixfilesystemadapter_utest.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/privacyassetinventorybridge_utest.cpp
+                  ${CMAKE_CURRENT_SOURCE_DIR}/privacymanagedrootprovisioner_utest.cpp
 
                   NAME_PREFIX
 

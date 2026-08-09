@@ -40,6 +40,7 @@
 #include "collectionmanager.h"
 #include "privacycategorysessionowner.h"
 #include "privacyrepository.h"
+#include "privacyrootidentity_p.h"
 
 namespace Digikam
 {
@@ -104,27 +105,6 @@ bool pathHasSymlinkComponent(const QString& absolutePath)
     }
 
     return false;
-}
-
-QString filesystemUuidForDevice(dev_t device)
-{
-    const QDir uuidDirectory(QLatin1String("/dev/disk/by-uuid"));
-
-    for (const QFileInfo& entry : uuidDirectory.entryInfoList(
-             QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System,
-             QDir::Name))
-    {
-        struct stat targetStat = {};
-        const QByteArray targetPath = QFile::encodeName(entry.canonicalFilePath());
-
-        if (!targetPath.isEmpty() && (::stat(targetPath.constData(), &targetStat) == 0) &&
-            S_ISBLK(targetStat.st_mode) && (targetStat.st_rdev == device))
-        {
-            return QLatin1String("filesystem-uuid-v1:") + entry.fileName();
-        }
-    }
-
-    return QString();
 }
 
 PrivacyRootRuntimeState readManagedRootMarker(const PrivacyStorageRoot& root,
@@ -249,7 +229,8 @@ PrivacyRootRuntimeState readManagedRootMarker(const PrivacyStorageRoot& root,
     }
 
     *markerData = data;
-    *filesystemIdentity = filesystemUuidForDevice(rootStat.st_dev);
+    *filesystemIdentity =
+        PrivacyRootIdentityInternal::filesystemUuidForDevice(rootStat.st_dev);
 
     return PrivacyRootRuntimeState::VerifiedAvailable;
 }

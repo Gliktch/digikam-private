@@ -276,6 +276,25 @@ bool PrivacyRootIdentityCodec::matchesManagedRootMarkerV1(
     const QString& rootUuid,
     const QString& markerUuid)
 {
+    QString decodedRootUuid;
+    QString decodedMarkerUuid;
+
+    return (decodeManagedRootMarkerV1(markerData, &decodedRootUuid,
+                                      &decodedMarkerUuid) &&
+            (decodedRootUuid == rootUuid) &&
+            (decodedMarkerUuid == markerUuid));
+}
+
+bool PrivacyRootIdentityCodec::decodeManagedRootMarkerV1(
+    const QByteArray& markerData,
+    QString* const rootUuid,
+    QString* const markerUuid)
+{
+    if (!rootUuid || !markerUuid)
+    {
+        return false;
+    }
+
     QJsonParseError error;
     const QJsonDocument document = QJsonDocument::fromJson(markerData, &error);
 
@@ -285,12 +304,21 @@ bool PrivacyRootIdentityCodec::matchesManagedRootMarkerV1(
     }
 
     const QJsonObject object = document.object();
+    const QString decodedRootUuid = object.value(QLatin1String("rootUuid")).toString();
+    const QString decodedMarkerUuid = object.value(QLatin1String("markerUuid")).toString();
 
-    return ((object.size() == 3) &&
-            (object.value(QLatin1String("kind")).toString() ==
-             QLatin1String("digikam-private-root-marker-v1")) &&
-            (object.value(QLatin1String("rootUuid")).toString() == rootUuid) &&
-            (object.value(QLatin1String("markerUuid")).toString() == markerUuid));
+    if ((object.size() != 3) ||
+        (object.value(QLatin1String("kind")).toString() !=
+         QLatin1String("digikam-private-root-marker-v1")) ||
+        !isCanonicalUuid(decodedRootUuid) || !isCanonicalUuid(decodedMarkerUuid))
+    {
+        return false;
+    }
+
+    *rootUuid = decodedRootUuid;
+    *markerUuid = decodedMarkerUuid;
+
+    return true;
 }
 
 } // namespace Digikam
