@@ -56,7 +56,7 @@ public:
 
     explicit StartupPrivacySourceProvider(
         const QSharedPointer<PrivacyRuntimeCoordinator>& runtime,
-        const std::function<void(qlonglong)>& validationFailed)
+        const std::function<void(qlonglong, bool)>& validationFailed)
         : m_runtime(runtime),
           m_validationFailed(validationFailed)
     {
@@ -118,11 +118,16 @@ public:
 
             if (validation != PrivacyPublicProxyDisplayResult::Verified)
             {
-                if ((validation ==
-                     PrivacyPublicProxyDisplayResult::NewlyFailedValidation) &&
+                if (((validation ==
+                      PrivacyPublicProxyDisplayResult::NewlyFailedValidation) ||
+                     (validation ==
+                      PrivacyPublicProxyDisplayResult::NewlyExposedOriginal)) &&
                     m_validationFailed)
                 {
-                    m_validationFailed(imageId);
+                    m_validationFailed(
+                        imageId,
+                        validation ==
+                            PrivacyPublicProxyDisplayResult::NewlyExposedOriginal);
                 }
 
                 return PrivacySourceResult::denied(cacheNamespace);
@@ -141,7 +146,7 @@ public:
 private:
 
     QSharedPointer<PrivacyRuntimeCoordinator> m_runtime;
-    std::function<void(qlonglong)>             m_validationFailed;
+    std::function<void(qlonglong, bool)>       m_validationFailed;
 };
 
 } // namespace
@@ -373,7 +378,8 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
         QSharedPointer<const PrivacySourceProvider>(
             new StartupPrivacySourceProvider(
                 PrivacyStartupRecovery::coordinator(),
-                [guardedManager = QPointer<AlbumManager>(this)](qlonglong imageId)
+                [guardedManager = QPointer<AlbumManager>(this)](
+                    qlonglong imageId, bool exposedOriginal)
                 {
                     if (!guardedManager)
                     {
@@ -382,12 +388,13 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
 
                     QMetaObject::invokeMethod(
                         guardedManager.data(),
-                        [guardedManager, imageId]()
+                        [guardedManager, imageId, exposedOriginal]()
                         {
                             if (guardedManager)
                             {
                                 Q_EMIT guardedManager->
-                                    signalPrivacyPublicProxyValidationFailed(imageId);
+                                    signalPrivacyPublicProxyValidationFailed(
+                                        imageId, exposedOriginal);
                             }
                         },
                         Qt::QueuedConnection);

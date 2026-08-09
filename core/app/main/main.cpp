@@ -197,6 +197,15 @@ QStringList privacyRootIssueLines(const PrivacyRootIntegritySummary& root)
             root.failedProxyValidationCount);
     }
 
+    if (root.exposedOriginalAtProxyPathCount > 0)
+    {
+        lines << i18ncp(
+            "@info",
+            "One protected original appears at its public placeholder path.",
+            "%1 protected originals appear at their public placeholder paths.",
+            root.exposedOriginalAtProxyPathCount);
+    }
+
     if (root.unexpectedPublicAssetCount > 0)
     {
         lines << i18ncp(
@@ -247,6 +256,7 @@ bool privacyStartupIssueIsSevere(const PrivacyRootIntegritySummary& root)
     return ((root.state == PrivacyRootRuntimeState::IdentityMismatch) ||
             (root.unexpectedPublicAssetCount > 0) ||
             (root.failedProxyValidationCount > 0) ||
+            (root.exposedOriginalAtProxyPathCount > 0) ||
             (root.missingProtectedObjectCount > 0) ||
             (root.changedProtectedObjectSizeCount > 0) ||
             (root.unresolvedTransactionCount > 0) ||

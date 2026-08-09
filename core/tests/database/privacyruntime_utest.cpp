@@ -105,6 +105,8 @@ public:
         result.disposition = disposition;
         result.summary = summary;
         result.summary.rootUuid = root.uuid;
+        result.proxyIssueItemUuids = proxyIssueItemUuids;
+        result.originalIssueItemUuids = originalIssueItemUuids;
 
         return result;
     }
@@ -113,6 +115,8 @@ public:
 
     PrivacyIntegrityDisposition disposition = PrivacyIntegrityDisposition::Verified;
     PrivacyRootIntegritySummary summary;
+    QSet<QString> proxyIssueItemUuids;
+    QSet<QString> originalIssueItemUuids;
     std::function<void()> onInspect;
     mutable int callCount = 0;
 };
@@ -546,6 +550,10 @@ void PrivacyRuntimeTest::testOnDisplayProxyValidation()
         "synthetic metadata-free public privacy proxy");
     const QByteArray proxyHash = QCryptographicHash::hash(
         proxyBytes, QCryptographicHash::Sha256);
+    const QByteArray originalBytes = QByteArrayLiteral(
+        "synthetic protected original with distinct bytes");
+    const QByteArray originalHash = QCryptographicHash::hash(
+        originalBytes, QCryptographicHash::Sha256);
     const QString proxyPath = directory.filePath(
         QLatin1String("album/item.jpg"));
     QVERIFY(QDir().mkpath(QFileInfo(proxyPath).absolutePath()));
@@ -559,6 +567,8 @@ void PrivacyRuntimeTest::testOnDisplayProxyValidation()
     snapshot.items[0].expectedProxyHash = QString::fromLatin1(
         proxyHash.toHex());
     snapshot.items[0].expectedProxySize = proxyBytes.size();
+    snapshot.items[0].originalHash = QString::fromLatin1(originalHash.toHex());
+    snapshot.items[0].originalSize = originalBytes.size();
 
     for (PrivacyAsset& asset : snapshot.assets)
     {
@@ -567,6 +577,8 @@ void PrivacyRuntimeTest::testOnDisplayProxyValidation()
         {
             asset.proxyHash = snapshot.items[0].expectedProxyHash;
             asset.proxySize = proxyBytes.size();
+            asset.originalHash = snapshot.items[0].originalHash;
+            asset.originalSize = originalBytes.size();
         }
     }
 
@@ -575,15 +587,48 @@ void PrivacyRuntimeTest::testOnDisplayProxyValidation()
                             PrivacyRootRuntimeState::VerifiedAvailable);
     const QSharedPointer<FakeIntegrityInspector> integrity(
         new FakeIntegrityInspector);
+    integrity->summary.changedProxySizeCount = 1;
+    integrity->proxyIssueItemUuids.insert(itemUuid);
     PrivacyRuntimeCoordinator runtime;
     QCOMPARE(runtime.initialize(snapshot, verifier, {}, integrity).state,
              PrivacyStartupState::Ready);
+    PrivacyActionItemState actionState;
+    QVERIFY(runtime.stateForItem(42, &actionState));
+    QVERIFY(!actionState.proxyReady);
     QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
              PrivacyPublicProxyDisplayResult::Verified);
+    QVERIFY(runtime.stateForItem(42, &actionState));
+    QVERIFY(actionState.proxyReady);
     QCOMPARE(runtime.validatePublicProxyForDisplay(
                  42, directory.filePath(QLatin1String("copy.jpg"))),
              PrivacyPublicProxyDisplayResult::Denied);
     QCOMPARE(runtime.rootSummary(rootUuid).failedProxyValidationCount, 0);
+
+    QVERIFY(proxy.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(proxy.write(originalBytes), qint64(originalBytes.size()));
+    proxy.close();
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::NewlyExposedOriginal);
+    QCOMPARE(runtime.rootSummary(rootUuid).failedProxyValidationCount, 0);
+    QCOMPARE(runtime.rootSummary(rootUuid).exposedOriginalAtProxyPathCount, 1);
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::Denied);
+    QVERIFY(runtime.stateForItem(42, &actionState));
+    QVERIFY(!actionState.proxyReady);
+    PrivacyLeaseCurrentState leaseState;
+    QVERIFY(runtime.currentState(itemUuid, &leaseState));
+    QVERIFY(!leaseState.publicRootAvailable);
+
+    QVERIFY(proxy.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(proxy.write(proxyBytes), qint64(proxyBytes.size()));
+    proxy.close();
+    QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
+             PrivacyPublicProxyDisplayResult::Verified);
+    QCOMPARE(runtime.rootSummary(rootUuid).exposedOriginalAtProxyPathCount, 0);
+    QVERIFY(runtime.stateForItem(42, &actionState));
+    QVERIFY(actionState.proxyReady);
+    QVERIFY(runtime.currentState(itemUuid, &leaseState));
+    QVERIFY(leaseState.publicRootAvailable);
 
     const QByteArray changedBytes(proxyBytes.size(), 'z');
     QVERIFY(proxy.open(QIODevice::WriteOnly | QIODevice::Truncate));

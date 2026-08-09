@@ -210,6 +210,7 @@ public:
     bool                                terminating                             = false;
     QTimer*                             privacyProxyMismatchTimer               = nullptr;
     QSet<qlonglong>                     pendingPrivacyProxyMismatchIds;
+    QSet<qlonglong>                     pendingExposedOriginalIds;
 
     QMenu*                              cameraMenu                              = nullptr;
     QMenu*                              usbMediaMenu                            = nullptr;

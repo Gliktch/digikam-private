@@ -291,7 +291,8 @@ Q_SIGNALS:
     void signalAlbumsCleared();
     void signalAlbumCurrentChanged(const QList<Album*>& albums);
     void signalAllAlbumsLoaded();
-    void signalPrivacyPublicProxyValidationFailed(qlonglong imageId);
+    void signalPrivacyPublicProxyValidationFailed(qlonglong imageId,
+                                                  bool exposedOriginal);
 
     void signalAlbumIconChanged(Album* album);
     void signalAlbumRenamed(Album* album);

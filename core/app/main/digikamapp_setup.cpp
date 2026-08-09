@@ -38,9 +38,19 @@ void DigikamApp::setupViewConnections()
     connect(AlbumManager::instance(),
             &AlbumManager::signalPrivacyPublicProxyValidationFailed,
             this,
-            [this](qlonglong imageId)
+            [this](qlonglong imageId, bool exposedOriginal)
             {
                 d->pendingPrivacyProxyMismatchIds.insert(imageId);
+
+                if (exposedOriginal)
+                {
+                    d->pendingExposedOriginalIds.insert(imageId);
+                }
+                else
+                {
+                    d->pendingExposedOriginalIds.remove(imageId);
+                }
+
                 d->privacyProxyMismatchTimer->start();
             });
 
@@ -49,20 +59,44 @@ void DigikamApp::setupViewConnections()
             [this]()
             {
                 const int count = d->pendingPrivacyProxyMismatchIds.size();
+                const int exposedOriginalCount =
+                    d->pendingExposedOriginalIds.size();
                 d->pendingPrivacyProxyMismatchIds.clear();
+                d->pendingExposedOriginalIds.clear();
 
                 if (count <= 0)
                 {
                     return;
                 }
 
+                QStringList lines;
+
+                if (exposedOriginalCount > 0)
+                {
+                    lines << i18ncp(
+                        "@info",
+                        "A protected original appears to be exposed at its public "
+                        "placeholder path. digiKam left it untouched and did not display it.",
+                        "%1 protected originals appear to be exposed at their public "
+                        "placeholder paths. digiKam left them untouched and did not display them.",
+                        exposedOriginalCount);
+                }
+
+                const int changedCount = count - exposedOriginalCount;
+
+                if (changedCount > 0)
+                {
+                    lines << i18ncp(
+                        "@info",
+                        "A public privacy placeholder changed unexpectedly and the "
+                        "protected item remains blocked.",
+                        "%1 public privacy placeholders changed unexpectedly and the "
+                        "protected items remain blocked.",
+                        changedCount);
+                }
+
                 Q_EMIT signalNotificationError(
-                    i18ncp("@info",
-                           "A public privacy placeholder changed unexpectedly "
-                           "and the protected item remains blocked.",
-                           "%1 public privacy placeholders changed unexpectedly "
-                           "and the protected items remain blocked.",
-                           count),
+                    lines.join(QLatin1Char(' ')),
                     DNotificationWidget::Warning);
             });
 

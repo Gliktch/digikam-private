@@ -96,6 +96,7 @@ public:
     int missingProxyCount = 0;
     int changedProxySizeCount = 0;
     int failedProxyValidationCount = 0;
+    int exposedOriginalAtProxyPathCount = 0;
     int unexpectedPublicAssetCount = 0;
     int missingProtectedObjectCount = 0;
     int changedProtectedObjectSizeCount = 0;
@@ -149,7 +150,8 @@ enum class PrivacyPublicProxyDisplayResult
 {
     Verified              = 1,
     Denied                = 2,
-    NewlyFailedValidation = 3
+    NewlyFailedValidation = 3,
+    NewlyExposedOriginal  = 4
 };
 
 enum class PrivacyRootRecoveryResult
