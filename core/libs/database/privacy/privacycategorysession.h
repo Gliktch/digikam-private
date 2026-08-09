@@ -270,9 +270,10 @@ public:
 
     /**
      * Runs one synchronous protected-item operation with a newly entered,
-     * independently verified category password. The category must already be
-     * unlocked. The temporary normalized secret is lent to the callback only;
-     * it never replaces or escapes through the retained category session.
+     * independently verified category password. The category may be locked;
+     * this operation never creates or replaces a retained category session or
+     * mounts its store. The temporary normalized secret is lent to the
+     * callback only.
      *
      * Category lock and lock-all wait until authentication, the callback and
      * temporary-secret destruction have completed. Callback exceptions are
@@ -281,7 +282,8 @@ public:
     PrivacyCategorySessionResult runWithFreshlyAuthenticatedSecret(
         const QString& categoryUuid,
         const QString& passwordText,
-        const std::function<void(const PrivacyPassword&)>& operation);
+        const std::function<void(const PrivacyPassword&)>& operation,
+        const QString& allowedActiveItemTransactionUuid = QString());
 
     bool ownsSecret(const QString& categoryUuid) const;
 

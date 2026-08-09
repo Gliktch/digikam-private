@@ -590,7 +590,8 @@ private Q_SLOTS:
     void testLockCancelsInflightUnlock();
     void testLockAllCancelsInflightUnlock();
     void testItemOperationBorrowsSecretAndSerializesLock();
-    void testFreshAuthenticationRequiresUnlockedCategory();
+    void testFreshAuthenticationWhileLockedDoesNotCreateSession();
+    void testFreshAuthenticationAllowsOnlyNamedItemTransaction();
     void testFreshAuthenticationDoesNotReplaceRetainedSecret();
     void testFreshAuthenticationRejectsWrongPasswordAndRecoversFromException();
     void testFreshAuthenticationSerializesLock();
@@ -1136,7 +1137,7 @@ void PrivacyCategorySessionTest::testItemOperationBorrowsSecretAndSerializesLock
     QVERIFY(!coordinator.ownsSecret(CategoryUuid));
 }
 
-void PrivacyCategorySessionTest::testFreshAuthenticationRequiresUnlockedCategory()
+void PrivacyCategorySessionTest::testFreshAuthenticationWhileLockedDoesNotCreateSession()
 {
     FakeRepository repository;
     repository.snapshot = makeActiveSnapshot();
@@ -1156,10 +1157,70 @@ void PrivacyCategorySessionTest::testFreshAuthenticationRequiresUnlockedCategory
                 callbackCalled = true;
             });
 
-    QCOMPARE(result.status, PrivacyCategorySessionStatus::CategoryLocked);
-    QVERIFY(!result.succeeded());
+    QCOMPARE(result.status,
+             PrivacyCategorySessionStatus::FreshAuthenticationVerified);
+    QVERIFY(result.succeeded());
+    QVERIFY(callbackCalled);
+    QCOMPARE(backend.validateCalls.load(), 1);
+    QCOMPARE(backend.unlockCalls.load(), 0);
+    QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+    QVERIFY(!runtime.isCategoryUnlocked(CategoryUuid));
+}
+
+void PrivacyCategorySessionTest::testFreshAuthenticationAllowsOnlyNamedItemTransaction()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+
+    PrivacyTransaction transaction;
+    transaction.uuid = TransactionUuid;
+    transaction.categoryUuid = CategoryUuid;
+    transaction.itemUuid = QLatin1String("60000000-0000-0000-0000-000000000001");
+    transaction.type = PrivacyTransactionType::ProtectItem;
+    transaction.state = PrivacyTransactionState::Created;
+    transaction.generation = 0;
+    transaction.fromCredentialGeneration = 1;
+    transaction.toCredentialGeneration = 1;
+    transaction.payloadFormatVersion = 1;
+    transaction.payloadData = QByteArray("synthetic item transaction");
+    transaction.createdAt = QDateTime::currentDateTimeUtc();
+    transaction.updatedAt = transaction.createdAt;
+    QVERIFY(transaction.isValid());
+    repository.snapshot.transactions << transaction;
+
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+    bool callbackCalled = false;
+    const PrivacyCategorySessionResult wrong =
+        coordinator.runWithFreshlyAuthenticatedSecret(
+            CategoryUuid, QLatin1String("secret"),
+            [&](const PrivacyPassword&)
+            {
+                callbackCalled = true;
+            },
+            QLatin1String("70000000-0000-0000-0000-000000000001"));
+    QCOMPARE(wrong.status, PrivacyCategorySessionStatus::TransactionBlocked);
     QVERIFY(!callbackCalled);
     QCOMPARE(backend.validateCalls.load(), 0);
+
+    const PrivacyCategorySessionResult exact =
+        coordinator.runWithFreshlyAuthenticatedSecret(
+            CategoryUuid, QLatin1String("secret"),
+            [&](const PrivacyPassword&)
+            {
+                callbackCalled = true;
+            },
+            TransactionUuid);
+    QCOMPARE(exact.status,
+             PrivacyCategorySessionStatus::FreshAuthenticationVerified);
+    QVERIFY(callbackCalled);
+    QCOMPARE(backend.validateCalls.load(), 1);
+    QCOMPARE(backend.unlockCalls.load(), 0);
+    QVERIFY(!coordinator.ownsSecret(CategoryUuid));
 }
 
 void PrivacyCategorySessionTest::testFreshAuthenticationDoesNotReplaceRetainedSecret()

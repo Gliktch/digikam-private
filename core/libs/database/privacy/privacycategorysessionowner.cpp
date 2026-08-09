@@ -170,7 +170,8 @@ PrivacyCategoryOperationStatus PrivacyCategorySessionOwner::runWithUnlockedSecre
 PrivacyCategorySessionResult
 PrivacyCategorySessionOwner::runWithFreshlyAuthenticatedSecret(
     const QString& categoryUuid, const QString& passwordText,
-    const std::function<void(const PrivacyPassword&)>& operation)
+    const std::function<void(const PrivacyPassword&)>& operation,
+    const QString& allowedActiveItemTransactionUuid)
 {
     QReadLocker locker(&d->lifecycleLock);
 
@@ -180,7 +181,8 @@ PrivacyCategorySessionOwner::runWithFreshlyAuthenticatedSecret(
     }
 
     return d->coordinator.runWithFreshlyAuthenticatedSecret(
-               categoryUuid, passwordText, operation);
+               categoryUuid, passwordText, operation,
+               allowedActiveItemTransactionUuid);
 }
 
 bool PrivacyCategorySessionOwner::ownsSecret(const QString& categoryUuid) const

@@ -520,8 +520,15 @@ void PrivacyStillItemTransactionTest::protectFaultReplay()
     {
         QCOMPARE(replayResult.status,
                  PrivacyStillItemTransactionStatus::AuthenticationRequired);
-        QVERIFY(restartedRuntime.setCategoryUnlocked(CategoryUuid, true));
-        replayResult = restarted.protect(protect, password);
+        QVERIFY(!restartedRuntime.isCategoryUnlocked(CategoryUuid));
+        const PrivacyPassword invalidPassword =
+            PrivacyPassword::fromUnicode(QString());
+        QCOMPARE(restarted.resumeAuthenticated(
+                     root, ProtectUuid, invalidPassword, false).status,
+                 PrivacyStillItemTransactionStatus::InvalidRequest);
+        replayResult = restarted.resumeAuthenticated(
+            root, ProtectUuid, password, false);
+        QVERIFY(!restartedRuntime.isCategoryUnlocked(CategoryUuid));
     }
 
     QVERIFY2(replayResult.status == PrivacyStillItemTransactionStatus::Protected,
@@ -661,6 +668,11 @@ void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup()
                                      persistence.snapshot.containers.constFirst(),
                                      persistence.snapshot.assets));
 
+    // Fresh authentication is sufficient for Unprotect. It must not require
+    // or leave a retained category session behind.
+    QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, false));
+    QVERIFY(!runtime.isCategoryUnlocked(CategoryUuid));
+
     PrivacyStillUnprotectRequest unprotect;
     unprotect.imageId = 42;
     unprotect.categoryUuid = CategoryUuid;
@@ -701,8 +713,15 @@ void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup()
     {
         QCOMPARE(replayResult.status,
                  PrivacyStillItemTransactionStatus::AuthenticationRequired);
-        QVERIFY(restartedRuntime.setCategoryUnlocked(CategoryUuid, true));
-        replayResult = restarted.unprotect(unprotect, replayPassword);
+        QVERIFY(!restartedRuntime.isCategoryUnlocked(CategoryUuid));
+        QCOMPARE(restarted.resumeAuthenticated(
+                     root, UnprotectUuid, replayPassword, false).status,
+                 PrivacyStillItemTransactionStatus::AuthenticationRequired);
+        QCOMPARE(persistence.snapshot.transactions.constLast().state,
+                 PrivacyTransactionState::Created);
+        replayResult = restarted.resumeAuthenticated(
+            root, UnprotectUuid, replayPassword, true);
+        QVERIFY(!restartedRuntime.isCategoryUnlocked(CategoryUuid));
     }
 
     QVERIFY2(replayResult.status ==

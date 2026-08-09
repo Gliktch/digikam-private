@@ -1150,6 +1150,7 @@ public:
     PrivacyPublicTransitionEngine transition;
     FaultHook faultHook;
     bool durableReplay = false;
+    bool authenticatedCreatedReplay = false;
 };
 
 PrivacyStillItemTransactionEngine::PrivacyStillItemTransactionEngine(
@@ -1414,7 +1415,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                     QStringLiteral("Protect payload cannot be reconstructed"));
     }
 
-    if (d->durableReplay &&
+    if (d->durableReplay && !d->authenticatedCreatedReplay &&
         (existingTransaction->state == PrivacyTransactionState::Created))
     {
         return fail(PrivacyStillItemTransactionStatus::AuthenticationRequired,
@@ -2000,11 +2001,10 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     const PrivacyCategory* category = categoryFor(snapshot, request.categoryUuid);
 
     if (!category || (category->backend != PrivacyBackend::Casual) ||
-        (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
-        (!d->durableReplay && !d->runtime.isCategoryUnlocked(category->uuid)))
+        (category->lifecycleState != PrivacyCategoryLifecycleState::Active))
     {
         return fail(PrivacyStillItemTransactionStatus::CategoryUnavailable, {},
-                    QStringLiteral("Casual category is not active and unlocked"));
+                    QStringLiteral("Casual category is not active"));
     }
 
     const PrivacyTransaction* transaction = transactionFor(snapshot,
@@ -2132,7 +2132,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         return result;
     }
 
-    if (d->durableReplay && transaction &&
+    if (d->durableReplay && !d->authenticatedCreatedReplay && transaction &&
         (transaction->state == PrivacyTransactionState::Created))
     {
         return fail(
@@ -2580,7 +2580,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
             request.publicRoot, replacementRelativePath);
         PrivacyJournalObjectFact replayFact;
 
-        if (d->durableReplay)
+        if (d->durableReplay && !d->authenticatedCreatedReplay)
         {
             if (!QFileInfo::exists(stagedOriginalPath))
             {
@@ -2923,6 +2923,24 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
 PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::recover(
     const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText)
 {
+    return recoverInternal(publicRoot, transactionUuidText, nullptr, false);
+}
+
+PrivacyStillItemTransactionResult
+PrivacyStillItemTransactionEngine::resumeAuthenticated(
+    const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText,
+    const PrivacyPassword& verifiedPassword, bool freshAuthenticationConfirmed)
+{
+    return recoverInternal(publicRoot, transactionUuidText, &verifiedPassword,
+                           freshAuthenticationConfirmed);
+}
+
+PrivacyStillItemTransactionResult
+PrivacyStillItemTransactionEngine::recoverInternal(
+    const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText,
+    const PrivacyPassword* const verifiedPassword,
+    bool freshAuthenticationConfirmed)
+{
     const QString transactionUuid = normalizedUuid(transactionUuidText);
     const auto fail = [&](PrivacyStillItemTransactionStatus status,
                           const QString& itemUuid, const QString& detail)
@@ -2932,7 +2950,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::recover(
 
     if (!canonicalUuid(transactionUuidText) || !publicRoot.isValid() ||
         (publicRoot.kind != PrivacyStorageRootKind::AlbumRoot) ||
-        d->durableReplay)
+        d->durableReplay || (verifiedPassword && !verifiedPassword->isValid()))
     {
         return fail(PrivacyStillItemTransactionStatus::InvalidRequest, {},
                     QStringLiteral("durable recovery request is invalid"));
@@ -3070,15 +3088,25 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::recover(
 
     if (created)
     {
-        return fail(PrivacyStillItemTransactionStatus::AuthenticationRequired,
-                    journalAsset.itemUuid,
-                    (transaction->type == PrivacyTransactionType::ProtectItem)
-                        ? QStringLiteral("Created Protect requires category authentication")
-                        : QStringLiteral("Created Unprotect requires fresh authentication"));
+        if (!verifiedPassword ||
+            ((transaction->type == PrivacyTransactionType::UnprotectItem) &&
+             !freshAuthenticationConfirmed))
+        {
+            return fail(PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                        journalAsset.itemUuid,
+                        (transaction->type == PrivacyTransactionType::ProtectItem)
+                            ? QStringLiteral("Created Protect requires category authentication")
+                            : QStringLiteral("Created Unprotect requires fresh authentication"));
+        }
     }
 
     ScopedBooleanValue replayScope(d->durableReplay, true);
+    ScopedBooleanValue authenticatedScope(d->authenticatedCreatedReplay,
+                                           created &&
+                                           (verifiedPassword != nullptr));
     const PrivacyPassword noPassword = PrivacyPassword::fromUnicode(QString());
+    const PrivacyPassword& replayPassword = created ? *verifiedPassword
+                                                    : noPassword;
 
     if (transaction->type == PrivacyTransactionType::ProtectItem)
     {
@@ -3144,7 +3172,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::recover(
                                           item->originalHeight);
         request.originalCreationDate = item->originalCreationDate;
 
-        return protect(request, noPassword);
+        return protect(request, replayPassword);
     }
 
     PrivacyStillUnprotectRequest request;
@@ -3153,9 +3181,10 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::recover(
     request.transactionUuid = transactionUuid;
     request.publicRoot = publicRoot;
     request.rootExpectation = rootExpectation;
-    request.freshAuthenticationConfirmed = false;
+    request.freshAuthenticationConfirmed = created &&
+                                           freshAuthenticationConfirmed;
 
-    return unprotect(request, noPassword);
+    return unprotect(request, replayPassword);
 }
 
 } // namespace Digikam

@@ -96,6 +96,9 @@ public:
     QString transactionUuid;
     PrivacyStorageRoot publicRoot;
     PrivacyJournalRootExpectation rootExpectation;
+    // Set only by a boundary that independently verified the supplied
+    // password. This authorizes Unprotect without retaining or publishing an
+    // unlocked category session.
     bool freshAuthenticationConfirmed = false;
 };
 
@@ -230,7 +233,25 @@ public:
         const PrivacyStorageRoot& publicRoot,
         const QString& transactionUuid);
 
+    /**
+     * Resumes one exact durable transaction with a caller-verified category
+     * password. Only a Created transaction consumes the password; later states
+     * retain the password-free recovery rules used by recover(). Unprotect
+     * requires an independently verified fresh authentication.
+     */
+    PrivacyStillItemTransactionResult resumeAuthenticated(
+        const PrivacyStorageRoot& publicRoot,
+        const QString& transactionUuid,
+        const PrivacyPassword& verifiedPassword,
+        bool freshAuthenticationConfirmed);
+
 private:
+
+    PrivacyStillItemTransactionResult recoverInternal(
+        const PrivacyStorageRoot& publicRoot,
+        const QString& transactionUuid,
+        const PrivacyPassword* verifiedPassword,
+        bool freshAuthenticationConfirmed);
 
     class Private;
     QScopedPointer<Private> d;

@@ -627,6 +627,8 @@ void PrivacyRuntimeTest::testReconnectRecoveryPipeline()
     recovery->disposition = PrivacyRecoveryDisposition::Recovered;
     recovery->onRecover = [&runtime]()
     {
+        QCOMPARE(runtime.rootSummary(rootUuid).unresolvedTransactionCount, 1);
+        QCOMPARE(runtime.rootSummary(rootUuid).compatibilityExposureCount, 1);
         QVERIFY(runtime.publishRootState(
             rootUuid, PrivacyRootRuntimeState::VerifiedAvailable));
     };

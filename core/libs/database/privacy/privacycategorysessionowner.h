@@ -62,7 +62,8 @@ public:
     PrivacyCategorySessionResult runWithFreshlyAuthenticatedSecret(
         const QString& categoryUuid,
         const QString& passwordText,
-        const std::function<void(const PrivacyPassword&)>& operation);
+        const std::function<void(const PrivacyPassword&)>& operation,
+        const QString& allowedActiveItemTransactionUuid = QString());
 
     bool ownsSecret(const QString& categoryUuid) const;
 

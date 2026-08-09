@@ -3397,8 +3397,9 @@ PrivacyRootRecoveryResult PrivacyRuntimeCoordinator::recoverRoot(const QString& 
         summary.rootUuid = rootUuid;
         summary.state = PrivacyRootRuntimeState::Recovering;
         summary.identityMismatch = false;
-        summary.unresolvedTransactionCount = 0;
-        summary.compatibilityExposureCount = 0;
+        // Recovery adapters use the published unresolved count as part of
+        // their exact single-transaction mutation guard. Recalculate it only
+        // after every adapter has returned.
         clearArtifactCounts(&summary);
         d->rootSummaries.insert(rootUuid, summary);
         snapshot = d->snapshot;

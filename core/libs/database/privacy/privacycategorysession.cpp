@@ -401,7 +401,8 @@ public:
 bool loadActiveBundle(const PrivacyRepositorySnapshot& snapshot,
                       const QString& categoryUuid,
                       CategoryBundle* bundle,
-                      PrivacyCategorySessionStatus* failure)
+                      PrivacyCategorySessionStatus* failure,
+                      const QString& allowedActiveItemTransactionUuid = QString())
 {
     if (!bundle || !failure)
     {
@@ -426,13 +427,33 @@ bool loadActiveBundle(const PrivacyRepositorySnapshot& snapshot,
         return false;
     }
 
+    int allowedActiveTransactionCount = 0;
+
     for (const PrivacyTransaction& transaction : snapshot.transactions)
     {
         if ((transaction.categoryUuid == categoryUuid) && transaction.isActive())
         {
-            *failure = PrivacyCategorySessionStatus::TransactionBlocked;
-            return false;
+            const bool allowed =
+                !allowedActiveItemTransactionUuid.isEmpty() &&
+                (transaction.uuid == allowedActiveItemTransactionUuid) &&
+                ((transaction.type == PrivacyTransactionType::ProtectItem) ||
+                 (transaction.type == PrivacyTransactionType::UnprotectItem));
+
+            if (!allowed)
+            {
+                *failure = PrivacyCategorySessionStatus::TransactionBlocked;
+                return false;
+            }
+
+            ++allowedActiveTransactionCount;
         }
+    }
+
+    if (!allowedActiveItemTransactionUuid.isEmpty() &&
+        (allowedActiveTransactionCount != 1))
+    {
+        *failure = PrivacyCategorySessionStatus::TransactionBlocked;
+        return false;
     }
 
     int credentialCount = 0;
@@ -1792,12 +1813,17 @@ PrivacyCategorySessionCoordinator::runWithUnlockedSecret(
 PrivacyCategorySessionResult
 PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
     const QString& categoryUuidText, const QString& passwordText,
-    const std::function<void(const PrivacyPassword&)>& operation)
+    const std::function<void(const PrivacyPassword&)>& operation,
+    const QString& allowedActiveItemTransactionUuidText)
 {
     PrivacyCategorySessionResult result;
     const QString categoryUuid = normalizedUuid(categoryUuidText);
+    const QString allowedActiveItemTransactionUuid =
+        normalizedUuid(allowedActiveItemTransactionUuidText);
 
-    if (categoryUuid.isEmpty() || !operation)
+    if (categoryUuid.isEmpty() || !operation ||
+        (!allowedActiveItemTransactionUuidText.isEmpty() &&
+         allowedActiveItemTransactionUuid.isEmpty()))
     {
         result.status = PrivacyCategorySessionStatus::InvalidRequest;
         return result;
@@ -1810,10 +1836,9 @@ PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
         QMutexLocker locker(&d->lock);
         const auto sessionIt = d->sessions.constFind(categoryUuid);
 
-        if (sessionIt == d->sessions.constEnd())
+        if (sessionIt != d->sessions.constEnd())
         {
-            result.status = PrivacyCategorySessionStatus::CategoryLocked;
-            return result;
+            session = sessionIt.value();
         }
 
         operationToken = d->beginOperation(categoryUuid,
@@ -1824,8 +1849,6 @@ PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
             result.status = PrivacyCategorySessionStatus::TransactionBlocked;
             return result;
         }
-
-        session = sessionIt.value();
     }
 
     const ScopeExit finishOperation([this, categoryUuid, operationToken]()
@@ -1847,7 +1870,8 @@ PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
     CategoryBundle bundle;
 
     if (!d->repository.loadSnapshot(&snapshot) ||
-        !loadActiveBundle(snapshot, categoryUuid, &bundle, &result.status))
+        !loadActiveBundle(snapshot, categoryUuid, &bundle, &result.status,
+                          allowedActiveItemTransactionUuid))
     {
         return result;
     }
@@ -1872,7 +1896,7 @@ PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
     }
 
     operation(password);
-    Q_UNUSED(session); // Retain the existing session and lease for the callback.
+    Q_UNUSED(session); // Retain an existing session and lease for the callback.
 
     result.status = PrivacyCategorySessionStatus::FreshAuthenticationVerified;
     return result;
