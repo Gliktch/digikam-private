@@ -49,8 +49,10 @@
 #include "iteminfo.h"
 #include "metaenginesettings.h"
 #include "privacycategorysessionowner.h"
+#include "privacycasualarchive.h"
 #include "privacycontracts.h"
 #include "privacyderivativestore.h"
+#include "privacyexternalcheckouttransaction.h"
 #include "privacyproxygenerator.h"
 #include "privacyrepository.h"
 #include "privacystillitemtransaction.h"
@@ -251,6 +253,19 @@ PrivacyStillItemTransactionResult actionFailure(
     return result;
 }
 
+PrivacyExternalCheckoutResult checkoutFailure(
+    PrivacyExternalCheckoutStatus status, const QString& detail,
+    const QString& transactionUuid = QString(),
+    const QString& itemUuid = QString())
+{
+    PrivacyExternalCheckoutResult result;
+    result.status = status;
+    result.detail = detail;
+    result.transactionUuid = transactionUuid;
+    result.itemUuid = itemUuid;
+    return result;
+}
+
 PrivacyCompatibilityBatchResult batchFailure(
     PrivacyStillItemTransactionStatus status, const QString& detail,
     int requestedCount = 0)
@@ -446,7 +461,8 @@ public:
 
     explicit Private(PrivacyRuntimeCoordinator& runtime)
         : runtime(runtime),
-          engine(persistence, runtime, cacheGate)
+          engine(persistence, runtime, cacheGate),
+          checkoutEngine(checkoutPersistence)
     {
     }
 
@@ -457,6 +473,9 @@ public:
     PrivacyThreadImageIOStillItemCacheGate  cacheGate;
     mutable QRecursiveMutex                  transactionMutex;
     mutable PrivacyStillItemTransactionEngine engine;
+    PrivacyCoreDbExternalCheckoutPersistence    checkoutPersistence;
+    mutable PrivacyExternalCheckoutTransactionEngine checkoutEngine;
+    mutable PrivacyCasualArchiveEngine          archive;
     mutable QHash<QString, qint64>             compatibilityGuardProcesses;
     mutable QString                          authenticatedTransactionUuid;
     mutable const PrivacyPassword*           authenticatedPassword = nullptr;
@@ -1459,6 +1478,415 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityUnlock(
     return result;
 }
 
+PrivacyExternalCheckoutResult
+PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
+    const ItemInfo& info, const QString& passwordText)
+{
+    if (info.isNull() || (info.id() <= 0) ||
+        ((info.category() != DatabaseItem::Image) &&
+         (info.category() != DatabaseItem::Video)) ||
+        !info.isLocationAvailable())
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::InvalidRequest,
+            QStringLiteral("Select one available protected photo or video"));
+    }
+
+    QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+    QSharedPointer<PrivacyCategorySessionOwner> sessions;
+
+    if (!currentActionComposition(&d->runtime, &runtime, &sessions))
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::ItemUnavailable,
+            QStringLiteral("Privacy startup is still changing"));
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->persistence.loadSnapshot(&snapshot))
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::PersistenceFailure,
+            QStringLiteral("The privacy catalogue could not be read"));
+    }
+
+    const PrivacyItem* item = nullptr;
+
+    for (const PrivacyItem& candidate : std::as_const(snapshot.items))
+    {
+        if (candidate.imageId == info.id())
+        {
+            if (item)
+            {
+                return checkoutFailure(
+                    PrivacyExternalCheckoutStatus::PersistenceFailure,
+                    QStringLiteral("The image has conflicting privacy mappings"));
+            }
+
+            item = &candidate;
+        }
+    }
+
+    if (!item)
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::InvalidRequest,
+            QStringLiteral("The selected item is not protected"));
+    }
+
+    const PrivacyCategory* const category = categoryForUuid(
+        snapshot, item->categoryUuid);
+    const PrivacyContainer* container = nullptr;
+    QList<PrivacyAsset> assets;
+    const PrivacyTransaction* activeTransaction = nullptr;
+
+    for (const PrivacyContainer& candidate :
+         std::as_const(snapshot.containers))
+    {
+        if (candidate.itemUuid == item->uuid)
+        {
+            if (container)
+            {
+                return checkoutFailure(
+                    PrivacyExternalCheckoutStatus::PersistenceFailure,
+                    QStringLiteral("The item has conflicting protected containers"));
+            }
+
+            container = &candidate;
+        }
+    }
+
+    for (const PrivacyAsset& asset : std::as_const(snapshot.assets))
+    {
+        if (asset.itemUuid == item->uuid)
+        {
+            assets << asset;
+        }
+    }
+
+    for (const PrivacyTransaction& candidate :
+         std::as_const(snapshot.transactions))
+    {
+        if (candidate.isActive() &&
+            ((candidate.itemUuid == item->uuid) ||
+             (candidate.categoryUuid == item->categoryUuid)))
+        {
+            if (activeTransaction)
+            {
+                return checkoutFailure(
+                    PrivacyExternalCheckoutStatus::RecoveryRequired,
+                    QStringLiteral("Multiple privacy transactions require recovery"),
+                    {}, item->uuid);
+            }
+
+            activeTransaction = &candidate;
+        }
+    }
+
+    const PrivacyStorageRoot* const root = container
+        ? rootForUuid(snapshot, container->rootUuid)
+        : nullptr;
+    PrivacyJournalRootExpectation expectation;
+
+    if (!category || !container || assets.isEmpty() ||
+        (category->backend != PrivacyBackend::Casual) ||
+        (category->lifecycleState !=
+         PrivacyCategoryLifecycleState::Active) ||
+        (container->kind != PrivacyContainerKind::CasualArchive) ||
+        (container->state != PrivacyContainerState::Verified) || !root ||
+        (runtime->rootState(root->uuid) !=
+         PrivacyRootRuntimeState::VerifiedAvailable) ||
+        !rootExpectation(*root, &expectation))
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::ItemUnavailable,
+            QStringLiteral("The protected item is unavailable for external access"),
+            {}, item->uuid);
+    }
+
+    if (activeTransaction &&
+        ((activeTransaction->type !=
+          PrivacyTransactionType::ExternalCheckout) ||
+         (activeTransaction->state != PrivacyTransactionState::Created) ||
+         (activeTransaction->itemUuid != item->uuid)))
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::RecoveryRequired,
+            QStringLiteral("An existing privacy transaction must be resolved first"),
+            activeTransaction->uuid, item->uuid);
+    }
+
+    if (!sessions->ownsSecret(category->uuid))
+    {
+        const PrivacyCategorySessionResult unlock =
+            sessions->unlockCategory(category->uuid, passwordText);
+
+        if (!unlock.succeeded())
+        {
+            return checkoutFailure(
+                (categorySessionTransactionStatus(unlock.status) ==
+                 PrivacyStillItemTransactionStatus::AuthenticationRequired)
+                    ? PrivacyExternalCheckoutStatus::AuthenticationRequired
+                    : PrivacyExternalCheckoutStatus::ItemUnavailable,
+                categorySessionFailureDetail(unlock.status), {}, item->uuid);
+        }
+    }
+
+    PrivacyExternalCheckoutResult result = checkoutFailure(
+        PrivacyExternalCheckoutStatus::ItemUnavailable,
+        QStringLiteral("The category became unavailable"), {}, item->uuid);
+    const qlonglong imageId = item->imageId;
+    const QString itemUuid = item->uuid;
+    const QString categoryUuid = category->uuid;
+    const QString containerUuid = container->uuid;
+    const QString archivePath = QDir(root->configuredPath).absoluteFilePath(
+        container->objectRelativePath);
+    const qlonglong archiveSize = container->protectedSize;
+    const QByteArray archiveHash = QByteArray::fromHex(
+        container->protectedHash.toLatin1());
+    const PrivacyStorageRoot checkoutRoot = *root;
+    const QList<PrivacyAsset> checkoutAssets = assets;
+    const QString resumeTransactionUuid = activeTransaction
+                                        ? activeTransaction->uuid : QString();
+    const PrivacyCategoryOperationStatus operationStatus =
+        sessions->runWithUnlockedSecret(
+            categoryUuid,
+            [this, &result, imageId, itemUuid, categoryUuid, containerUuid,
+             archivePath, archiveSize, archiveHash, checkoutRoot, expectation,
+             checkoutAssets, resumeTransactionUuid](
+                const PrivacyPassword& password)
+            {
+                PrivacyExternalCheckoutRequest request;
+                request.imageId = imageId;
+                request.categoryUuid = categoryUuid;
+                request.transactionUuid = resumeTransactionUuid.isEmpty()
+                                        ? newUuid() : resumeTransactionUuid;
+                request.root = checkoutRoot;
+                request.rootExpectation = expectation;
+
+                for (const PrivacyAsset& asset : checkoutAssets)
+                {
+                    PrivacyCasualArchiveRestoreRequest restore;
+                    restore.archivePath = archivePath;
+                    restore.categoryUuid = categoryUuid;
+                    restore.containerUuid = containerUuid;
+                    restore.itemUuid = itemUuid;
+                    restore.protectedRelativePath = asset.protectedRelativePath;
+                    restore.originalName = asset.originalName;
+                    restore.role = asset.role;
+                    restore.ordinal = asset.ordinal;
+                    restore.expectedArchiveSize = archiveSize;
+                    restore.expectedArchiveSha256 = archiveHash;
+                    restore.expectedMemberSize = asset.originalSize;
+                    restore.expectedMemberSha256 = QByteArray::fromHex(
+                        asset.originalHash.toLatin1());
+                    const QDateTime modificationDate =
+                        asset.originalModificationDate;
+                    PrivacyExternalCheckoutAssetSource source;
+                    source.role = asset.role;
+                    source.ordinal = asset.ordinal;
+                    source.producer =
+                        [this, restore, modificationDate, &password]
+                        (int descriptor, QString* producerDetail)
+                        {
+                            QFile destination;
+
+                            if (!destination.open(
+                                    descriptor, QIODevice::WriteOnly,
+                                    QFileDevice::DontCloseHandle))
+                            {
+                                if (producerDetail)
+                                {
+                                    *producerDetail = QStringLiteral(
+                                        "cannot attach checkout destination");
+                                }
+
+                                return false;
+                            }
+
+                            const bool restored = d->archive.restoreMember(
+                                restore, password, &destination);
+                            destination.close();
+
+                            if (!restored)
+                            {
+                                if (producerDetail)
+                                {
+                                    *producerDetail = QStringLiteral(
+                                        "cannot restore verified archive member");
+                                }
+
+                                return false;
+                            }
+
+#if defined(Q_OS_UNIX)
+
+                            if (modificationDate.isValid())
+                            {
+                                const qint64 milliseconds =
+                                    modificationDate.toMSecsSinceEpoch();
+                                struct timespec times[2] = {};
+                                times[0].tv_nsec = UTIME_OMIT;
+                                times[1].tv_sec = milliseconds / 1000;
+                                times[1].tv_nsec =
+                                    (milliseconds % 1000) * 1000000;
+
+                                if (::futimens(descriptor, times) != 0)
+                                {
+                                    if (producerDetail)
+                                    {
+                                        *producerDetail = QStringLiteral(
+                                            "cannot restore checkout modification time");
+                                    }
+
+                                    return false;
+                                }
+                            }
+
+#else
+                            Q_UNUSED(modificationDate);
+#endif
+
+                            return true;
+                        };
+                    request.sources << source;
+                }
+
+                QMutexLocker locker(&d->transactionMutex);
+                result = resumeTransactionUuid.isEmpty()
+                       ? d->checkoutEngine.create(request)
+                       : d->checkoutEngine.resumeAuthenticatedCreate(request);
+
+                if (result.status ==
+                    PrivacyExternalCheckoutStatus::CompletedUnchanged)
+                {
+                    request.transactionUuid = newUuid();
+                    result = d->checkoutEngine.create(request);
+                }
+
+                if (!result.succeeded())
+                {
+                    return;
+                }
+
+                const QString transactionUuid = result.transactionUuid;
+                result = d->checkoutEngine.authorizeLaunch(
+                    checkoutRoot, expectation, transactionUuid);
+
+                if (!result.succeeded())
+                {
+                    (void)d->checkoutEngine.reconcile(
+                        checkoutRoot, expectation, transactionUuid);
+                }
+            });
+
+    if (operationStatus != PrivacyCategoryOperationStatus::Completed)
+    {
+        result = checkoutFailure(
+            PrivacyExternalCheckoutStatus::ItemUnavailable,
+            (operationStatus == PrivacyCategoryOperationStatus::CategoryLocked)
+                ? QStringLiteral(
+                      "The category was locked before external access began")
+                : QStringLiteral(
+                      "Another category operation is already active"),
+            result.transactionUuid, item->uuid);
+    }
+
+    return result;
+}
+
+PrivacyExternalCheckoutResult
+PrivacyThreadImageIOStillItemTransactionOwner::finishExternalCheckout(
+    const QString& transactionUuid) const
+{
+    if (transactionUuid.isEmpty())
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::InvalidRequest,
+            QStringLiteral("The external checkout identifier is invalid"));
+    }
+
+    QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+
+    if (!currentActionComposition(&d->runtime, &runtime))
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::ItemUnavailable,
+            QStringLiteral("Privacy startup is still changing"),
+            transactionUuid);
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->persistence.loadSnapshot(&snapshot))
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::PersistenceFailure,
+            QStringLiteral("The privacy catalogue could not be read"),
+            transactionUuid);
+    }
+
+    const PrivacyTransaction* transaction = nullptr;
+    const PrivacyTransactionJournal* journal = nullptr;
+
+    for (const PrivacyTransaction& candidate :
+         std::as_const(snapshot.transactions))
+    {
+        if (candidate.uuid == transactionUuid)
+        {
+            if (transaction)
+            {
+                return checkoutFailure(
+                    PrivacyExternalCheckoutStatus::PersistenceFailure,
+                    QStringLiteral("The checkout transaction is ambiguous"),
+                    transactionUuid);
+            }
+
+            transaction = &candidate;
+        }
+    }
+
+    for (const PrivacyTransactionJournal& candidate :
+         std::as_const(snapshot.transactionJournals))
+    {
+        if (candidate.transactionUuid == transactionUuid)
+        {
+            if (journal)
+            {
+                return checkoutFailure(
+                    PrivacyExternalCheckoutStatus::PersistenceFailure,
+                    QStringLiteral("The checkout journal is ambiguous"),
+                    transactionUuid);
+            }
+
+            journal = &candidate;
+        }
+    }
+
+    const PrivacyStorageRoot* const root = journal
+        ? rootForUuid(snapshot, journal->rootUuid)
+        : nullptr;
+    PrivacyJournalRootExpectation expectation;
+
+    if (!transaction || !journal ||
+        (transaction->type != PrivacyTransactionType::ExternalCheckout) ||
+        !root ||
+        (runtime->rootState(root->uuid) !=
+         PrivacyRootRuntimeState::VerifiedAvailable) ||
+        !rootExpectation(*root, &expectation))
+    {
+        return checkoutFailure(
+            PrivacyExternalCheckoutStatus::RootUnavailable,
+            QStringLiteral("The checkout root is not safely available"),
+            transactionUuid,
+            transaction ? transaction->itemUuid : QString());
+    }
+
+    QMutexLocker locker(&d->transactionMutex);
+    return d->checkoutEngine.reconcile(*root, expectation, transactionUuid);
+}
+
 PrivacyStillItemTransactionResult
 PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelock(
     const ItemInfo& info, const QString& unlockTransactionUuid)
@@ -2032,7 +2460,39 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelockAll(
 
 bool PrivacyThreadImageIOStillItemTransactionOwner::prepareForShutdown() const
 {
-    return compatibilityRelockAll().succeeded();
+    if (!compatibilityRelockAll().succeeded())
+    {
+        return false;
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->persistence.loadSnapshot(&snapshot))
+    {
+        return false;
+    }
+
+    for (const PrivacyTransaction& transaction :
+         std::as_const(snapshot.transactions))
+    {
+        if (!transaction.isActive() ||
+            (transaction.type != PrivacyTransactionType::ExternalCheckout))
+        {
+            continue;
+        }
+
+        const PrivacyExternalCheckoutResult result =
+            finishExternalCheckout(transaction.uuid);
+
+        if (!result.succeeded() &&
+            (result.status != PrivacyExternalCheckoutStatus::ChangesPending) &&
+            (result.status != PrivacyExternalCheckoutStatus::RootUnavailable))
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 PrivacyStillItemTransactionResult
@@ -2240,6 +2700,49 @@ PrivacyThreadImageIOStillItemTransactionOwner::recoverRoot(
     const PrivacyTransaction& transaction,
     const QList<PrivacyTransactionJournal>& journals) const
 {
+    if (transaction.type == PrivacyTransactionType::ExternalCheckout)
+    {
+        if ((root.kind != PrivacyStorageRootKind::AlbumRoot) ||
+            (journals.size() != 1) ||
+            (journals.constFirst().transactionUuid != transaction.uuid) ||
+            (journals.constFirst().rootUuid != root.uuid))
+        {
+            return PrivacyRecoveryDisposition::Deferred;
+        }
+
+        PrivacyJournalRootExpectation expectation;
+
+        if (!rootExpectation(root, &expectation))
+        {
+            return PrivacyRecoveryDisposition::Deferred;
+        }
+
+        QMutexLocker locker(&d->transactionMutex);
+        const PrivacyExternalCheckoutResult checkout =
+            d->checkoutEngine.recover(root, expectation, transaction.uuid);
+
+        if (checkout.succeeded())
+        {
+            return PrivacyRecoveryDisposition::Recovered;
+        }
+
+        switch (checkout.status)
+        {
+            case PrivacyExternalCheckoutStatus::AuthenticationRequired:
+            case PrivacyExternalCheckoutStatus::ChangesPending:
+            case PrivacyExternalCheckoutStatus::RootUnavailable:
+            case PrivacyExternalCheckoutStatus::RecoveryRequired:
+            {
+                return PrivacyRecoveryDisposition::Deferred;
+            }
+
+            default:
+            {
+                return PrivacyRecoveryDisposition::Failed;
+            }
+        }
+    }
+
     if ((root.kind != PrivacyStorageRootKind::AlbumRoot) ||
         ((transaction.type != PrivacyTransactionType::ProtectItem) &&
          (transaction.type != PrivacyTransactionType::UnprotectItem) &&

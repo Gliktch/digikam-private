@@ -23,6 +23,7 @@
 // Local includes
 
 #include "digikam_export.h"
+#include "privacyexternalcheckouttransaction.h"
 #include "privacyprotectpreflight.h"
 #include "privacyruntime.h"
 #include "privacystillitemtransaction.h"
@@ -109,6 +110,11 @@ public:
     PrivacyStillItemTransactionResult compatibilityRelock(
         const ItemInfo& info,
         const QString& unlockTransactionUuid);
+    PrivacyExternalCheckoutResult prepareExternalOpen(
+        const ItemInfo& info,
+        const QString& passwordText);
+    PrivacyExternalCheckoutResult finishExternalCheckout(
+        const QString& transactionUuid) const;
     PrivacyCompatibilityBatchResult compatibilityUnlockCategory(
         const QString& categoryUuid,
         const QString& passwordText,

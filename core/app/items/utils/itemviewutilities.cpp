@@ -20,13 +20,24 @@
 // C++ includes
 
 #include <algorithm>
+#include <utility>
 
 // Qt includes
 
+#include <QApplication>
+#include <QCheckBox>
+#include <QFutureWatcher>
+#include <QInputDialog>
 #include <QList>
-#include <QStandardPaths>
 #include <QFileInfo>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QPointer>
+#include <QProgressDialog>
+#include <QSharedPointer>
+#include <QStandardPaths>
 #include <QUrl>
+#include <QtConcurrentRun>
 
 // KDE includes
 
@@ -55,9 +66,61 @@
 #include "dfileoperations.h"
 #include "coredb.h"
 #include "coredbaccess.h"
+#include "privacythreadimagestillitemtransactionowner.h"
 
 namespace Digikam
 {
+
+namespace
+{
+
+void wipeSecret(QString& value)
+{
+    value.detach();
+    value.fill(QChar::Null);
+    value.clear();
+}
+
+bool acknowledgeExternalApplicationRisk(QWidget* const parent)
+{
+    KConfigGroup group(KSharedConfig::openConfig(),
+                       QStringLiteral("Privacy"));
+
+    if (group.readEntry("ExternalApplicationRiskAcknowledged", false))
+    {
+        return true;
+    }
+
+    QMessageBox warning(
+        QMessageBox::Warning,
+        i18nc("@title:window", "Private External Access"),
+        i18nc("@info",
+              "The external application will receive a writable private copy. "
+              "digiKam will preserve edits and new sidecars for explicit "
+              "reconciliation, while an unchanged copy can be removed "
+              "silently when privacy is locked or digiKam exits.\n\n"
+              "The external application may create recent-file records, "
+              "thumbnails, swap files or caches outside digiKam's control."),
+        QMessageBox::Ok | QMessageBox::Cancel, parent);
+    auto* const remember = new QCheckBox(
+        i18nc("@option:check", "Do not show this warning again"), &warning);
+    warning.setCheckBox(remember);
+
+    if (warning.exec() != QMessageBox::Ok)
+    {
+        return false;
+    }
+
+    if (remember->isChecked())
+    {
+        group.writeEntry("ExternalApplicationRiskAcknowledged", true);
+        group.sync();
+    }
+
+    return true;
+}
+
+} // namespace
 
 ItemViewUtilities::ItemViewUtilities(QWidget* const parentWidget)
     : QObject (parentWidget),
@@ -381,6 +444,193 @@ void ItemViewUtilities::openInfosWithDefaultApplication(const QList<ItemInfo>& i
     if (infos.isEmpty())
     {
         return;
+    }
+
+    const QSharedPointer<PrivacyThreadImageIOStillItemTransactionOwner> owner =
+        PrivacyThreadImageIOStillItemTransactionOwner::current();
+    QList<ItemInfo> protectedInfos;
+
+    if (owner)
+    {
+        for (const ItemInfo& info : std::as_const(infos))
+        {
+            if (!owner->actionContextForImage(info.id())
+                     .protectedCategory.uuid.isEmpty())
+            {
+                protectedInfos << info;
+            }
+        }
+    }
+
+    if (!protectedInfos.isEmpty())
+    {
+        if ((infos.size() != 1) || (protectedInfos.size() != 1))
+        {
+            const QMessageBox::StandardButton choice = QMessageBox::question(
+                m_widget,
+                i18nc("@title:window", "Open Protected Selection"),
+                i18nc("@info",
+                      "Private writable checkout currently opens one protected "
+                      "item at a time. Open this selection using its public "
+                      "placeholders instead?"),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel);
+
+            if (choice != QMessageBox::Yes)
+            {
+                return;
+            }
+        }
+        else
+        {
+            const ItemInfo info = protectedInfos.constFirst();
+            const PrivacyStillItemActionContext context =
+                owner->actionContextForImage(info.id());
+            QString password;
+
+            if (!owner->categoryIsUnlocked(context.protectedCategory.uuid))
+            {
+                QMessageBox choice(
+                    QMessageBox::Question,
+                    i18nc("@title:window", "Open Protected Item"),
+                    i18nc("@info",
+                          "Unlock %1 and open a writable private checkout, or "
+                          "open the public placeholder?",
+                          context.protectedCategory.name),
+                    QMessageBox::NoButton, m_widget);
+                QPushButton* const unlock = choice.addButton(
+                    i18nc("@action:button", "Unlock and Open"),
+                    QMessageBox::AcceptRole);
+                QPushButton* const placeholder = choice.addButton(
+                    i18nc("@action:button", "Open Placeholder"),
+                    QMessageBox::ActionRole);
+                choice.addButton(QMessageBox::Cancel);
+                choice.exec();
+
+                if (choice.clickedButton() == placeholder)
+                {
+                    DFileOperations::openFilesWithDefaultApplication(
+                        QList<QUrl>() << info.fileUrl());
+                    return;
+                }
+
+                if (choice.clickedButton() != unlock)
+                {
+                    return;
+                }
+
+                if (!acknowledgeExternalApplicationRisk(m_widget))
+                {
+                    return;
+                }
+
+                bool accepted = false;
+                password = QInputDialog::getText(
+                    m_widget,
+                    i18nc("@title:window", "Unlock Privacy Category"),
+                    i18nc("@label", "Password for %1:",
+                          context.protectedCategory.name),
+                    QLineEdit::Password, QString(), &accepted);
+
+                if (!accepted)
+                {
+                    wipeSecret(password);
+                    return;
+                }
+            }
+            else if (!acknowledgeExternalApplicationRisk(m_widget))
+            {
+                return;
+            }
+
+            auto* const progress = new QProgressDialog(
+                i18nc("@info:progress",
+                      "Preparing writable private checkout..."),
+                QString(), 0, 0, m_widget);
+            progress->setWindowTitle(
+                i18nc("@title:window", "Private External Access"));
+            progress->setCancelButton(nullptr);
+            progress->setWindowModality(Qt::WindowModal);
+            progress->setMinimumDuration(0);
+            progress->show();
+            const QPointer<QProgressDialog> guardedProgress(progress);
+            const QPointer<QWidget> guardedParent(m_widget);
+            const QSharedPointer<QString> secret =
+                QSharedPointer<QString>::create(std::move(password));
+            auto* const watcher =
+                new QFutureWatcher<PrivacyExternalCheckoutResult>(
+                    m_widget ? static_cast<QObject*>(m_widget)
+                             : static_cast<QObject*>(qApp));
+            QObject::connect(
+                watcher,
+                &QFutureWatcher<PrivacyExternalCheckoutResult>::finished,
+                watcher,
+                [watcher, owner, guardedProgress, guardedParent]()
+                {
+                    const PrivacyExternalCheckoutResult result =
+                        watcher->result();
+                    watcher->deleteLater();
+
+                    if (guardedProgress)
+                    {
+                        guardedProgress->deleteLater();
+                    }
+
+                    if (!result.succeeded())
+                    {
+                        QMessageBox message(
+                            QMessageBox::Warning,
+                            i18nc("@title:window",
+                                  "Private External Access Failed"),
+                            i18nc("@info",
+                                  "The protected item could not be prepared for "
+                                  "external access."),
+                            QMessageBox::Ok, guardedParent);
+                        message.setDetailedText(result.detail);
+                        message.exec();
+                        return;
+                    }
+
+                    QUrl primary;
+
+                    for (const PrivacyExternalCheckoutAsset& asset :
+                         result.assets)
+                    {
+                        if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                            (asset.ordinal == 0))
+                        {
+                            primary = asset.checkoutUrl;
+                            break;
+                        }
+                    }
+
+                    if (primary.isEmpty())
+                    {
+                        (void)owner->finishExternalCheckout(
+                            result.transactionUuid);
+                        QMessageBox::warning(
+                            guardedParent,
+                            i18nc("@title:window",
+                                  "Private External Access Failed"),
+                            i18nc("@info",
+                                  "The prepared checkout has no primary media "
+                                  "item and was not opened."));
+                        return;
+                    }
+
+                    DFileOperations::openFilesWithDefaultApplication(
+                        QList<QUrl>() << primary);
+                });
+            watcher->setFuture(QtConcurrent::run(
+                [owner, info, secret]()
+                {
+                    PrivacyExternalCheckoutResult result =
+                        owner->prepareExternalOpen(info, *secret);
+                    wipeSecret(*secret);
+                    return result;
+                }));
+            return;
+        }
     }
 
     QList<QUrl> urls;

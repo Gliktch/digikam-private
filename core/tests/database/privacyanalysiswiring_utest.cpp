@@ -60,6 +60,7 @@ private Q_SLOTS:
     void testEditorSavesCannotOverwriteProtectedItems();
     void testUnlockedOriginalsUseRevocableMemorySources();
     void testPreparedPluginSourcesOwnLifetime();
+    void testDefaultExternalOpenUsesWritableCheckout();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -446,6 +447,39 @@ void PrivacyAnalysisWiringTest::testPreparedPluginSourcesOwnLifetime()
         "accessiblePhotos()")));
     QVERIFY(accessBroker.contains(QStringLiteral(
         "fileFactsForAsset(asset)")));
+}
+
+void PrivacyAnalysisWiringTest::testDefaultExternalOpenUsesWritableCheckout()
+{
+    const QString owner = source(QStringLiteral(
+        "core/app/main/privacythreadimagestillitemtransactionowner.cpp"));
+    const QString utilities = source(QStringLiteral(
+        "core/app/items/utils/itemviewutilities.cpp"));
+
+    QVERIFY2(!owner.isEmpty(), "Unable to read checkout transaction owner");
+    QVERIFY2(!utilities.isEmpty(), "Unable to read item-view utilities");
+    QVERIFY(owner.contains(QStringLiteral(
+        "PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->archive.restoreMember(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->checkoutEngine.create(request)")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->checkoutEngine.authorizeLaunch(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->checkoutEngine.reconcile(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "transaction.type == PrivacyTransactionType::ExternalCheckout")));
+    QVERIFY(utilities.contains(QStringLiteral(
+        "owner->prepareExternalOpen(info, *secret)")));
+    QVERIFY(utilities.contains(QStringLiteral(
+        "asset.checkoutUrl")));
+    QVERIFY(utilities.contains(QStringLiteral(
+        "asset.role == PrivacyAsset::PrimaryMediaRole")));
+    QVERIFY(utilities.contains(QStringLiteral(
+        "ExternalApplicationRiskAcknowledged")));
+    QVERIFY(utilities.contains(QStringLiteral(
+        "The external application may create recent-file records")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)
