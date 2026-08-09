@@ -110,6 +110,14 @@ QString privacyActionFailureText(
                          "The action could not finish safely. Restart digiKam to reconcile it.");
         }
 
+        case PrivacyStillItemTransactionStatus::ReconciliationRequired:
+        {
+            return i18nc(
+                "@info",
+                "Outside changes were preserved. Reconciliation is required "
+                "before this exposure can be considered relocked.");
+        }
+
         default:
         {
             return fallback;
@@ -423,6 +431,8 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
     privacyMenu->setIcon(QIcon::fromTheme(QLatin1String("object-locked")));
     QAction* privacyUnprotectAction = nullptr;
     QAction* privacyResumeAction = nullptr;
+    QAction* privacyCompatibilityUnlockAction = nullptr;
+    QAction* privacyCompatibilityRelockAction = nullptr;
     bool privacyResumeRequiresFreshAuthentication = false;
     PrivacyStillItemActionContext privacyActionContext;
     QHash<const QAction*, PrivacyCategory> privacyProtectActions;
@@ -474,7 +484,12 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
                             privacyActionContext.protectedCategory.name));
         }
         else if (privacyActionContext.availability ==
-                 PrivacyStillItemActionAvailability::ProtectedUnavailable)
+                 PrivacyStillItemActionAvailability::ProtectedUnavailable &&
+                 (privacyActionContext.compatibilityAvailability !=
+                  PrivacyCompatibilityActionAvailability::Relockable) &&
+                 (privacyActionContext.compatibilityAvailability !=
+                  PrivacyCompatibilityActionAvailability::
+                      ReconciliationRequired))
         {
             QString reason = i18nc("@item:inmenu", "Recovery Required");
 
@@ -525,11 +540,41 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
                 }
             }
         }
-        else
+        else if (privacyActionContext.compatibilityAvailability ==
+                 PrivacyCompatibilityActionAvailability::Unavailable)
         {
             QAction* const unavailable = privacyMenu->addAction(
                 i18nc("@action: private-media workflow", "Privacy State Unavailable"));
             unavailable->setEnabled(false);
+        }
+
+        if (privacyActionContext.compatibilityAvailability ==
+            PrivacyCompatibilityActionAvailability::Unlockable)
+        {
+            privacyMenu->addSeparator();
+            privacyCompatibilityUnlockAction = privacyMenu->addAction(
+                QIcon::fromTheme(QLatin1String("document-open-remote")),
+                i18nc("@action: temporarily expose a private original",
+                      "Compatibility Unlock %1...",
+                      privacyActionContext.protectedCategory.name));
+        }
+        else if (privacyActionContext.compatibilityAvailability ==
+                 PrivacyCompatibilityActionAvailability::Relockable)
+        {
+            privacyCompatibilityRelockAction = privacyMenu->addAction(
+                QIcon::fromTheme(QLatin1String("object-locked")),
+                i18nc("@action: end a private compatibility exposure",
+                      "Relock Compatibility Exposure"));
+        }
+        else if (privacyActionContext.compatibilityAvailability ==
+                 PrivacyCompatibilityActionAvailability::
+                     ReconciliationRequired)
+        {
+            QAction* const reconciliation = privacyMenu->addAction(
+                QIcon::fromTheme(QLatin1String("dialog-warning")),
+                i18nc("@item:inmenu",
+                      "Compatibility Changes Need Reconciliation"));
+            reconciliation->setEnabled(false);
         }
     }
 
@@ -684,12 +729,52 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
                         {
                             d->iconView->viewport()->update();
                             d->tableView->update();
+                            QString successText;
+
+                            switch (result.status)
+                            {
+                                case PrivacyStillItemTransactionStatus::Protected:
+                                {
+                                    successText = i18nc(
+                                        "@info", "The item is now protected.");
+                                    break;
+                                }
+
+                                case PrivacyStillItemTransactionStatus::Unprotected:
+                                {
+                                    successText = i18nc(
+                                        "@info", "The item is now unprotected.");
+                                    break;
+                                }
+
+                                case PrivacyStillItemTransactionStatus::
+                                    CompatibilityUnlocked:
+                                {
+                                    successText = i18nc(
+                                        "@info",
+                                        "The original is publicly exposed for compatibility.");
+                                    break;
+                                }
+
+                                case PrivacyStillItemTransactionStatus::
+                                    CompatibilityRelocked:
+                                {
+                                    successText = i18nc(
+                                        "@info",
+                                        "The compatibility exposure is relocked.");
+                                    break;
+                                }
+
+                                default:
+                                {
+                                    successText = i18nc(
+                                        "@info", "The privacy operation completed.");
+                                    break;
+                                }
+                            }
+
                             slotNotificationError(
-                                (result.status ==
-                                 PrivacyStillItemTransactionStatus::Protected)
-                                    ? i18nc("@info", "The item is now protected.")
-                                    : i18nc("@info", "The item is now unprotected."),
-                                DNotificationWidget::Information);
+                                successText, DNotificationWidget::Information);
                         }
                     });
             watcher->setFuture(future);
@@ -698,6 +783,142 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
     if (choice && (choice == viewAction))
     {
         slotTogglePreviewMode(info);
+    }
+    else if (choice && privacyOwner &&
+             (choice == privacyCompatibilityUnlockAction))
+    {
+        const bool confirmed = (QMessageBox::warning(
+            this,
+            i18nc("@title:window", "Compatibility Unlock"),
+            i18nc(
+                "@info",
+                "This temporarily puts the original file and its associated "
+                "assets back at their public collection paths for outside "
+                "programs. They can be viewed or changed there. Screen lock "
+                "and suspend will not automatically relock this exposure, and "
+                "a crash or power loss may leave it exposed until recovery. "
+                "Continue?"),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel) == QMessageBox::Yes);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        QString password;
+        bool accepted = true;
+
+        if (!privacyOwner->categoryIsUnlocked(
+                privacyActionContext.protectedCategory.uuid))
+        {
+            password = QInputDialog::getText(
+                this,
+                i18nc("@title:window", "Compatibility Unlock"),
+                i18nc("@label", "Password for %1:",
+                      privacyActionContext.protectedCategory.name),
+                QLineEdit::Password, QString(), &accepted);
+        }
+
+        if (accepted)
+        {
+            auto* const progress = new QProgressDialog(
+                i18nc("@info:progress",
+                      "Exposing the protected original for compatibility..."),
+                QString(), 0, 0, this);
+            progress->setWindowTitle(
+                i18nc("@title:window", "Compatibility Unlock"));
+            progress->setCancelButton(nullptr);
+            progress->setWindowModality(Qt::WindowModal);
+            progress->setMinimumDuration(0);
+            progress->show();
+
+            const QSharedPointer<QString> passwordSecret =
+                QSharedPointer<QString>::create(std::move(password));
+            QFuture<PrivacyStillItemTransactionResult> future =
+                QtConcurrent::run(
+                    [privacyOwner, info, passwordSecret]()
+                    {
+                        PrivacyStillItemTransactionResult result;
+
+                        try
+                        {
+                            result = privacyOwner->compatibilityUnlock(
+                                info, *passwordSecret);
+                        }
+                        catch (...)
+                        {
+                            result.status =
+                                PrivacyStillItemTransactionStatus::
+                                    RecoveryRequired;
+                            result.detail.clear();
+                        }
+
+                        passwordSecret->fill(QChar());
+                        return result;
+                    });
+            watchPrivacyAction(
+                future, progress,
+                i18nc("@title:window", "Compatibility Unlock Failed"),
+                i18nc("@info",
+                      "The original could not be exposed for compatibility."));
+        }
+
+        password.fill(QChar());
+    }
+    else if (choice && privacyOwner &&
+             (choice == privacyCompatibilityRelockAction))
+    {
+        const bool confirmed = (QMessageBox::warning(
+            this,
+            i18nc("@title:window", "Relock Compatibility Exposure"),
+            i18nc(
+                "@info",
+                "End this public compatibility exposure now? If an outside "
+                "program changed or replaced any exposed asset, digiKam will "
+                "preserve it and require reconciliation rather than overwrite "
+                "it with a privacy proxy."),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel) == QMessageBox::Yes);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        auto* const progress = new QProgressDialog(
+            i18nc("@info:progress", "Relocking the compatibility exposure..."),
+            QString(), 0, 0, this);
+        progress->setWindowTitle(
+            i18nc("@title:window", "Relocking Compatibility Exposure"));
+        progress->setCancelButton(nullptr);
+        progress->setWindowModality(Qt::WindowModal);
+        progress->setMinimumDuration(0);
+        progress->show();
+
+        const QString unlockTransactionUuid =
+            privacyActionContext.compatibilityUnlockTransactionUuid;
+        QFuture<PrivacyStillItemTransactionResult> future = QtConcurrent::run(
+            [privacyOwner, info, unlockTransactionUuid]()
+            {
+                try
+                {
+                    return privacyOwner->compatibilityRelock(
+                        info, unlockTransactionUuid);
+                }
+                catch (...)
+                {
+                    PrivacyStillItemTransactionResult result;
+                    result.status =
+                        PrivacyStillItemTransactionStatus::RecoveryRequired;
+                    return result;
+                }
+            });
+        watchPrivacyAction(
+            future, progress,
+            i18nc("@title:window", "Compatibility Relock Failed"),
+            i18nc("@info",
+                  "The compatibility exposure could not be safely relocked."));
     }
     else if (choice && privacyOwner && (choice == privacyResumeAction))
     {

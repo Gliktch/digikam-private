@@ -54,6 +54,7 @@ private Q_SLOTS:
     void testAutomatedFacePipelinesRemainGated();
     void testManualTagsCannotBypassVisibility();
     void testTagQueriesAndPeopleListingsConsumeVisibility();
+    void testCompatibilityActionsUseTransactionOwner();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -155,6 +156,32 @@ void PrivacyAnalysisWiringTest::testTagQueriesAndPeopleListingsConsumeVisibility
         "ImageTagChangeset::VisibilityChanged")));
     QVERIFY(albumManager.contains(QStringLiteral(
         "case ImageTagChangeset::VisibilityChanged")));
+}
+
+void PrivacyAnalysisWiringTest::testCompatibilityActionsUseTransactionOwner()
+{
+    const QString owner = source(QStringLiteral(
+        "core/app/main/privacythreadimagestillitemtransactionowner.cpp"));
+    const QString itemView = source(QStringLiteral(
+        "core/app/views/stack/itemiconview_views.cpp"));
+
+    QVERIFY2(!owner.isEmpty(), "Unable to read still-item transaction owner");
+    QVERIFY2(!itemView.isEmpty(), "Unable to read item-view action source");
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->engine.compatibilityUnlock(request, password)")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->engine.compatibilityRelock(request)")));
+    QVERIFY(owner.contains(QStringLiteral("runWithUnlockedSecret(")));
+    QVERIFY(itemView.contains(QStringLiteral(
+        "privacyOwner->compatibilityUnlock(")));
+    QVERIFY(itemView.contains(QStringLiteral(
+        "privacyOwner->compatibilityRelock(")));
+    QVERIFY(itemView.contains(QStringLiteral("Screen lock")));
+    QVERIFY(itemView.contains(QStringLiteral(
+        "will not automatically relock this exposure")));
+    QVERIFY(itemView.contains(QStringLiteral("crash or power loss")));
+    QVERIFY(itemView.contains(QStringLiteral(
+        "preserve it and require reconciliation rather than overwrite")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)

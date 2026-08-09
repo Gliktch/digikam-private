@@ -42,6 +42,14 @@ enum class PrivacyStillItemActionAvailability
     ProtectedUnavailable
 };
 
+enum class PrivacyCompatibilityActionAvailability
+{
+    Unavailable,
+    Unlockable,
+    Relockable,
+    ReconciliationRequired
+};
+
 class PrivacyStillItemActionContext
 {
 public:
@@ -52,6 +60,9 @@ public:
     QList<PrivacyCategory> protectCategories;
     PrivacyRootRuntimeState publicRootState = PrivacyRootRuntimeState::Unknown;
     QString recoveryTransactionUuid;
+    PrivacyCompatibilityActionAvailability compatibilityAvailability =
+        PrivacyCompatibilityActionAvailability::Unavailable;
+    QString compatibilityUnlockTransactionUuid;
 };
 
 class PrivacyThreadImageIOStillItemTransactionOwner final
@@ -79,6 +90,12 @@ public:
     PrivacyStillItemTransactionResult unprotect(
         const ItemInfo& info,
         const QString& passwordText);
+    PrivacyStillItemTransactionResult compatibilityUnlock(
+        const ItemInfo& info,
+        const QString& passwordText);
+    PrivacyStillItemTransactionResult compatibilityRelock(
+        const ItemInfo& info,
+        const QString& unlockTransactionUuid);
     PrivacyStillItemTransactionResult resume(
         qlonglong imageId,
         const QString& transactionUuid,

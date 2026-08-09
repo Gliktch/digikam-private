@@ -255,8 +255,7 @@ enum class PrivacyStillItemFaultPoint
     AfterCompatibilityRelockPublicTransition
 };
 
-/** One complete Casual, single-primary-media transaction. Multi-asset sets are
- * rejected before mutation until batch namespace publication exists. */
+/** One complete Casual item transaction over one exact associated-asset set. */
 class DIGIKAM_DATABASE_EXPORT PrivacyStillItemTransactionEngine
 {
 public:
