@@ -55,6 +55,7 @@ private Q_SLOTS:
     void testManualTagsCannotBypassVisibility();
     void testTagQueriesAndPeopleListingsConsumeVisibility();
     void testCompatibilityActionsUseTransactionOwner();
+    void testProtectedMutationsCannotBypassDioGate();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -232,6 +233,31 @@ void PrivacyAnalysisWiringTest::testCompatibilityActionsUseTransactionOwner()
     QVERIFY(replacementRuntime > orderlyRelock);
     QVERIFY(privacyReset >= 0);
     QVERIFY(databaseCleanup > privacyReset);
+}
+
+void PrivacyAnalysisWiringTest::testProtectedMutationsCannotBypassDioGate()
+{
+    const QString dio = source(QStringLiteral(
+        "core/libs/database/utils/ifaces/dio.cpp"));
+    const QString runtime = source(QStringLiteral(
+        "core/libs/database/privacy/privacyruntime.cpp"));
+
+    QVERIFY2(!dio.isEmpty(), "Unable to read DIO source");
+    QVERIFY2(!runtime.isEmpty(), "Unable to read privacy runtime source");
+    QVERIFY(dio.contains(QStringLiteral(
+        "PrivacyActionGate::classify(request)")));
+    QVERIFY(dio.contains(QStringLiteral(
+        "PrivacyActionKind::MoveRenameDelete")));
+    QVERIFY(dio.contains(QStringLiteral(
+        "PrivacyMutationPolicy::DestructiveMutation")));
+    QCOMPARE(occurrences(dio, QStringLiteral("!allowPrivacyMutation(")), 6);
+    QVERIFY(dio.contains(QStringLiteral(
+        "!allowPrivacyMutation(trackedItemInfos(srcList))")));
+    QVERIFY(dio.contains(QStringLiteral(
+        "(operation == IOJobData::MoveImage) &&\n"
+        "            !allowPrivacyMutation(data->itemInfos())")));
+    QCOMPARE(occurrences(runtime,
+                         QStringLiteral("PrivacyActionGate::setProvider(runtime)")), 2);
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)

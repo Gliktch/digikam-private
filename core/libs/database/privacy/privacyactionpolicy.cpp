@@ -12,14 +12,29 @@
 
 // Qt includes
 
+#include <QGlobalStatic>
+#include <QReadLocker>
+#include <QReadWriteLock>
 #include <QSet>
 #include <QUuid>
+#include <QWriteLocker>
 
 namespace Digikam
 {
 
 namespace
 {
+
+class PrivacyActionGateData
+{
+public:
+
+    QReadWriteLock                                  lock;
+    QSharedPointer<const PrivacyActionStateProvider> provider;
+    quint64                                         generation = 0;
+};
+
+Q_GLOBAL_STATIC(PrivacyActionGateData, actionGateData)
 
 bool isCanonicalUuid(const QString& uuid)
 {
@@ -425,6 +440,62 @@ bool PrivacyActionPolicy::actionAllowsProxyFallback(PrivacyActionKind kind)
     }
 
     return false;
+}
+
+void PrivacyActionGate::setProvider(
+    const QSharedPointer<const PrivacyActionStateProvider>& provider)
+{
+    QWriteLocker locker(&actionGateData->lock);
+    actionGateData->provider = provider;
+
+    if (++actionGateData->generation == 0)
+    {
+        ++actionGateData->generation;
+    }
+}
+
+void PrivacyActionGate::resetProvider()
+{
+    setProvider(QSharedPointer<const PrivacyActionStateProvider>());
+}
+
+bool PrivacyActionGate::isInstalled()
+{
+    QReadLocker locker(&actionGateData->lock);
+
+    return !actionGateData->provider.isNull();
+}
+
+PrivacyActionPolicyResult PrivacyActionGate::classify(
+    const PrivacyActionRequest& request)
+{
+    QSharedPointer<const PrivacyActionStateProvider> provider;
+    quint64 generation = 0;
+
+    {
+        QReadLocker locker(&actionGateData->lock);
+        provider   = actionGateData->provider;
+        generation = actionGateData->generation;
+    }
+
+    if (!provider)
+    {
+        return PrivacyActionPolicyResult();
+    }
+
+    const PrivacyActionPolicyResult result = PrivacyActionPolicy::classify(request, *provider);
+
+    {
+        QReadLocker locker(&actionGateData->lock);
+
+        if ((generation != actionGateData->generation) ||
+            (provider != actionGateData->provider))
+        {
+            return PrivacyActionPolicyResult();
+        }
+    }
+
+    return result;
 }
 
 } // namespace Digikam

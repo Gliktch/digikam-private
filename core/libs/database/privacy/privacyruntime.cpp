@@ -4632,6 +4632,7 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
     }
 
     PrivacyScanGate::setProvider(runtime);
+    PrivacyActionGate::setProvider(runtime);
     PrivacyAnalysisGate::setProvider(runtime);
     PrivacyManualTagVisibilityGate::setProvider(runtime);
 
@@ -4685,6 +4686,7 @@ void PrivacyStartupRecovery::reset()
 
     QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
     PrivacyScanGate::setProvider(runtime);
+    PrivacyActionGate::setProvider(runtime);
     PrivacyAnalysisGate::setProvider(runtime);
     PrivacyManualTagVisibilityGate::setProvider(runtime);
 

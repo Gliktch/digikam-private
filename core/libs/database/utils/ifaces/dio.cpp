@@ -54,9 +54,172 @@
 #include "progressmanager.h"
 #include "digikamapp.h"
 #include "iojobdata.h"
+#include "privacyactionpolicy.h"
 
 namespace Digikam
 {
+
+namespace
+{
+
+enum class PrivacyMutationCheck
+{
+    Allowed,
+    Protected,
+    Unavailable
+};
+
+void appendAlbumItemInfos(Album* const album, QList<ItemInfo>* const infos)
+{
+    if (!album || !infos)
+    {
+        return;
+    }
+
+    CoreDbAccess access;
+
+    for (qlonglong imageId : access.db()->getItemIDsInAlbum(album->id()))
+    {
+        const ItemInfo info(imageId);
+
+        if (!info.isNull())
+        {
+            infos->append(info);
+        }
+    }
+
+    AlbumIterator it(album);
+
+    while (it.current())
+    {
+        appendAlbumItemInfos(*it, infos);
+        ++it;
+    }
+}
+
+QList<ItemInfo> trackedItemInfos(const QList<QUrl>& urls)
+{
+    QList<ItemInfo> infos;
+
+    for (const QUrl& url : urls)
+    {
+        const ItemInfo info = ItemInfo::fromUrl(url);
+
+        if (!info.isNull())
+        {
+            infos << info;
+        }
+    }
+
+    return infos;
+}
+
+PrivacyMutationCheck privacyMutationCheck(const QList<ItemInfo>& infos,
+                                          int* const protectedCount)
+{
+    if (protectedCount)
+    {
+        *protectedCount = 0;
+    }
+
+    if (infos.isEmpty() || !PrivacyActionGate::isInstalled())
+    {
+        return PrivacyMutationCheck::Allowed;
+    }
+
+    PrivacyActionRequest request;
+    request.actionKind       = PrivacyActionKind::MoveRenameDelete;
+    request.consumerIdentity = QLatin1String("digikam-dio");
+    request.requestedSource  = PrivacyRequestedSource::NoPixels;
+    request.mutationPolicy   = PrivacyMutationPolicy::DestructiveMutation;
+    QSet<qlonglong> seenIds;
+
+    for (const ItemInfo& info : infos)
+    {
+        if (info.isNull() || (info.id() <= 0) ||
+            !QDir::isAbsolutePath(info.filePath()))
+        {
+            return PrivacyMutationCheck::Unavailable;
+        }
+
+        if (seenIds.contains(info.id()))
+        {
+            continue;
+        }
+
+        PrivacyActionItem item;
+        item.imageId    = info.id();
+        item.publicPath = info.filePath();
+        request.items << item;
+        seenIds.insert(info.id());
+    }
+
+    if (request.items.isEmpty())
+    {
+        return PrivacyMutationCheck::Allowed;
+    }
+
+    const PrivacyActionPolicyResult policy = PrivacyActionGate::classify(request);
+
+    if (!policy.isValid() || (policy.deniedItemCount > 0))
+    {
+        return PrivacyMutationCheck::Unavailable;
+    }
+
+    if (policy.protectedItemCount > 0)
+    {
+        if (protectedCount)
+        {
+            *protectedCount = policy.protectedItemCount;
+        }
+
+        return PrivacyMutationCheck::Protected;
+    }
+
+    return policy.isImmediatelyReady()
+         ? PrivacyMutationCheck::Allowed
+         : PrivacyMutationCheck::Unavailable;
+}
+
+bool allowPrivacyMutation(const QList<ItemInfo>& infos)
+{
+    int protectedCount = 0;
+
+    switch (privacyMutationCheck(infos, &protectedCount))
+    {
+        case PrivacyMutationCheck::Allowed:
+        {
+            return true;
+        }
+
+        case PrivacyMutationCheck::Protected:
+        {
+            QMessageBox::warning(
+                qApp->activeWindow(), i18nc("@title:window", "Protected Items Cannot Be Changed"),
+                i18ncp("@info", "This operation includes one protected item. Unprotect it first, "
+                       "then retry. This keeps its public placeholder, protected archive, and "
+                       "catalog record together.",
+                       "This operation includes %1 protected items. Unprotect them first, then "
+                       "retry. This keeps their public placeholders, protected archives, and "
+                       "catalog records together.", protectedCount));
+            return false;
+        }
+
+        case PrivacyMutationCheck::Unavailable:
+        {
+            QMessageBox::warning(
+                qApp->activeWindow(), i18nc("@title:window", "Private Media State Unavailable"),
+                i18nc("@info", "digiKam could not safely verify the privacy state of every item. "
+                      "No files were changed. Restore access to the relevant collection or "
+                      "restart digiKam, then retry."));
+            return false;
+        }
+    }
+
+    return false;
+}
+
+} // namespace
 
 class Q_DECL_HIDDEN DIOCreator
 {
@@ -104,6 +267,14 @@ void DIO::copy(PAlbum* const src, PAlbum* const dest)
 void DIO::move(PAlbum* const src, PAlbum* const dest)
 {
     if (!src || !dest)
+    {
+        return;
+    }
+
+    QList<ItemInfo> infos;
+    appendAlbumItemInfos(src, &infos);
+
+    if (!allowPrivacyMutation(infos))
     {
         return;
     }
@@ -168,6 +339,11 @@ void DIO::move(const QList<QUrl>& srcList, PAlbum* const dest)
         return;
     }
 
+    if (!allowPrivacyMutation(trackedItemInfos(srcList)))
+    {
+        return;
+    }
+
     instance()->processJob(new IOJobData(IOJobData::MoveFiles, srcList, dest));
 }
 
@@ -189,6 +365,11 @@ void DIO::rename(const QUrl& src, const QString& newName, bool overwrite)
 
     ItemInfo info = ItemInfo::fromUrl(src);
 
+    if (!info.isNull() && !allowPrivacyMutation(QList<ItemInfo>() << info))
+    {
+        return;
+    }
+
     instance()->processJob(new IOJobData(IOJobData::Rename, info, newName, overwrite));
 }
 
@@ -196,6 +377,11 @@ void DIO::rename(const QUrl& src, const QString& newName, bool overwrite)
 
 void DIO::del(const QList<ItemInfo>& infos, bool useTrash)
 {
+    if (!allowPrivacyMutation(infos))
+    {
+        return;
+    }
+
     instance()->processJob(new IOJobData(useTrash ? IOJobData::Trash
                                                   : IOJobData::Delete, infos));
 }
@@ -208,6 +394,14 @@ void DIO::del(const ItemInfo& info, bool useTrash)
 void DIO::del(PAlbum* const album, bool useTrash)
 {
     if (!album)
+    {
+        return;
+    }
+
+    QList<ItemInfo> infos;
+    appendAlbumItemInfos(album, &infos);
+
+    if (!allowPrivacyMutation(infos))
     {
         return;
     }
@@ -273,6 +467,14 @@ void DIO::processJob(IOJobData* const data)
 
         GroupedImagesFinder finder(data->itemInfos());
         data->setItemInfos(finder.infos);
+
+        if ((operation == IOJobData::MoveImage) &&
+            !allowPrivacyMutation(data->itemInfos()))
+        {
+            delete data;
+
+            return;
+        }
     }
     else if (
              (operation == IOJobData::Trash) ||

@@ -13,6 +13,7 @@
 // Qt includes
 
 #include <QList>
+#include <QSharedPointer>
 #include <QStringList>
 
 // Local includes
@@ -129,6 +130,23 @@ public:
         const PrivacyActionStateProvider& stateProvider);
 
     static bool actionAllowsProxyFallback(PrivacyActionKind kind);
+};
+
+/**
+ * Process-wide, thread-safe entry point for consumers that need the current
+ * runtime policy provider. A missing or concurrently replaced provider returns
+ * an invalid result so callers can fail closed; isolated upstream consumers can
+ * use isInstalled() to preserve normal behavior when privacy was never started.
+ */
+class DIGIKAM_DATABASE_EXPORT PrivacyActionGate
+{
+public:
+
+    static void setProvider(
+        const QSharedPointer<const PrivacyActionStateProvider>& provider);
+    static void resetProvider();
+    static bool isInstalled();
+    static PrivacyActionPolicyResult classify(const PrivacyActionRequest& request);
 };
 
 } // namespace Digikam

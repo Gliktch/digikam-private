@@ -46,6 +46,29 @@ public:
     QHash<qlonglong, PrivacyActionItemState> states;
 };
 
+class ReplacingActionStateProvider final : public PrivacyActionStateProvider
+{
+public:
+
+    bool stateForItem(qlonglong,
+                      PrivacyActionItemState* state) const override
+    {
+        if (!state)
+        {
+            return false;
+        }
+
+        *state = PrivacyActionItemState();
+        PrivacyActionGate::setProvider(replacement);
+
+        return true;
+    }
+
+public:
+
+    QSharedPointer<const PrivacyActionStateProvider> replacement;
+};
+
 PrivacyActionItemState unprotectedState()
 {
     return PrivacyActionItemState();
@@ -109,6 +132,8 @@ private Q_SLOTS:
     void testReconciliationAndMutationPrecedence();
     void testAnalysisExcludesProtectedItemsInEveryState();
     void testProviderFailureFailsClosed();
+    void testProcessGateUsesInstalledProvider();
+    void testProcessGateReplacementFailsClosed();
 };
 
 void PrivacyActionPolicyTest::testUnprotectedPassThrough()
@@ -337,6 +362,51 @@ void PrivacyActionPolicyTest::testProviderFailureFailsClosed()
     QCOMPARE(result.deniedItemCount, 1);
     QVERIFY(result.affectedCategoryUuids.isEmpty());
     QVERIFY(!result.canContinueWithProxy);
+}
+
+void PrivacyActionPolicyTest::testProcessGateUsesInstalledProvider()
+{
+    PrivacyActionGate::resetProvider();
+    QVERIFY(!PrivacyActionGate::isInstalled());
+    QVERIFY(!PrivacyActionGate::classify(
+        makeRequest(PrivacyActionKind::MoveRenameDelete,
+                    PrivacyRequestedSource::NoPixels,
+                    PrivacyMutationPolicy::DestructiveMutation, { 1 })).isValid());
+
+    QSharedPointer<FakeActionStateProvider> provider(new FakeActionStateProvider);
+    provider->states.insert(1, unprotectedState());
+    provider->states.insert(2, protectedState());
+    PrivacyActionGate::setProvider(provider);
+
+    QVERIFY(PrivacyActionGate::isInstalled());
+
+    const PrivacyActionPolicyResult result = PrivacyActionGate::classify(
+        makeRequest(PrivacyActionKind::MoveRenameDelete,
+                    PrivacyRequestedSource::NoPixels,
+                    PrivacyMutationPolicy::DestructiveMutation, { 1, 2 }));
+
+    QVERIFY(result.isValid());
+    QCOMPARE(result.protectedItemCount, 1);
+    QCOMPARE(result.items.at(1).disposition,
+             PrivacyActionPolicyDisposition::ProtectedMutationRequired);
+    PrivacyActionGate::resetProvider();
+}
+
+void PrivacyActionPolicyTest::testProcessGateReplacementFailsClosed()
+{
+    QSharedPointer<FakeActionStateProvider> replacement(new FakeActionStateProvider);
+    replacement->states.insert(1, unprotectedState());
+    QSharedPointer<ReplacingActionStateProvider> provider(new ReplacingActionStateProvider);
+    provider->replacement = replacement;
+    PrivacyActionGate::setProvider(provider);
+
+    const PrivacyActionPolicyResult result = PrivacyActionGate::classify(
+        makeRequest(PrivacyActionKind::MoveRenameDelete,
+                    PrivacyRequestedSource::NoPixels,
+                    PrivacyMutationPolicy::DestructiveMutation, { 1 }));
+
+    QVERIFY(!result.isValid());
+    PrivacyActionGate::resetProvider();
 }
 
 QTEST_GUILESS_MAIN(PrivacyActionPolicyTest)
