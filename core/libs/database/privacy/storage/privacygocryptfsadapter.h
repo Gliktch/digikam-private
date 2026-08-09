@@ -121,11 +121,13 @@ private:
     friend class PrivacyGocryptfsStoreHarness;
 
     PrivacyGocryptfsMountLease(QString mountPoint,
+                               const PrivacyMountStateProbe* mountProbe,
                                std::unique_ptr<PrivacyProcessHandle>&& process);
 
 private:
 
     QString                               m_mountPoint;
+    const PrivacyMountStateProbe*         m_mountProbe = nullptr;
     std::unique_ptr<PrivacyProcessHandle> m_process;
 };
 

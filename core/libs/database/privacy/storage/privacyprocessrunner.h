@@ -48,6 +48,10 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyProcessSpec
     qsizetype           maximumStdout   = 8192;
     qsizetype           maximumStderr   = 8192;
     bool                sensitiveOutput = false;
+    /** Linux-only foreground-helper ownership. The child receives SIGTERM if
+     * its exact spawning parent dies, with the fork/parent-death race closed
+     * before exec. Requests fail closed on unsupported platforms. */
+    bool                terminateWithParent = false;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyProcessResult

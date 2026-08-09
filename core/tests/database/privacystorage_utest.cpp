@@ -532,6 +532,10 @@ void PrivacyStorageTest::testSyntheticLifecycle()
     auto lease = harness->mountStore(password, sentinel, &error);
     QVERIFY(lease);
     QVERIFY(lease->isActive());
+    fixture.probe.current = PrivacyMountStateProbe::State::NotMounted;
+    QVERIFY(!lease->isActive());
+    fixture.probe.current = PrivacyMountStateProbe::State::Mounted;
+    QVERIFY(lease->isActive());
     QVERIFY(harness->unmountStore(*lease, &error));
     QVERIFY(!lease->isActive());
     QVERIFY(fixture.runner.sawPasswordInput);
@@ -543,6 +547,7 @@ void PrivacyStorageTest::testSyntheticLifecycle()
         if (spec.arguments.contains(QLatin1String("-fg")))
         {
             safeMount = FakeProcessRunner::hasPassfileStdin(spec) &&
+                        spec.terminateWithParent &&
                         spec.arguments.contains(QLatin1String("-q")) &&
                         spec.arguments.contains(QLatin1String("-nosyslog")) &&
                         spec.arguments.contains(QLatin1String("-nodev")) &&

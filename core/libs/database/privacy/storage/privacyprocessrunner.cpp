@@ -20,11 +20,55 @@
 #include <QFileInfo>
 #include <QProcess>
 
+#if defined(Q_OS_LINUX)
+#   include <signal.h>
+#   include <sys/prctl.h>
+#   include <sys/types.h>
+#   include <unistd.h>
+#endif
+
 namespace Digikam
 {
 
 namespace
 {
+
+#if defined(Q_OS_LINUX)
+
+void installParentDeathSignal(pid_t expectedParent)
+{
+    if ((::prctl(PR_SET_PDEATHSIG, SIGTERM) != 0) ||
+        (::getppid() != expectedParent))
+    {
+        ::_exit(127);
+    }
+}
+
+#endif
+
+class PrivacyQProcess final : public QProcess
+{
+public:
+
+#if defined(Q_OS_LINUX) && (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+
+    bool terminateWithParent = false;
+    pid_t expectedParent = 0;
+
+protected:
+
+    void setupChildProcess() override
+    {
+        QProcess::setupChildProcess();
+
+        if (terminateWithParent)
+        {
+            installParentDeathSignal(expectedParent);
+        }
+    }
+
+#endif
+};
 
 void overwriteByteArray(QByteArray& bytes)
 {
@@ -61,6 +105,27 @@ public:
         m_process.setProcessEnvironment(spec.environment);
         m_process.setProgram(spec.program);
         m_process.setArguments(spec.arguments);
+
+        if (spec.terminateWithParent)
+        {
+#if defined(Q_OS_LINUX)
+            const pid_t expectedParent = ::getpid();
+
+#   if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
+            m_process.setChildProcessModifier(
+                [expectedParent]()
+                {
+                    installParentDeathSignal(expectedParent);
+                });
+#   else
+            m_process.terminateWithParent = true;
+            m_process.expectedParent = expectedParent;
+#   endif
+#else
+            return;
+#endif
+        }
+
         m_process.start(QIODevice::ReadWrite);
 
         if (!m_process.waitForStarted(spec.startTimeoutMs))
@@ -232,7 +297,7 @@ private:
 private:
 
     PrivacyProcessSpec m_spec;
-    QProcess           m_process;
+    PrivacyQProcess    m_process;
     QByteArray         m_stdout;
     QByteArray         m_stderr;
     bool               m_started             = false;

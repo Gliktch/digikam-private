@@ -17,8 +17,10 @@
 // Qt includes
 
 #include <QDir>
+#include <QCoreApplication>
 #include <QReadWriteLock>
 #include <QStandardPaths>
+#include <QUuid>
 
 // Local includes
 
@@ -40,7 +42,9 @@ public:
             const QSharedPointer<const PrivacyRootVerifier>& rootVerifier)
         : runtime(runtime),
           rootVerifier(rootVerifier),
-          storeBackend(processRunner, mountProbe, toolPaths(), runtimeRoot()),
+          runtimeWorkspaceRoot(runtimeRoot()),
+          storeBackend(processRunner, mountProbe, toolPaths(),
+                       runtimeWorkspaceRoot),
           coordinator(repository, storeBackend, *rootVerifier, *runtime)
     {
     }
@@ -58,8 +62,14 @@ public:
 
     static QString runtimeRoot()
     {
-        return QDir(QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation))
-            .filePath(QLatin1String("digikam-private/category-stores"));
+        const QString session = QStringLiteral("session-%1-%2")
+            .arg(QCoreApplication::applicationPid())
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+
+        return QDir(QStandardPaths::writableLocation(
+                        QStandardPaths::RuntimeLocation))
+            .filePath(QLatin1String("digikam-private/category-stores/") +
+                      session);
     }
 
     void publishManualTagVisibilityChange(const QString& categoryUuid = QString())
@@ -105,6 +115,7 @@ public:
     bool                                           presentationBlocked = false;
     QSharedPointer<PrivacyRuntimeCoordinator>      runtime;
     QSharedPointer<const PrivacyRootVerifier>      rootVerifier;
+    QString                                        runtimeWorkspaceRoot;
     QProcessPrivacyProcessRunner                   processRunner;
     ProcMountInfoPrivacyMountStateProbe            mountProbe;
     PrivacyCoreDbCategorySessionRepository         repository;

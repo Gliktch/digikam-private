@@ -179,8 +179,10 @@ PrivacyMountStateProbe::State ProcMountInfoPrivacyMountStateProbe::state(
 }
 
 PrivacyGocryptfsMountLease::PrivacyGocryptfsMountLease(
-    QString mountPoint, std::unique_ptr<PrivacyProcessHandle>&& process)
+    QString mountPoint, const PrivacyMountStateProbe* const mountProbe,
+    std::unique_ptr<PrivacyProcessHandle>&& process)
     : m_mountPoint(std::move(mountPoint)),
+      m_mountProbe(mountProbe),
       m_process(std::move(process))
 {
 }
@@ -189,7 +191,9 @@ PrivacyGocryptfsMountLease::~PrivacyGocryptfsMountLease() = default;
 
 bool PrivacyGocryptfsMountLease::isActive()
 {
-    return (m_process && m_process->isRunning());
+    return (m_process && m_process->isRunning() && m_mountProbe &&
+            (m_mountProbe->state(m_mountPoint) ==
+             PrivacyMountStateProbe::State::Mounted));
 }
 
 QString PrivacyGocryptfsMountLease::mountPoint() const
@@ -415,7 +419,8 @@ bool PrivacyGocryptfsStoreHarness::createStore(const PrivacyPassword& password,
         return false;
     }
 
-    PrivacyGocryptfsMountLease lease(mountDirectory(), std::move(process));
+    PrivacyGocryptfsMountLease lease(mountDirectory(), &m_mountProbe,
+                                     std::move(process));
 
     if (!unmountStore(lease, error))
     {
@@ -543,7 +548,8 @@ std::unique_ptr<PrivacyGocryptfsMountLease> PrivacyGocryptfsStoreHarness::mountS
     }
 
     return std::unique_ptr<PrivacyGocryptfsMountLease>(
-        new PrivacyGocryptfsMountLease(mountDirectory(), std::move(process)));
+        new PrivacyGocryptfsMountLease(mountDirectory(), &m_mountProbe,
+                                       std::move(process)));
 }
 
 bool PrivacyGocryptfsStoreHarness::unmountStore(PrivacyGocryptfsMountLease& lease,
@@ -750,13 +756,14 @@ bool PrivacyGocryptfsStoreHarness::runWithPassword(
 std::unique_ptr<PrivacyProcessHandle> PrivacyGocryptfsStoreHarness::startMount(
     const PrivacyPassword& password, PrivacyGocryptfsError* const error) const
 {
-    const PrivacyProcessSpec spec = processSpec(
+    PrivacyProcessSpec spec = processSpec(
         m_toolPaths.gocryptfs,
         { QLatin1String("-fg"), QLatin1String("-q"), QLatin1String("-nosyslog"),
           QLatin1String("-nodev"), QLatin1String("-nosuid"), QLatin1String("-noexec"),
           QLatin1String("-passfile"), QLatin1String("/dev/stdin"),
           cipherDirectory(), mountDirectory() },
         true);
+    spec.terminateWithParent = true;
     std::unique_ptr<PrivacyProcessHandle> process;
 
     const bool started = password.withStdinLine(
