@@ -229,6 +229,130 @@ QString baseName(const QString& relativePath)
     return (slash < 0) ? relativePath : relativePath.sliced(slash + 1);
 }
 
+struct ValidatedTransitionRequest
+{
+    const PrivacyJournalAsset*      asset         = nullptr;
+    const PrivacyJournalObjectFact* installedFact = nullptr;
+    const PrivacyJournalObjectFact* currentFact   = nullptr;
+    bool                            install       = false;
+    bool                            exchange      = false;
+    bool                            remove        = false;
+};
+
+PrivacyPublicTransitionError validateTransitionRequest(
+    const PrivacyPublicTransitionRequest& request,
+    ValidatedTransitionRequest* const validated, QString* const detail)
+{
+    if (!validated || !detail)
+    {
+        return PrivacyPublicTransitionError::InvalidRequest;
+    }
+
+    QString journalDetail;
+
+    if (!PrivacyTransactionJournalCodec::validate(request.journalRecord,
+                                                   &journalDetail) ||
+        (request.authoritativeJournalSha256.size() !=
+         QCryptographicHash::hashLength(QCryptographicHash::Sha256)) ||
+        ((request.journalRecord.stage !=
+          PrivacyJournalStage::ProtectedCopyVerified) &&
+         (request.journalRecord.stage != PrivacyJournalStage::Applying) &&
+         (request.journalRecord.stage !=
+          PrivacyJournalStage::PublicStateVerified)) ||
+        request.itemUuid.isEmpty() || (request.role <= 0) ||
+        (request.ordinal < 0) ||
+        ((request.mode != PrivacyPublicTransitionMode::InstallAbsent) &&
+         (request.mode != PrivacyPublicTransitionMode::ExchangePresent) &&
+         (request.mode != PrivacyPublicTransitionMode::RemovePresent)) ||
+        (request.installedUnixMode < -1) ||
+        (request.installedUnixMode > 07777) ||
+        !validFactMapping(request.journalRecord.transactionType,
+                          request.currentFact, request.installedFact))
+    {
+        *detail = journalDetail.isEmpty()
+                ? QStringLiteral(
+                    "request or journal stage/fact mapping is invalid")
+                : journalDetail;
+        return PrivacyPublicTransitionError::InvalidRequest;
+    }
+
+    for (const PrivacyJournalAsset& candidate : request.journalRecord.assets)
+    {
+        if ((candidate.itemUuid == request.itemUuid) &&
+            (candidate.role == request.role) &&
+            (candidate.ordinal == request.ordinal))
+        {
+            validated->asset = &candidate;
+            break;
+        }
+    }
+
+    if (!validated->asset || validated->asset->stagedRelativePath.isEmpty() ||
+        !presentFact(validated->asset->container) ||
+        (validated->asset->container.linkCount != 1) ||
+        (parentPath(validated->asset->publicRelativePath) !=
+         parentPath(validated->asset->stagedRelativePath)) ||
+        (baseName(validated->asset->stagedRelativePath) !=
+         PrivacyPublicTransitionEngine::expectedStageFileName(
+             request.journalRecord.transactionUuid, request.role,
+             request.ordinal)))
+    {
+        *detail = QStringLiteral(
+            "asset paths or verified protected-copy fact are invalid");
+        return PrivacyPublicTransitionError::InvalidRequest;
+    }
+
+    validated->installedFact = factFor(*validated->asset,
+                                       request.installedFact);
+    validated->currentFact = factFor(*validated->asset, request.currentFact);
+    validated->install = (request.mode ==
+                          PrivacyPublicTransitionMode::InstallAbsent);
+    validated->exchange = (request.mode ==
+                           PrivacyPublicTransitionMode::ExchangePresent);
+    validated->remove = (request.mode ==
+                         PrivacyPublicTransitionMode::RemovePresent);
+
+    if (!validated->installedFact || !validated->currentFact)
+    {
+        *detail = QStringLiteral(
+            "journal does not contain required file facts");
+        return PrivacyPublicTransitionError::InvalidRequest;
+    }
+
+    const bool validInstalledFact =
+        (validated->install || validated->exchange)
+            ? (presentFact(*validated->installedFact) &&
+               (validated->installedFact->linkCount == 1))
+            : (validated->installedFact->presence ==
+               PrivacyJournalExpectedPresence::Absent);
+    const bool validCurrentFact =
+        (validated->exchange || validated->remove)
+            ? presentFact(*validated->currentFact)
+            : (presentFact(*validated->currentFact) ||
+               (validated->currentFact->presence ==
+                PrivacyJournalExpectedPresence::Absent));
+
+    if (!validInstalledFact || !validCurrentFact ||
+        (validated->remove && (request.installedUnixMode >= 0)))
+    {
+        *detail = QStringLiteral(
+            "journal does not contain required present file facts");
+        return PrivacyPublicTransitionError::InvalidRequest;
+    }
+
+    if ((request.journalRecord.transactionType !=
+         PrivacyTransactionType::ProtectItem) &&
+        presentFact(*validated->currentFact) &&
+        (validated->currentFact->linkCount != 1))
+    {
+        *detail = QStringLiteral(
+            "this transition type cannot relock or replace a multi-link public exposure");
+        return PrivacyPublicTransitionError::HardlinkReconciliationRequired;
+    }
+
+    return PrivacyPublicTransitionError::None;
+}
+
 #if defined(Q_OS_LINUX)
 
 bool sameStableFile(const struct stat& left, const struct stat& right)
@@ -906,6 +1030,13 @@ PrivacyPublicTransitionEngine::stageReplacement(
 PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
     const PrivacyPublicTransitionRequest& request) const
 {
+    return executeOne(request, true);
+}
+
+PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
+    const PrivacyPublicTransitionRequest& request,
+    bool advanceToPublicState) const
+{
 #if !defined(Q_OS_LINUX)
     Q_UNUSED(request);
     return failure(PrivacyPublicTransitionError::AtomicPublicationUnavailable,
@@ -917,75 +1048,22 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
     };
 
     QString validationDetail;
+    ValidatedTransitionRequest validated;
+    const PrivacyPublicTransitionError validationError =
+        validateTransitionRequest(request, &validated, &validationDetail);
 
-    if (!PrivacyTransactionJournalCodec::validate(request.journalRecord,
-                                                   &validationDetail) ||
-        (request.authoritativeJournalSha256.size() !=
-         QCryptographicHash::hashLength(QCryptographicHash::Sha256)) ||
-        ((request.journalRecord.stage !=
-          PrivacyJournalStage::ProtectedCopyVerified) &&
-         (request.journalRecord.stage != PrivacyJournalStage::Applying) &&
-         (request.journalRecord.stage !=
-          PrivacyJournalStage::PublicStateVerified)) ||
-        (request.itemUuid.isEmpty()) || (request.role <= 0) ||
-        (request.ordinal < 0) ||
-        ((request.mode != PrivacyPublicTransitionMode::InstallAbsent) &&
-         (request.mode != PrivacyPublicTransitionMode::ExchangePresent)) ||
-        (request.installedUnixMode < -1) ||
-        (request.installedUnixMode > 07777) ||
-        !validFactMapping(request.journalRecord.transactionType,
-                          request.currentFact, request.installedFact))
+    if (validationError != PrivacyPublicTransitionError::None)
     {
-        return failure(PrivacyPublicTransitionError::InvalidRequest,
-                       validationDetail.isEmpty()
-                           ? QStringLiteral("request or journal stage/fact mapping is invalid")
-                           : validationDetail);
+        return failure(validationError, validationDetail);
     }
 
-    const PrivacyJournalAsset* asset = nullptr;
-
-    for (const PrivacyJournalAsset& candidate : request.journalRecord.assets)
-    {
-        if ((candidate.itemUuid == request.itemUuid) &&
-            (candidate.role == request.role) &&
-            (candidate.ordinal == request.ordinal))
-        {
-            asset = &candidate;
-            break;
-        }
-    }
-
-    if (!asset || asset->stagedRelativePath.isEmpty() ||
-        !presentFact(asset->container) || (asset->container.linkCount != 1) ||
-        (parentPath(asset->publicRelativePath) !=
-         parentPath(asset->stagedRelativePath)) ||
-        (baseName(asset->stagedRelativePath) !=
-         expectedStageFileName(request.journalRecord.transactionUuid,
-                               request.role, request.ordinal)))
-    {
-        return failure(PrivacyPublicTransitionError::InvalidRequest,
-                       QStringLiteral("asset paths or verified protected-copy fact are invalid"));
-    }
-
+    const PrivacyJournalAsset* const asset = validated.asset;
     const PrivacyJournalObjectFact* const installedFact =
-        factFor(*asset, request.installedFact);
-    const PrivacyJournalObjectFact* const currentFact =
-        factFor(*asset, request.currentFact);
-
-    if (!installedFact || !currentFact || !presentFact(*installedFact) ||
-        !presentFact(*currentFact) || (installedFact->linkCount != 1))
-    {
-        return failure(PrivacyPublicTransitionError::InvalidRequest,
-                       QStringLiteral("journal does not contain required present file facts"));
-    }
-
-    if ((request.journalRecord.transactionType !=
-         PrivacyTransactionType::ProtectItem) &&
-        (currentFact->linkCount != 1))
-    {
-        return failure(PrivacyPublicTransitionError::HardlinkReconciliationRequired,
-                       QStringLiteral("this transition type cannot relock or replace a multi-link public exposure"));
-    }
+        validated.installedFact;
+    const PrivacyJournalObjectFact* const currentFact = validated.currentFact;
+    const bool install = validated.install;
+    const bool exchange = validated.exchange;
+    const bool remove = validated.remove;
 
     PrivacyJournalError journalError = PrivacyJournalError::None;
     QString journalDetail;
@@ -1050,8 +1128,6 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
 
     const QByteArray publicName = baseName(asset->publicRelativePath).toUtf8();
     const QByteArray stageName  = baseName(asset->stagedRelativePath).toUtf8();
-    const bool exchange = (request.mode == PrivacyPublicTransitionMode::ExchangePresent);
-
     struct DiskInspection
     {
         TransitionDiskState state = TransitionDiskState::Unknown;
@@ -1068,15 +1144,15 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
     const auto inspectDisk = [&]()
     {
         DiskInspection inspection;
-        inspection.preStageStatus = openAndVerifyFile(
-            parent.descriptor.get(), stageName, rootDevice, *installedFact,
-            true, true, &inspection.preStage);
 
         bool exactPre = false;
         bool exactPost = false;
 
         if (exchange)
         {
+            inspection.preStageStatus = openAndVerifyFile(
+                parent.descriptor.get(), stageName, rootDevice, *installedFact,
+                true, true, &inspection.preStage);
             inspection.prePublicStatus = openAndVerifyFile(
                 parent.descriptor.get(), publicName, rootDevice, *currentFact,
                 false, false, &inspection.prePublic);
@@ -1091,8 +1167,11 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
             exactPost = ((inspection.postPublicStatus == FileOpenStatus::Verified) &&
                          (inspection.postStageStatus == FileOpenStatus::Verified));
         }
-        else
+        else if (install)
         {
+            inspection.preStageStatus = openAndVerifyFile(
+                parent.descriptor.get(), stageName, rootDevice, *installedFact,
+                true, true, &inspection.preStage);
             exactPre = ((inspection.preStageStatus == FileOpenStatus::Verified) &&
                         nameIsAbsent(parent.descriptor.get(), publicName));
             inspection.postPublicStatus = openAndVerifyFile(
@@ -1100,6 +1179,19 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
                 false, false, &inspection.postPublic);
             exactPost = ((inspection.postPublicStatus == FileOpenStatus::Verified) &&
                          nameIsAbsent(parent.descriptor.get(), stageName));
+        }
+        else
+        {
+            inspection.prePublicStatus = openAndVerifyFile(
+                parent.descriptor.get(), publicName, rootDevice, *currentFact,
+                true, false, &inspection.prePublic);
+            inspection.postStageStatus = openAndVerifyFile(
+                parent.descriptor.get(), stageName, rootDevice, *currentFact,
+                false, false, &inspection.postStage);
+            exactPre = ((inspection.prePublicStatus == FileOpenStatus::Verified) &&
+                        nameIsAbsent(parent.descriptor.get(), stageName));
+            exactPost = ((inspection.postStageStatus == FileOpenStatus::Verified) &&
+                         nameIsAbsent(parent.descriptor.get(), publicName));
         }
 
         inspection.state = (exactPre && exactPost)
@@ -1185,12 +1277,14 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         if (!rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
             !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
             !parentStillReachable(rootFd.get(), rootDevice, parent) ||
-            !nameStillBindsFile(parent.descriptor.get(), publicName,
-                                inspection.postPublic) ||
-            (exchange &&
+            ((install || exchange) &&
+             !nameStillBindsFile(parent.descriptor.get(), publicName,
+                                 inspection.postPublic)) ||
+            (remove && !nameIsAbsent(parent.descriptor.get(), publicName)) ||
+            ((exchange || remove) &&
              !nameStillBindsFile(parent.descriptor.get(), stageName,
                                  inspection.postStage)) ||
-            (!exchange && !nameIsAbsent(parent.descriptor.get(), stageName)))
+            (install && !nameIsAbsent(parent.descriptor.get(), stageName)))
         {
             return failure(PrivacyPublicTransitionError::RootIdentityMismatch,
                            QStringLiteral("PublicStateVerified path binding changed during readback"));
@@ -1198,10 +1292,13 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
 
         result.finalJournalSha256 = request.authoritativeJournalSha256;
         result.installedVerified  = true;
-        result.displacedVerified  = exchange;
-        result.displacedRelativePath = exchange
+        result.displacedVerified  = exchange || remove;
+        result.displacedRelativePath = (exchange || remove)
                                      ? asset->stagedRelativePath
                                      : QString();
+        result.displacedRelativePaths = result.displacedRelativePath.isEmpty()
+                                      ? QStringList()
+                                      : QStringList { result.displacedRelativePath };
         return result;
     }
 
@@ -1220,7 +1317,11 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
                            QStringLiteral("fault injected after initial file verification"));
         }
 
-        if (::fsync(inspection.preStage.descriptor.get()) != 0)
+        const int durableSourceFd = remove
+                                  ? inspection.prePublic.descriptor.get()
+                                  : inspection.preStage.descriptor.get();
+
+        if (::fsync(durableSourceFd) != 0)
         {
             return failure(PrivacyPublicTransitionError::IoFailure,
                            QStringLiteral("cannot fsync staged replacement"));
@@ -1295,7 +1396,11 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
 
     if (mutateNamespace)
     {
-        if (::fsync(inspection.preStage.descriptor.get()) != 0)
+        const int durableSourceFd = remove
+                                  ? inspection.prePublic.descriptor.get()
+                                  : inspection.preStage.descriptor.get();
+
+        if (::fsync(durableSourceFd) != 0)
         {
             result.error  = PrivacyPublicTransitionError::IoFailure;
             result.detail = QStringLiteral("immediate pre-mutation stage fsync failed");
@@ -1312,12 +1417,14 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         if (!rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
             !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
             !parentStillReachable(rootFd.get(), rootDevice, parent) ||
-            !nameStillBindsFile(parent.descriptor.get(), stageName,
-                                inspection.preStage) ||
-            (exchange &&
+            ((install || exchange) &&
+             !nameStillBindsFile(parent.descriptor.get(), stageName,
+                                 inspection.preStage)) ||
+            (remove && !nameIsAbsent(parent.descriptor.get(), stageName)) ||
+            ((exchange || remove) &&
              !nameStillBindsFile(parent.descriptor.get(), publicName,
                                  inspection.prePublic)) ||
-            (!exchange && !nameIsAbsent(parent.descriptor.get(), publicName)))
+            (install && !nameIsAbsent(parent.descriptor.get(), publicName)))
         {
             result.error  = PrivacyPublicTransitionError::RootIdentityMismatch;
             result.detail = QStringLiteral("parent or file binding changed immediately before mutation");
@@ -1326,8 +1433,11 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
 
         bool atomicUnavailable = false;
 
+        const QByteArray& fromName = remove ? publicName : stageName;
+        const QByteArray& toName   = remove ? stageName : publicName;
+
         if (!PrivacyPosixStorage::atomicRenameAt(
-                parent.descriptor.get(), stageName, publicName,
+                parent.descriptor.get(), fromName, toName,
                 exchange ? PrivacyPosixStorage::AtomicRenameMode::Exchange
                          : PrivacyPosixStorage::AtomicRenameMode::NoReplace,
                 &atomicUnavailable))
@@ -1351,9 +1461,10 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         }
     }
 
-    if (exchange)
+    if (exchange || remove)
     {
         result.displacedRelativePath = asset->stagedRelativePath;
+        result.displacedRelativePaths << asset->stagedRelativePath;
     }
 
     if (::fsync(parent.descriptor.get()) != 0)
@@ -1420,8 +1531,10 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         }
 
         bool unavailable = false;
+        const QByteArray& rollbackFrom = remove ? stageName : publicName;
+        const QByteArray& rollbackTo   = remove ? publicName : stageName;
         const bool renamed = PrivacyPosixStorage::atomicRenameAt(
-            parent.descriptor.get(), publicName, stageName,
+            parent.descriptor.get(), rollbackFrom, rollbackTo,
             exchange ? PrivacyPosixStorage::AtomicRenameMode::Exchange
                      : PrivacyPosixStorage::AtomicRenameMode::NoReplace,
             &unavailable);
@@ -1448,10 +1561,11 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         }
 
         VerifiedFile restored;
-        const bool restorationVerified = exchange
-            ? (openAndVerifyFile(parent.descriptor.get(), publicName,
-                                 rootDevice, *currentFact, false, false,
-                                 &restored) == FileOpenStatus::Verified)
+        const bool restorationVerified = exchange || remove
+            ? ((openAndVerifyFile(parent.descriptor.get(), publicName,
+                                  rootDevice, *currentFact, false, false,
+                                  &restored) == FileOpenStatus::Verified) &&
+               (!remove || nameIsAbsent(parent.descriptor.get(), stageName)))
             : nameIsAbsent(parent.descriptor.get(), publicName);
 
         if (!restorationVerified)
@@ -1477,9 +1591,11 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
 
     VerifiedFile installed;
 
-    if (openAndVerifyFile(parent.descriptor.get(), publicName, rootDevice,
-                          *installedFact, false, false,
-                          &installed) != FileOpenStatus::Verified)
+    if ((remove && !nameIsAbsent(parent.descriptor.get(), publicName)) ||
+        (!remove &&
+         (openAndVerifyFile(parent.descriptor.get(), publicName, rootDevice,
+                            *installedFact, false, false,
+                            &installed) != FileOpenStatus::Verified)))
     {
         return rollback(QStringLiteral("installed public bytes do not match journal fact"));
     }
@@ -1509,7 +1625,7 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         }
     }
 
-    if (exchange)
+    if (exchange || remove)
     {
         VerifiedFile displaced;
 
@@ -1534,6 +1650,13 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
         return result;
     }
 
+    if (!advanceToPublicState)
+    {
+        result.finalJournalSha256 = applyingHash;
+        result.error = PrivacyPublicTransitionError::None;
+        return result;
+    }
+
     PrivacyJournalRecord finalRecord = applyingRecord;
     finalRecord.stage = PrivacyJournalStage::PublicStateVerified;
 
@@ -1551,6 +1674,222 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::execute(
     {
         result.error  = PrivacyPublicTransitionError::FaultInjected;
         result.detail = QStringLiteral("fault injected after durable PublicStateVerified journal");
+        return result;
+    }
+
+    result.error = PrivacyPublicTransitionError::None;
+    return result;
+#endif
+}
+
+PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeBatch(
+    const QList<PrivacyPublicTransitionRequest>& requests) const
+{
+#if !defined(Q_OS_LINUX)
+    Q_UNUSED(requests);
+    return failure(PrivacyPublicTransitionError::AtomicPublicationUnavailable,
+                   QStringLiteral("public transition requires Linux renameat2"));
+#else
+    if (requests.isEmpty() ||
+        (requests.size() > PrivacyTransactionJournalCodec::MaximumAssetCount))
+    {
+        return failure(PrivacyPublicTransitionError::InvalidRequest,
+                       QStringLiteral("batch transition request count is invalid"));
+    }
+
+    if (requests.size() == 1)
+    {
+        return execute(requests.constFirst());
+    }
+
+    const PrivacyPublicTransitionRequest& first = requests.constFirst();
+    const QByteArray canonicalJournal = PrivacyTransactionJournalCodec::encode(
+        first.journalRecord);
+    const PrivacyJournalStage initialStage = first.journalRecord.stage;
+
+    if (canonicalJournal.isEmpty() ||
+        (requests.size() != first.journalRecord.assets.size()) ||
+        ((initialStage != PrivacyJournalStage::ProtectedCopyVerified) &&
+         (initialStage != PrivacyJournalStage::Applying) &&
+         (initialStage != PrivacyJournalStage::PublicStateVerified)))
+    {
+        return failure(PrivacyPublicTransitionError::InvalidRequest,
+                       QStringLiteral("batch must cover every exact journal asset"));
+    }
+
+    const auto sameExpectation = [](const PrivacyJournalRootExpectation& left,
+                                    const PrivacyJournalRootExpectation& right)
+    {
+        return ((left.rootUuid == right.rootUuid) &&
+                (left.markerUuid == right.markerUuid) &&
+                (left.identitySha256 == right.identitySha256) &&
+                (left.device == right.device) &&
+                (left.inode == right.inode));
+    };
+    QSet<QString> requestedIdentities;
+
+    for (const PrivacyPublicTransitionRequest& request : requests)
+    {
+        ValidatedTransitionRequest validated;
+        QString memberDetail;
+        const PrivacyPublicTransitionError memberError =
+            validateTransitionRequest(request, &validated, &memberDetail);
+
+        if (memberError != PrivacyPublicTransitionError::None)
+        {
+            return failure(memberError, memberDetail);
+        }
+
+        const QString identity = QStringLiteral("%1:%2:%3")
+                                     .arg(request.itemUuid)
+                                     .arg(request.role)
+                                     .arg(request.ordinal);
+
+        if ((request.absoluteRootPath != first.absoluteRootPath) ||
+            !sameExpectation(request.rootExpectation,
+                             first.rootExpectation) ||
+            (request.authoritativeJournalSha256 !=
+             first.authoritativeJournalSha256) ||
+            (PrivacyTransactionJournalCodec::encode(request.journalRecord) !=
+             canonicalJournal) ||
+            requestedIdentities.contains(identity))
+        {
+            return failure(PrivacyPublicTransitionError::InvalidRequest,
+                           QStringLiteral("batch transition facts are not one exact journal"));
+        }
+
+        requestedIdentities.insert(identity);
+    }
+
+    for (const PrivacyJournalAsset& asset : first.journalRecord.assets)
+    {
+        const QString identity = QStringLiteral("%1:%2:%3")
+                                     .arg(asset.itemUuid)
+                                     .arg(asset.role)
+                                     .arg(asset.ordinal);
+
+        if (!requestedIdentities.contains(identity))
+        {
+            return failure(PrivacyPublicTransitionError::InvalidRequest,
+                           QStringLiteral("batch omits a journal asset"));
+        }
+    }
+
+    PrivacyJournalError journalError = PrivacyJournalError::None;
+    QString journalDetail;
+    std::unique_ptr<PrivacyTransactionJournalStore> journalStore =
+        PrivacyTransactionJournalStore::open(
+            first.absoluteRootPath, first.rootExpectation,
+            &journalError, &journalDetail);
+
+    if (!journalStore)
+    {
+        return failure(PrivacyPublicTransitionError::RootIdentityMismatch,
+                       journalDetail);
+    }
+
+    const PrivacyJournalLoadResult loaded = journalStore->load(
+        first.journalRecord.transactionUuid);
+
+    if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+        !loaded.authoritative || !loaded.hasRecord ||
+        (loaded.sha256 != first.authoritativeJournalSha256) ||
+        (loaded.canonicalBytes != canonicalJournal) ||
+        (loaded.record.stage != initialStage))
+    {
+        return failure(PrivacyPublicTransitionError::JournalRejected,
+                       QStringLiteral("batch journal is missing, stale, or uncertain"));
+    }
+
+    PrivacyJournalRecord applyingRecord = first.journalRecord;
+    QByteArray applyingHash = first.authoritativeJournalSha256;
+    PrivacyPublicTransitionResult result;
+
+    if (initialStage == PrivacyJournalStage::ProtectedCopyVerified)
+    {
+        applyingRecord.stage = PrivacyJournalStage::Applying;
+
+        if (!journalStore->compareAndUpdate(
+                applyingRecord, first.authoritativeJournalSha256,
+                &applyingHash, &journalError, &journalDetail))
+        {
+            return failure(PrivacyPublicTransitionError::JournalAdvanceFailed,
+                           journalDetail);
+        }
+
+        result.applyingJournalSha256 = applyingHash;
+
+        if (m_faultHook &&
+            m_faultHook(PrivacyPublicTransitionFaultPoint::AfterApplyingJournal))
+        {
+            result.error = PrivacyPublicTransitionError::FaultInjected;
+            result.detail = QStringLiteral(
+                "fault injected after batch Applying journal stage");
+            return result;
+        }
+    }
+    else
+    {
+        result.applyingJournalSha256 = applyingHash;
+    }
+
+    for (const PrivacyPublicTransitionRequest& request : requests)
+    {
+        PrivacyPublicTransitionRequest applyingRequest = request;
+        applyingRequest.journalRecord = applyingRecord;
+        applyingRequest.authoritativeJournalSha256 = applyingHash;
+        PrivacyPublicTransitionResult member = executeOne(applyingRequest,
+                                                          false);
+        result.namespaceMutated = result.namespaceMutated ||
+                                  member.namespaceMutated;
+        result.installedVerified = result.installedVerified ||
+                                   member.installedVerified;
+        result.displacedVerified = result.displacedVerified ||
+                                   member.displacedVerified;
+        result.displacedRelativePaths << member.displacedRelativePaths;
+
+        if (result.displacedRelativePath.isEmpty() &&
+            !member.displacedRelativePath.isEmpty())
+        {
+            result.displacedRelativePath = member.displacedRelativePath;
+        }
+
+        if (!member.succeeded())
+        {
+            result.error = member.error;
+            result.detail = member.detail + QStringLiteral(
+                "; batch journal remains Applying for exact replay");
+            return result;
+        }
+    }
+
+    if (initialStage == PrivacyJournalStage::PublicStateVerified)
+    {
+        result.finalJournalSha256 = first.authoritativeJournalSha256;
+        result.error = PrivacyPublicTransitionError::None;
+        return result;
+    }
+
+    PrivacyJournalRecord finalRecord = applyingRecord;
+    finalRecord.stage = PrivacyJournalStage::PublicStateVerified;
+
+    if (!journalStore->compareAndUpdate(finalRecord, applyingHash,
+                                        &result.finalJournalSha256,
+                                        &journalError, &journalDetail))
+    {
+        result.error = PrivacyPublicTransitionError::ReconciliationRequired;
+        result.detail = QStringLiteral(
+            "batch namespace is verified but final journal advancement failed: %1")
+                            .arg(journalDetail);
+        return result;
+    }
+
+    if (m_faultHook &&
+        m_faultHook(PrivacyPublicTransitionFaultPoint::AfterPublicStateJournal))
+    {
+        result.error = PrivacyPublicTransitionError::FaultInjected;
+        result.detail = QStringLiteral(
+            "fault injected after batch PublicStateVerified journal");
         return result;
     }
 

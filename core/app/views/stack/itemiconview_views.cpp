@@ -51,7 +51,7 @@ namespace Digikam
 namespace
 {
 
-class PrivacyAliasAcknowledgementState
+class PrivacyProtectAcknowledgementState
 {
 public:
 
@@ -896,9 +896,9 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
                                 }
 
                                 const QSharedPointer<
-                                    PrivacyAliasAcknowledgementState> state =
+                                    PrivacyProtectAcknowledgementState> state =
                                         QSharedPointer<
-                                            PrivacyAliasAcknowledgementState>::create();
+                                            PrivacyProtectAcknowledgementState>::create();
                                 QCoreApplication* const application =
                                     QCoreApplication::instance();
 
@@ -947,28 +947,77 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
                                                     ? 0
                                                     : preflight.bridge.items.constFirst()
                                                           .inventory.exposureWarnings.size();
+                                            const int assetCount =
+                                                preflight.bridge.items.isEmpty()
+                                                    ? 0
+                                                    : preflight.bridge.items.constFirst()
+                                                          .inventory.requiredAssets.size();
+                                            QString prompt;
+
+                                            if (assetCount > 1)
+                                            {
+                                                prompt = i18ncp(
+                                                    "@info",
+                                                    "One file will be protected as one set.",
+                                                    "%1 files will be protected together as one set.",
+                                                    assetCount);
+                                            }
+
+                                            if (warningCount > 0)
+                                            {
+                                                const QString warning = i18ncp(
+                                                    "@info",
+                                                    "One related copy may remain publicly accessible.",
+                                                    "%1 related copies may remain publicly accessible.",
+                                                    warningCount);
+
+                                                if (prompt.isEmpty())
+                                                {
+                                                    prompt = warning;
+                                                }
+                                                else
+                                                {
+                                                    prompt += QLatin1String("\n\n");
+                                                    prompt += warning;
+                                                }
+                                            }
+
+                                            prompt += QLatin1String("\n\n");
+                                            prompt += i18nc(
+                                                "@info",
+                                                "Protect this item?");
+
                                             QMessageBox message(
                                                 QMessageBox::Warning,
-                                                i18nc("@title:window",
-                                                      "Related Copies Detected"),
-                                                i18ncp(
-                                                    "@info",
-                                                    "One related copy may remain publicly accessible. "
-                                                    "Protect this item anyway?",
-                                                    "%1 related copies may remain publicly accessible. "
-                                                    "Protect this item anyway?",
-                                                    warningCount),
+                                                (assetCount > 1)
+                                                    ? i18nc("@title:window",
+                                                           "Confirm Protected File Set")
+                                                    : i18nc("@title:window",
+                                                           "Related Copies Detected"),
+                                                prompt,
                                                 QMessageBox::Yes | QMessageBox::Cancel,
                                                 view.data());
                                             message.setDefaultButton(
                                                 QMessageBox::Cancel);
+                                            QStringList protectedPaths;
                                             QStringList aliasPaths;
 
                                             if (!preflight.bridge.items.isEmpty())
                                             {
+                                                const auto& assets =
+                                                    preflight.bridge.items.constFirst()
+                                                        .inventory.requiredAssets;
                                                 const auto& warnings =
                                                     preflight.bridge.items.constFirst()
                                                         .inventory.exposureWarnings;
+
+                                                for (const auto& asset : assets)
+                                                {
+                                                    protectedPaths << QDir(
+                                                        asset.location.root.absolutePath)
+                                                        .filePath(
+                                                            asset.location.relativePath);
+                                                }
 
                                                 for (const auto& warning : warnings)
                                                 {
@@ -979,13 +1028,35 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
                                                 }
                                             }
 
+                                            protectedPaths.sort(Qt::CaseSensitive);
+                                            protectedPaths.removeDuplicates();
                                             aliasPaths.sort(Qt::CaseSensitive);
                                             aliasPaths.removeDuplicates();
+                                            QStringList details;
+
+                                            if (!protectedPaths.isEmpty())
+                                            {
+                                                details << i18nc(
+                                                    "@info",
+                                                    "Files to protect:\n%1",
+                                                    protectedPaths.join(
+                                                        QLatin1Char('\n')));
+                                            }
 
                                             if (!aliasPaths.isEmpty())
                                             {
-                                                message.setDetailedText(
-                                                    aliasPaths.join(QLatin1Char('\n')));
+                                                details << i18nc(
+                                                    "@info",
+                                                    "Related copies that will remain public:\n%1",
+                                                    aliasPaths.join(
+                                                        QLatin1Char('\n')));
+                                            }
+
+                                            if (!details.isEmpty())
+                                            {
+                                                message.setInformativeText(
+                                                    details.join(
+                                                        QLatin1String("\n\n")));
                                             }
 
                                             accepted = (message.exec() ==

@@ -541,7 +541,7 @@ PrivacyStillItemTransactionResult
 PrivacyThreadImageIOStillItemTransactionOwner::protect(
     const ItemInfo& info, const QString& categoryUuid,
     const QString& passwordText,
-    const ProtectAcknowledgement& acknowledgeWarnings)
+    const ProtectAcknowledgement& acknowledgeAssetSet)
 {
     if (info.isNull() || (info.id() <= 0) ||
         ((info.category() != DatabaseItem::Image) &&
@@ -611,7 +611,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::protect(
     const PrivacyCategoryOperationStatus operationStatus =
         sessions->runWithUnlockedSecret(
             categoryUuid,
-            [this, &info, &categoryUuid, &acknowledgeWarnings, &result,
+            [this, &info, &categoryUuid, &acknowledgeAssetSet, &result,
              &runtime]
             (const PrivacyPassword& password)
             {
@@ -636,26 +636,42 @@ PrivacyThreadImageIOStillItemTransactionOwner::protect(
 
                 const PrivacyAssetInventoryResult& inventory =
                     preflight.bridge.items.constFirst().inventory;
+                const auto primaryAsset = std::find_if(
+                    inventory.requiredAssets.cbegin(),
+                    inventory.requiredAssets.cend(),
+                    [](const PrivacyInventoryAsset& asset)
+                    {
+                        return ((asset.role ==
+                                 PrivacyInventoryAssetRole::PrimaryMedia) &&
+                                (asset.ordinal == 0));
+                    });
 
-                if (!inventory.exposureWarnings.isEmpty() &&
-                    (!acknowledgeWarnings || !acknowledgeWarnings(preflight)))
+                if ((primaryAsset == inventory.requiredAssets.cend()) ||
+                    inventory.requiredAssets.isEmpty())
+                {
+                    PrivacyProtectPreflight::discardNewlyCreatedRoots(preflight,
+                                                                      runtime);
+                    result = actionFailure(
+                        PrivacyStillItemTransactionStatus::PreflightRejected,
+                        QStringLiteral(
+                            "The associated-file set has no exact primary item"));
+                    return;
+                }
+
+                const bool acknowledgementRequired =
+                    (inventory.requiredAssets.size() > 1) ||
+                    !inventory.exposureWarnings.isEmpty();
+
+                if (acknowledgementRequired &&
+                    (!acknowledgeAssetSet ||
+                     !acknowledgeAssetSet(preflight)))
                 {
                     PrivacyProtectPreflight::discardNewlyCreatedRoots(preflight,
                                                                       runtime);
                     result = actionFailure(
                         PrivacyStillItemTransactionStatus::AcknowledgementRequired,
-                        QStringLiteral("Potential aliases were not acknowledged"));
-                    return;
-                }
-
-                if (inventory.requiredAssets.size() != 1)
-                {
-                    PrivacyProtectPreflight::discardNewlyCreatedRoots(preflight,
-                                                                      runtime);
-                    result = actionFailure(
-                        PrivacyStillItemTransactionStatus::AssociatedAssetSetUnsupported,
                         QStringLiteral(
-                            "This action currently supports one photo or video with no associated files"));
+                            "The associated-file set or related copies were not acknowledged"));
                     return;
                 }
 
@@ -671,8 +687,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::protect(
                     return;
                 }
 
-                const QString rootUuid = inventory.requiredAssets.constFirst()
-                                             .location.root.uuid;
+                const QString rootUuid = primaryAsset->location.root.uuid;
                 const PrivacyStorageRoot* const root = rootForUuid(snapshot,
                                                                    rootUuid);
                 PrivacyJournalRootExpectation expectation;

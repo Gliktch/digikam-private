@@ -17,7 +17,9 @@
 // Qt includes
 
 #include <QByteArray>
+#include <QList>
 #include <QString>
+#include <QStringList>
 
 // Local includes
 
@@ -30,7 +32,8 @@ namespace Digikam
 enum class PrivacyPublicTransitionMode
 {
     InstallAbsent   = 1,
-    ExchangePresent = 2
+    ExchangePresent = 2,
+    RemovePresent   = 3
 };
 
 enum class PrivacyPublicTransitionFactKind
@@ -106,6 +109,7 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyPublicTransitionResult
     QByteArray                   applyingJournalSha256;
     QByteArray                   finalJournalSha256;
     QString                      displacedRelativePath;
+    QStringList                  displacedRelativePaths;
     bool                         namespaceMutated  = false;
     bool                         installedVerified = false;
     bool                         displacedVerified = false;
@@ -167,11 +171,20 @@ public:
         const StageProducer& producer) const;
     PrivacyPublicTransitionResult execute(
         const PrivacyPublicTransitionRequest& request) const;
+    /** Applies every listed asset under one journal Applying stage. A crash may
+     * leave a deterministic mix of exact pre/post states; replay completes the
+     * remaining members before publishing PublicStateVerified. */
+    PrivacyPublicTransitionResult executeBatch(
+        const QList<PrivacyPublicTransitionRequest>& requests) const;
 
     static QString expectedStageFileName(const QString& transactionUuid,
                                          int role, int ordinal);
 
 private:
+
+    PrivacyPublicTransitionResult executeOne(
+        const PrivacyPublicTransitionRequest& request,
+        bool advanceToPublicState) const;
 
     FaultHook m_faultHook;
 };

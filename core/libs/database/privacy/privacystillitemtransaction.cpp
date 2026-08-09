@@ -101,6 +101,15 @@ QString parentPath(const QString& relativePath)
     return (slash < 0) ? QString() : relativePath.first(slash);
 }
 
+QString protectArchiveStageRelativePath(const QString& publicRelativePath,
+                                        const QString& transactionUuid)
+{
+    const QString parent = parentPath(publicRelativePath);
+    return parent + (parent.isEmpty() ? QString() : QLatin1String("/")) +
+           QLatin1String(".digikam-private-stage-") + transactionUuid +
+           QLatin1String(".zip");
+}
+
 QString absolutePath(const PrivacyStorageRoot& root, const QString& relativePath)
 {
     if (!root.isValid() ||
@@ -265,12 +274,74 @@ bool sameFact(const PrivacyJournalObjectFact& left,
             (left.sha256 == right.sha256));
 }
 
+bool singleItemContainerMatches(const PrivacyJournalRecord& record)
+{
+    if (record.assets.isEmpty())
+    {
+        return false;
+    }
+
+    const PrivacyJournalAsset& first = record.assets.constFirst();
+
+    if (first.containerRelativePath.isEmpty())
+    {
+        return false;
+    }
+
+    int primaryCount = 0;
+
+    for (const PrivacyJournalAsset& asset : record.assets)
+    {
+        if ((asset.itemUuid != first.itemUuid) ||
+            (asset.containerUuid != first.containerUuid) ||
+            (asset.containerRelativePath != first.containerRelativePath) ||
+            !sameFact(asset.container, first.container))
+        {
+            return false;
+        }
+
+        primaryCount += ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                         (asset.ordinal == 0)) ? 1 : 0;
+    }
+
+    return (primaryCount == 1);
+}
+
 bool preparedProxyPayloadMatches(const PrivacyTransaction& transaction,
                                  const PrivacyJournalRecord& prepared,
                                  const QByteArray& proxyBytes)
 {
     if ((prepared.stage != PrivacyJournalStage::Prepared) ||
-        (prepared.assets.size() != 1))
+        prepared.assets.isEmpty())
+    {
+        return false;
+    }
+
+    const PrivacyJournalAsset* primary = nullptr;
+
+    for (const PrivacyJournalAsset& asset : prepared.assets)
+    {
+        if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+            (asset.ordinal == 0))
+        {
+            if (primary)
+            {
+                return false;
+            }
+
+            primary = &asset;
+        }
+        else if ((asset.proxy.presence !=
+                  PrivacyJournalExpectedPresence::Absent) ||
+                 (asset.proxy.size != -1) || (asset.proxy.linkCount != 0) ||
+                 !asset.proxy.sha256.isEmpty())
+        {
+            return false;
+        }
+    }
+
+    if (!primary ||
+        (primary->proxy.presence != PrivacyJournalExpectedPresence::Present))
     {
         return false;
     }
@@ -281,9 +352,9 @@ bool preparedProxyPayloadMatches(const PrivacyTransaction& transaction,
     }
 
     return ((transaction.state == PrivacyTransactionState::Prepared) &&
-            (proxyBytes.size() == prepared.assets.constFirst().proxy.size) &&
+            (proxyBytes.size() == primary->proxy.size) &&
             (QCryptographicHash::hash(proxyBytes, QCryptographicHash::Sha256) ==
-             prepared.assets.constFirst().proxy.sha256));
+             primary->proxy.sha256));
 }
 
 const PrivacyCategory* categoryFor(const PrivacyRepositorySnapshot& snapshot,
@@ -378,7 +449,7 @@ bool removeExactFile(const PrivacyStorageRoot& root,
         (QDir::cleanPath(relativePath) != relativePath) ||
         relativePath.startsWith(QLatin1String("../")) ||
         (expected.presence != PrivacyJournalExpectedPresence::Present) ||
-        (expected.linkCount != 1) || (expected.size < 0) ||
+        (expected.linkCount < 1) || (expected.size < 0) ||
         (expected.sha256.size() != 32))
     {
         return false;
@@ -615,7 +686,8 @@ bool decodePreparedPayload(const QByteArray& bytes,
         (QDir::cleanPath(archiveStage) != archiveStage) ||
         !modificationDate.isValid() ||
         (proxyBytes.size() > MaximumPreparedProxyBytes) ||
-        !PrivacyTransactionJournalCodec::decode(journal, record, &journalError))
+        !PrivacyTransactionJournalCodec::decode(journal, record, &journalError) ||
+        !singleItemContainerMatches(*record))
     {
         return false;
     }
@@ -636,12 +708,15 @@ bool decodePreparedPayload(const QByteArray& bytes,
     return true;
 }
 
+QString assetIdentity(int role, int ordinal);
+
 QByteArray encodeTeardownSnapshot(const PrivacyItem& item,
                                   const PrivacyContainer& container,
-                                  const PrivacyAsset& asset,
+                                  const QList<PrivacyAsset>& assets,
                                   const QString& priorProtectTransactionUuid)
 {
-    if (!item.isValid() || !container.isValid() || !asset.isValid() ||
+    if (!item.isValid() || !container.isValid() || assets.isEmpty() ||
+        (assets.size() > PrivacyTransactionJournalCodec::MaximumAssetCount) ||
         !canonicalUuid(priorProtectTransactionUuid))
     {
         return {};
@@ -664,24 +739,37 @@ QByteArray encodeTeardownSnapshot(const PrivacyItem& item,
            << container.protectedHashAlgorithm << container.protectedHash
            << container.formatVersion << container.credentialGeneration
            << qint32(container.state) << container.createdAt << container.updatedAt
-           << asset.itemUuid << asset.role << asset.ordinal << asset.originalName
-           << asset.publicRootUuid << asset.publicRelativePath
-           << asset.containerUuid << asset.protectedRelativePath
-           << asset.hashAlgorithm << asset.originalHash << asset.originalSize
-           << asset.originalCreationDate << asset.originalModificationDate
-           << asset.portableAttributes << asset.proxyHashAlgorithm
-           << asset.proxyHash << asset.proxySize
-           << asset.proxyPresentationVersion << asset.proxyGeneration
-           << priorProtectTransactionUuid;
+           << quint32(assets.size());
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        if (!asset.isValid() || (asset.itemUuid != item.uuid) ||
+            (asset.containerUuid != container.uuid))
+        {
+            return {};
+        }
+
+        stream << asset.itemUuid << asset.role << asset.ordinal
+               << asset.originalName << asset.publicRootUuid
+               << asset.publicRelativePath << asset.containerUuid
+               << asset.protectedRelativePath << asset.hashAlgorithm
+               << asset.originalHash << asset.originalSize
+               << asset.originalCreationDate << asset.originalModificationDate
+               << asset.portableAttributes << asset.proxyHashAlgorithm
+               << asset.proxyHash << asset.proxySize
+               << asset.proxyPresentationVersion << asset.proxyGeneration;
+    }
+
+    stream << priorProtectTransactionUuid;
     return (stream.status() == QDataStream::Ok) ? bytes : QByteArray();
 }
 
 bool decodeTeardownSnapshot(const QByteArray& bytes, PrivacyItem* const item,
                             PrivacyContainer* const container,
-                            PrivacyAsset* const asset,
+                            QList<PrivacyAsset>* const assets,
                             QString* const priorProtectTransactionUuid)
 {
-    if (bytes.isEmpty() || !item || !container || !asset ||
+    if (bytes.isEmpty() || !item || !container || !assets ||
         !priorProtectTransactionUuid)
     {
         return false;
@@ -691,6 +779,7 @@ bool decodeTeardownSnapshot(const QByteArray& bytes, PrivacyItem* const item,
     stream.setVersion(QDataStream::Qt_6_0);
     stream.setByteOrder(QDataStream::BigEndian);
     quint32 version = 0;
+    quint32 assetCount = 0;
     qint32 containerKind = 0;
     qint32 containerState = 0;
     stream >> version
@@ -706,24 +795,68 @@ bool decodeTeardownSnapshot(const QByteArray& bytes, PrivacyItem* const item,
            >> container->protectedHashAlgorithm >> container->protectedHash
            >> container->formatVersion >> container->credentialGeneration
            >> containerState >> container->createdAt >> container->updatedAt
-           >> asset->itemUuid >> asset->role >> asset->ordinal >> asset->originalName
-           >> asset->publicRootUuid >> asset->publicRelativePath
-           >> asset->containerUuid >> asset->protectedRelativePath
-           >> asset->hashAlgorithm >> asset->originalHash >> asset->originalSize
-           >> asset->originalCreationDate >> asset->originalModificationDate
-           >> asset->portableAttributes >> asset->proxyHashAlgorithm
-           >> asset->proxyHash >> asset->proxySize
-           >> asset->proxyPresentationVersion >> asset->proxyGeneration
-           >> *priorProtectTransactionUuid;
+           >> assetCount;
     container->kind = static_cast<PrivacyContainerKind>(containerKind);
     container->state = static_cast<PrivacyContainerState>(containerState);
-    return ((version == 1) && stream.atEnd() &&
-            (stream.status() == QDataStream::Ok) && item->isValid() &&
-            container->isValid() && asset->isValid() &&
-            canonicalUuid(*priorProtectTransactionUuid) &&
-            (container->itemUuid == item->uuid) &&
-            (asset->itemUuid == item->uuid) &&
-            (asset->containerUuid == container->uuid));
+
+    if ((version != 1) || (assetCount == 0) ||
+        (assetCount > static_cast<quint32>(
+            PrivacyTransactionJournalCodec::MaximumAssetCount)))
+    {
+        return false;
+    }
+
+    QList<PrivacyAsset> decodedAssets;
+    QSet<QString> identities;
+    int primaryCount = 0;
+
+    for (quint32 index = 0 ; index < assetCount ; ++index)
+    {
+        PrivacyAsset asset;
+        stream >> asset.itemUuid >> asset.role >> asset.ordinal
+               >> asset.originalName >> asset.publicRootUuid
+               >> asset.publicRelativePath >> asset.containerUuid
+               >> asset.protectedRelativePath >> asset.hashAlgorithm
+               >> asset.originalHash >> asset.originalSize
+               >> asset.originalCreationDate >> asset.originalModificationDate
+               >> asset.portableAttributes >> asset.proxyHashAlgorithm
+               >> asset.proxyHash >> asset.proxySize
+               >> asset.proxyPresentationVersion >> asset.proxyGeneration;
+        const QString identity = assetIdentity(asset.role, asset.ordinal);
+
+        if ((stream.status() != QDataStream::Ok) || !asset.isValid() ||
+            identities.contains(identity))
+        {
+            return false;
+        }
+
+        identities.insert(identity);
+        primaryCount += ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                         (asset.ordinal == 0)) ? 1 : 0;
+        decodedAssets << asset;
+    }
+
+    stream >> *priorProtectTransactionUuid;
+
+    for (const PrivacyAsset& asset : std::as_const(decodedAssets))
+    {
+        if ((asset.itemUuid != item->uuid) ||
+            (asset.containerUuid != container->uuid))
+        {
+            return false;
+        }
+    }
+
+    if (!((primaryCount == 1) && stream.atEnd() &&
+          (stream.status() == QDataStream::Ok) && item->isValid() &&
+          container->isValid() && canonicalUuid(*priorProtectTransactionUuid) &&
+          (container->itemUuid == item->uuid)))
+    {
+        return false;
+    }
+
+    *assets = decodedAssets;
+    return true;
 }
 
 QByteArray encodePortableMode(mode_t mode)
@@ -750,6 +883,135 @@ bool decodePortableMode(const QByteArray& bytes, mode_t* const mode)
 
     *mode = static_cast<mode_t>(value);
     return true;
+}
+
+struct ProtectAssetMetadata
+{
+    int        role = 0;
+    int        ordinal = -1;
+    QDateTime  creationDate;
+    QDateTime  modificationDate;
+    QByteArray portableAttributes;
+};
+
+QString assetIdentity(int role, int ordinal)
+{
+    return QStringLiteral("%1:%2").arg(role).arg(ordinal);
+}
+
+QByteArray encodeProtectAssetMetadata(
+    const QList<ProtectAssetMetadata>& metadata)
+{
+    if (metadata.isEmpty() ||
+        (metadata.size() > PrivacyTransactionJournalCodec::MaximumAssetCount))
+    {
+        return {};
+    }
+
+    QSet<QString> identities;
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_6_0);
+    stream.setByteOrder(QDataStream::BigEndian);
+    stream << quint32(1) << quint32(metadata.size());
+
+    for (const ProtectAssetMetadata& entry : metadata)
+    {
+        mode_t ignoredMode = 0;
+        const QString identity = assetIdentity(entry.role, entry.ordinal);
+
+        if ((entry.role <= 0) || (entry.ordinal < 0) ||
+            !entry.modificationDate.isValid() ||
+            !decodePortableMode(entry.portableAttributes, &ignoredMode) ||
+            identities.contains(identity))
+        {
+            return {};
+        }
+
+        identities.insert(identity);
+        stream << entry.role << entry.ordinal << entry.creationDate
+               << entry.modificationDate << entry.portableAttributes;
+    }
+
+    return ((stream.status() == QDataStream::Ok) && (bytes.size() <= 64 * 1024))
+         ? bytes
+         : QByteArray();
+}
+
+bool decodeProtectAssetMetadata(
+    const QByteArray& bytes, const PrivacyJournalRecord& record,
+    QList<ProtectAssetMetadata>* const metadata)
+{
+    if (!metadata || bytes.isEmpty() || (bytes.size() > 64 * 1024) ||
+        record.assets.isEmpty())
+    {
+        return false;
+    }
+
+    QDataStream stream(bytes);
+    stream.setVersion(QDataStream::Qt_6_0);
+    stream.setByteOrder(QDataStream::BigEndian);
+    quint32 version = 0;
+    quint32 count = 0;
+    stream >> version >> count;
+
+    if ((version != 1) || (count != static_cast<quint32>(record.assets.size())) ||
+        (count > static_cast<quint32>(
+            PrivacyTransactionJournalCodec::MaximumAssetCount)))
+    {
+        return false;
+    }
+
+    QList<ProtectAssetMetadata> decoded;
+    QSet<QString> identities;
+
+    for (quint32 index = 0 ; index < count ; ++index)
+    {
+        ProtectAssetMetadata entry;
+        stream >> entry.role >> entry.ordinal >> entry.creationDate
+               >> entry.modificationDate >> entry.portableAttributes;
+        mode_t ignoredMode = 0;
+        const QString identity = assetIdentity(entry.role, entry.ordinal);
+
+        if ((stream.status() != QDataStream::Ok) || (entry.role <= 0) ||
+            (entry.ordinal < 0) || !entry.modificationDate.isValid() ||
+            !decodePortableMode(entry.portableAttributes, &ignoredMode) ||
+            identities.contains(identity))
+        {
+            return false;
+        }
+
+        identities.insert(identity);
+        decoded << entry;
+    }
+
+    if (!stream.atEnd())
+    {
+        return false;
+    }
+
+    for (const PrivacyJournalAsset& asset : record.assets)
+    {
+        if (!identities.contains(assetIdentity(asset.role, asset.ordinal)))
+        {
+            return false;
+        }
+    }
+
+    *metadata = decoded;
+    return true;
+}
+
+const ProtectAssetMetadata* metadataFor(
+    const QList<ProtectAssetMetadata>& metadata, int role, int ordinal)
+{
+    const auto it = std::find_if(metadata.cbegin(), metadata.cend(),
+                                 [role, ordinal](const ProtectAssetMetadata& entry)
+                                 {
+                                     return ((entry.role == role) &&
+                                             (entry.ordinal == ordinal));
+                                 });
+    return (it == metadata.cend()) ? nullptr : &*it;
 }
 
 const PrivacyTransaction* transactionFor(
@@ -862,28 +1124,36 @@ bool verifyArchiveMember(const PrivacyCasualArchiveEngine& archive,
                          const QString& archivePath,
                          const PrivacyPassword& password)
 {
-    if (record.assets.size() != 1)
+    if (record.assets.isEmpty())
     {
         return false;
     }
 
-    const PrivacyJournalAsset& asset = record.assets.constFirst();
-    PrivacyCasualArchiveRestoreRequest restore;
-    restore.archivePath = archivePath;
-    restore.categoryUuid = record.categoryUuid;
-    restore.containerUuid = asset.containerUuid;
-    restore.itemUuid = asset.itemUuid;
-    restore.protectedRelativePath = asset.protectedRelativePath;
-    restore.originalName = QFileInfo(asset.publicRelativePath).fileName();
-    restore.role = asset.role;
-    restore.ordinal = asset.ordinal;
-    restore.expectedArchiveSize = asset.container.size;
-    restore.expectedArchiveSha256 = asset.container.sha256;
-    restore.expectedMemberSize = asset.original.size;
-    restore.expectedMemberSha256 = asset.original.sha256;
-    NullWriteDevice sink;
+    for (const PrivacyJournalAsset& asset : record.assets)
+    {
+        PrivacyCasualArchiveRestoreRequest restore;
+        restore.archivePath = archivePath;
+        restore.categoryUuid = record.categoryUuid;
+        restore.containerUuid = asset.containerUuid;
+        restore.itemUuid = asset.itemUuid;
+        restore.protectedRelativePath = asset.protectedRelativePath;
+        restore.originalName = QFileInfo(asset.publicRelativePath).fileName();
+        restore.role = asset.role;
+        restore.ordinal = asset.ordinal;
+        restore.expectedArchiveSize = asset.container.size;
+        restore.expectedArchiveSha256 = asset.container.sha256;
+        restore.expectedMemberSize = asset.original.size;
+        restore.expectedMemberSha256 = asset.original.sha256;
+        NullWriteDevice sink;
 
-    return (sink.openWrite() && archive.restoreMember(restore, password, &sink));
+        if (!sink.openWrite() ||
+            !archive.restoreMember(restore, password, &sink))
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 } // namespace
@@ -1311,10 +1581,12 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     const PrivacyAssetInventoryResult& inventory =
         request.preflight.bridge.items.constFirst().inventory;
 
-    if (inventory.requiredAssets.size() != 1)
+    if (inventory.requiredAssets.isEmpty() ||
+        (inventory.requiredAssets.size() >
+         PrivacyTransactionJournalCodec::MaximumAssetCount))
     {
         return fail(PrivacyStillItemTransactionStatus::AssociatedAssetSetUnsupported,
-                    QStringLiteral("version 1 still transaction requires exactly one asset"));
+                    QStringLiteral("associated-asset count exceeds transaction limits"));
     }
 
     if (!request.associatedAssetsAcknowledged)
@@ -1323,14 +1595,34 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                     QStringLiteral("associated-asset inventory requires acknowledgement"));
     }
 
-    const PrivacyInventoryAsset& sourceAsset = inventory.requiredAssets.constFirst();
+    const PrivacyInventoryAsset* sourceAsset = nullptr;
 
-    if (!sourceAsset.isValid() ||
-        (sourceAsset.role != PrivacyInventoryAssetRole::PrimaryMedia) ||
-        (sourceAsset.ordinal != 0) ||
-        (sourceAsset.location.root.uuid != request.publicRoot.uuid) ||
-        (QDir::cleanPath(sourceAsset.location.root.absolutePath) !=
-         QDir::cleanPath(request.publicRoot.configuredPath)))
+    for (const PrivacyInventoryAsset& candidate : inventory.requiredAssets)
+    {
+        if (!candidate.isValid() ||
+            (candidate.location.root.uuid != request.publicRoot.uuid) ||
+            (QDir::cleanPath(candidate.location.root.absolutePath) !=
+             QDir::cleanPath(request.publicRoot.configuredPath)))
+        {
+            return fail(PrivacyStillItemTransactionStatus::PreflightRejected,
+                        QStringLiteral(
+                            "associated asset/root does not match request"));
+        }
+
+        if ((candidate.role == PrivacyInventoryAssetRole::PrimaryMedia) &&
+            (candidate.ordinal == 0))
+        {
+            if (sourceAsset)
+            {
+                return fail(PrivacyStillItemTransactionStatus::PreflightRejected,
+                            QStringLiteral("preflight has multiple primary assets"));
+            }
+
+            sourceAsset = &candidate;
+        }
+    }
+
+    if (!sourceAsset)
     {
         return fail(PrivacyStillItemTransactionStatus::PreflightRejected,
                     QStringLiteral("preflight primary asset/root does not match request"));
@@ -1356,17 +1648,14 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     const PrivacyCategory categoryValue = *category;
 
-    const QString publicRelativePath = sourceAsset.location.relativePath;
+    const QString publicRelativePath = sourceAsset->location.relativePath;
     const QString sourcePath = absolutePath(request.publicRoot, publicRelativePath);
     const QString archiveRelativePath = publicRelativePath +
                                         QLatin1String(".digikam-private.zip");
     const QString archivePath = absolutePath(request.publicRoot,
                                              archiveRelativePath);
-    const QString archiveStageRelativePath =
-        parentPath(publicRelativePath) +
-        (parentPath(publicRelativePath).isEmpty() ? QString() : QLatin1String("/")) +
-        QLatin1String(".digikam-private-stage-") + transactionUuid +
-        QLatin1String(".zip");
+    const QString archiveStageRelativePath = protectArchiveStageRelativePath(
+        publicRelativePath, transactionUuid);
     const QString archiveStagePath = absolutePath(request.publicRoot,
                                                   archiveStageRelativePath);
     const QString replacementRelativePath =
@@ -1393,6 +1682,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     QString storedArchiveStage;
     QByteArray protectMetadata;
     QByteArray preparedProxyBytes;
+    QList<ProtectAssetMetadata> sourceMetadata;
 
     if (!existingTransaction)
     {
@@ -1400,15 +1690,6 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         {
             return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
                         QStringLiteral("image already has a different privacy item"));
-        }
-
-        PrivacyJournalObjectFact originalFact;
-
-        if (!stableFileFact(sourcePath, &sourceAsset.evidence, &originalFact,
-                            &originalMode, &originalModificationDate))
-        {
-            return fail(PrivacyStillItemTransactionStatus::SourceChanged,
-                        QStringLiteral("source no longer matches preflight evidence"));
         }
 
         created.transactionUuid = transactionUuid;
@@ -1423,28 +1704,84 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         created.fromCredentialGeneration = categoryValue.currentCredentialGeneration;
         created.toCredentialGeneration = categoryValue.currentCredentialGeneration;
         created.stage = PrivacyJournalStage::Created;
+        PrivacyJournalObjectFact primaryOriginalFact;
 
-        PrivacyJournalAsset journalAsset;
-        journalAsset.itemUuid = itemUuid;
-        journalAsset.containerUuid = containerUuid;
-        journalAsset.role = PrivacyAsset::PrimaryMediaRole;
-        journalAsset.ordinal = 0;
-        journalAsset.publicRelativePath = publicRelativePath;
-        journalAsset.stagedRelativePath = replacementRelativePath;
-        journalAsset.protectedRelativePath =
-            PrivacyCasualArchiveEngine::expectedMemberPath(
-                journalAsset.role, journalAsset.ordinal,
-                QFileInfo(publicRelativePath).fileName());
-        journalAsset.containerRelativePath = archiveRelativePath;
-        journalAsset.original = originalFact;
-        created.assets << journalAsset;
+        for (const PrivacyInventoryAsset& candidate : inventory.requiredAssets)
+        {
+            const QString candidatePath = absolutePath(
+                request.publicRoot, candidate.location.relativePath);
+            PrivacyJournalObjectFact originalFact;
+            mode_t candidateMode = 0;
+            QDateTime candidateModificationDate;
+
+            if (candidatePath.isEmpty() ||
+                !stableFileFact(candidatePath, &candidate.evidence,
+                                &originalFact, &candidateMode,
+                                &candidateModificationDate))
+            {
+                return fail(PrivacyStillItemTransactionStatus::SourceChanged,
+                            QStringLiteral(
+                                "associated asset no longer matches preflight evidence"));
+            }
+
+            PrivacyJournalAsset journalAsset;
+            journalAsset.itemUuid = itemUuid;
+            journalAsset.containerUuid = containerUuid;
+            journalAsset.role = static_cast<int>(candidate.role);
+            journalAsset.ordinal = candidate.ordinal;
+            journalAsset.publicRelativePath = candidate.location.relativePath;
+            journalAsset.stagedRelativePath =
+                parentPath(candidate.location.relativePath) +
+                (parentPath(candidate.location.relativePath).isEmpty()
+                    ? QString() : QLatin1String("/")) +
+                PrivacyPublicTransitionEngine::expectedStageFileName(
+                    transactionUuid, journalAsset.role, journalAsset.ordinal);
+            journalAsset.protectedRelativePath =
+                PrivacyCasualArchiveEngine::expectedMemberPath(
+                    journalAsset.role, journalAsset.ordinal,
+                    QFileInfo(candidate.location.relativePath).fileName());
+            journalAsset.containerRelativePath = archiveRelativePath;
+            journalAsset.original = originalFact;
+            created.assets << journalAsset;
+
+            ProtectAssetMetadata metadata;
+            metadata.role = journalAsset.role;
+            metadata.ordinal = journalAsset.ordinal;
+            metadata.creationDate =
+                ((candidate.role == PrivacyInventoryAssetRole::PrimaryMedia) &&
+                 (candidate.ordinal == 0))
+                    ? request.originalCreationDate
+                    : QFileInfo(candidatePath).birthTime();
+            metadata.modificationDate = candidateModificationDate;
+            metadata.portableAttributes = encodePortableMode(candidateMode);
+            sourceMetadata << metadata;
+
+            if ((journalAsset.role == PrivacyAsset::PrimaryMediaRole) &&
+                (journalAsset.ordinal == 0))
+            {
+                primaryOriginalFact = originalFact;
+                originalMode = candidateMode;
+                originalModificationDate = candidateModificationDate;
+            }
+        }
+
+        protectMetadata = encodeProtectAssetMetadata(sourceMetadata);
+
+        if (protectMetadata.isEmpty() ||
+            (primaryOriginalFact.presence !=
+             PrivacyJournalExpectedPresence::Present))
+        {
+            return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
+                        QStringLiteral("associated-asset metadata is invalid"));
+        }
 
         PrivacyItem item;
         item.imageId = request.imageId;
         item.uuid = itemUuid;
         item.categoryUuid = request.categoryUuid;
-        item.originalHash = QString::fromLatin1(originalFact.sha256.toHex());
-        item.originalSize = originalFact.size;
+        item.originalHash = QString::fromLatin1(
+            primaryOriginalFact.sha256.toHex());
+        item.originalSize = primaryOriginalFact.size;
         item.originalWidth = request.originalPixelSize.width();
         item.originalHeight = request.originalPixelSize.height();
         item.originalCreationDate = request.originalCreationDate;
@@ -1462,7 +1799,6 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         transaction.fromCredentialGeneration = categoryValue.currentCredentialGeneration;
         transaction.toCredentialGeneration = categoryValue.currentCredentialGeneration;
         transaction.payloadFormatVersion = 1;
-        protectMetadata = encodePortableMode(originalMode);
         transaction.payloadData = encodePreparedPayload(
             created, archiveStageRelativePath, originalModificationDate,
             protectMetadata);
@@ -1515,13 +1851,27 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                                &storedArchiveStage,
                                &originalModificationDate, &protectMetadata,
                                &preparedProxyBytes) ||
-        !decodePortableMode(protectMetadata, &originalMode) ||
+        !decodeProtectAssetMetadata(protectMetadata, created,
+                                    &sourceMetadata) ||
         (storedArchiveStage != archiveStageRelativePath) ||
         ((existingTransaction->state == PrivacyTransactionState::Created) &&
          !preparedProxyBytes.isEmpty()))
     {
         return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                     QStringLiteral("Protect payload cannot be reconstructed"));
+    }
+
+    const ProtectAssetMetadata* primaryMetadata = metadataFor(
+        sourceMetadata, PrivacyAsset::PrimaryMediaRole, 0);
+
+    if (!primaryMetadata ||
+        !decodePortableMode(primaryMetadata->portableAttributes,
+                            &originalMode) ||
+        (primaryMetadata->modificationDate.toUTC() !=
+         originalModificationDate.toUTC()))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral("primary Protect metadata is not exact"));
     }
 
     if (d->durableReplay && !d->authenticatedCreatedReplay &&
@@ -1558,19 +1908,64 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                         QStringLiteral("cannot generate metadata-free proxy"));
         }
 
-        PrivacyJournalObjectFact originalFact;
+        PrivacyCasualArchiveRequest archiveRequest;
+        archiveRequest.finalArchivePath = archivePath;
+        archiveRequest.stagingArchivePath = archiveStagePath;
+        archiveRequest.categoryUuid = request.categoryUuid;
+        archiveRequest.containerUuid = containerUuid;
+        archiveRequest.itemUuid = itemUuid;
 
-        mode_t verifiedMode = 0;
-        QDateTime verifiedModificationDate;
-
-        if (!stableFileFact(sourcePath, &sourceAsset.evidence, &originalFact,
-                            &verifiedMode, &verifiedModificationDate) ||
-            (verifiedMode != originalMode) ||
-            (verifiedModificationDate != originalModificationDate) ||
-            !sameFact(originalFact, created.assets.constFirst().original))
+        for (const PrivacyInventoryAsset& candidate : inventory.requiredAssets)
         {
-            return fail(PrivacyStillItemTransactionStatus::SourceChanged,
-                        QStringLiteral("source changed while preparing protection"));
+            const int role = static_cast<int>(candidate.role);
+            const auto journalIt = std::find_if(
+                created.assets.cbegin(), created.assets.cend(),
+                [role, &candidate](const PrivacyJournalAsset& asset)
+                {
+                    return ((asset.role == role) &&
+                            (asset.ordinal == candidate.ordinal));
+                });
+            const ProtectAssetMetadata* metadata = metadataFor(
+                sourceMetadata, role, candidate.ordinal);
+            const QString candidatePath = absolutePath(
+                request.publicRoot, candidate.location.relativePath);
+            PrivacyJournalObjectFact originalFact;
+            mode_t verifiedMode = 0;
+            mode_t expectedMode = 0;
+            QDateTime verifiedModificationDate;
+
+            if ((journalIt == created.assets.cend()) || !metadata ||
+                !decodePortableMode(metadata->portableAttributes,
+                                    &expectedMode) ||
+                !stableFileFact(candidatePath, &candidate.evidence,
+                                &originalFact, &verifiedMode,
+                                &verifiedModificationDate) ||
+                (verifiedMode != expectedMode) ||
+                (verifiedModificationDate.toUTC() !=
+                 metadata->modificationDate.toUTC()) ||
+                !sameFact(originalFact, journalIt->original))
+            {
+                return fail(PrivacyStillItemTransactionStatus::SourceChanged,
+                            QStringLiteral(
+                                "associated asset changed while preparing protection"));
+            }
+
+            PrivacyCasualArchiveMember member;
+            member.sourcePath = candidatePath;
+            member.protectedRelativePath = journalIt->protectedRelativePath;
+            member.originalName = QFileInfo(
+                candidate.location.relativePath).fileName();
+            member.role = role;
+            member.ordinal = candidate.ordinal;
+            member.originalCreationDate = metadata->creationDate;
+            member.originalModificationDate = metadata->modificationDate;
+            member.portableAttributes = metadata->portableAttributes;
+            member.expectedDevice = candidate.evidence.deviceId;
+            member.expectedInode = candidate.evidence.inode;
+            member.expectedLinkCount = candidate.evidence.linkCount;
+            member.expectedSize = originalFact.size;
+            member.expectedSha256 = originalFact.sha256;
+            archiveRequest.members << member;
         }
 
         PrivacyJournalObjectFact existingArchiveStageFact;
@@ -1585,27 +1980,6 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                     existingArchiveStageFact.sha256, password);
             }
 
-            PrivacyCasualArchiveMember member;
-            member.sourcePath = sourcePath;
-            member.protectedRelativePath = created.assets.constFirst().protectedRelativePath;
-            member.originalName = QFileInfo(publicRelativePath).fileName();
-            member.role = PrivacyAsset::PrimaryMediaRole;
-            member.ordinal = 0;
-            member.originalCreationDate = request.originalCreationDate;
-            member.originalModificationDate = originalModificationDate;
-            member.portableAttributes = encodePortableMode(originalMode);
-            member.expectedDevice = sourceAsset.evidence.deviceId;
-            member.expectedInode = sourceAsset.evidence.inode;
-            member.expectedLinkCount = sourceAsset.evidence.linkCount;
-            member.expectedSize = originalFact.size;
-            member.expectedSha256 = originalFact.sha256;
-            PrivacyCasualArchiveRequest archiveRequest;
-            archiveRequest.finalArchivePath = archivePath;
-            archiveRequest.stagingArchivePath = archiveStagePath;
-            archiveRequest.categoryUuid = request.categoryUuid;
-            archiveRequest.containerUuid = containerUuid;
-            archiveRequest.itemUuid = itemUuid;
-            archiveRequest.members << member;
             return d->archive.stageArchive(archiveRequest, password);
         }();
 
@@ -1617,14 +1991,27 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
         prepared = created;
         prepared.stage = PrivacyJournalStage::Prepared;
-        prepared.assets[0].proxy.presence = PrivacyJournalExpectedPresence::Present;
-        prepared.assets[0].proxy.size = proxyResult.encodedBytes.size();
-        prepared.assets[0].proxy.linkCount = 1;
-        prepared.assets[0].proxy.sha256 = proxyResult.sha256;
-        prepared.assets[0].container.presence = PrivacyJournalExpectedPresence::Present;
-        prepared.assets[0].container.size = archiveStage.archiveSize();
-        prepared.assets[0].container.linkCount = 1;
-        prepared.assets[0].container.sha256 = archiveStage.archiveSha256();
+
+        for (PrivacyJournalAsset& asset : prepared.assets)
+        {
+            if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                (asset.ordinal == 0))
+            {
+                asset.proxy.presence = PrivacyJournalExpectedPresence::Present;
+                asset.proxy.size = proxyResult.encodedBytes.size();
+                asset.proxy.linkCount = 1;
+                asset.proxy.sha256 = proxyResult.sha256;
+            }
+            else
+            {
+                asset.proxy.presence = PrivacyJournalExpectedPresence::Absent;
+            }
+
+            asset.container.presence = PrivacyJournalExpectedPresence::Present;
+            asset.container.size = archiveStage.archiveSize();
+            asset.container.linkCount = 1;
+            asset.container.sha256 = archiveStage.archiveSha256();
+        }
 
         PrivacyTransaction next = *existingTransaction;
         next.state = PrivacyTransactionState::Prepared;
@@ -1654,7 +2041,8 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                                     &storedArchiveStage,
                                     &originalModificationDate, &protectMetadata,
                                     &preparedProxyBytes) ||
-             !decodePortableMode(protectMetadata, &originalMode) ||
+             !decodeProtectAssetMetadata(protectMetadata, prepared,
+                                         &sourceMetadata) ||
              !preparedProxyPayloadMatches(*existingTransaction, prepared,
                                           preparedProxyBytes))
     {
@@ -1676,7 +2064,8 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                                &storedArchiveStage,
                                &originalModificationDate, &protectMetadata,
                                &preparedProxyBytes) ||
-        !decodePortableMode(protectMetadata, &originalMode) ||
+        !decodeProtectAssetMetadata(protectMetadata, prepared,
+                                    &sourceMetadata) ||
         !preparedProxyPayloadMatches(*existingTransaction, prepared,
                                      preparedProxyBytes))
     {
@@ -1686,8 +2075,12 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     created = prepared;
     created.stage = PrivacyJournalStage::Created;
-    created.assets[0].proxy = PrivacyJournalObjectFact();
-    created.assets[0].container = PrivacyJournalObjectFact();
+
+    for (PrivacyJournalAsset& asset : created.assets)
+    {
+        asset.proxy = PrivacyJournalObjectFact();
+        asset.container = PrivacyJournalObjectFact();
+    }
 
     const PrivacyJournalRecord staged = recordAt(prepared,
                                                   PrivacyJournalStage::Staged);
@@ -1699,6 +2092,20 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                                                     PrivacyJournalStage::Complete);
     QByteArray journalHash;
     QString detail;
+    const auto primaryPreparedIt = std::find_if(
+        prepared.assets.cbegin(), prepared.assets.cend(),
+        [](const PrivacyJournalAsset& asset)
+        {
+            return ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                    (asset.ordinal == 0));
+        });
+
+    if (primaryPreparedIt == prepared.assets.cend())
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral("Prepared primary asset is missing"));
+    }
+
     const PrivacyTransactionJournal* dbJournal = databaseJournalFor(
         snapshot, transactionUuid, request.publicRoot.uuid);
 
@@ -1736,7 +2143,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                 !stableFileFact(absolutePath(request.publicRoot,
                                              replacementRelativePath),
                                 nullptr, &replayFact) ||
-                !sameFact(replayFact, prepared.assets.constFirst().proxy))
+                !sameFact(replayFact, primaryPreparedIt->proxy))
             {
                 return fail(PrivacyStillItemTransactionStatus::ProxyFailure,
                             stageResult.detail);
@@ -1877,19 +2284,32 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
             return fail(PrivacyStillItemTransactionStatus::JournalFailure,
                         QStringLiteral("public transition journal is not authoritative"));
         }
-        PrivacyPublicTransitionRequest transitionRequest;
-        transitionRequest.absoluteRootPath = request.publicRoot.configuredPath;
-        transitionRequest.rootExpectation = request.rootExpectation;
-        transitionRequest.journalRecord = loaded.record;
-        transitionRequest.authoritativeJournalSha256 = loaded.sha256;
-        transitionRequest.itemUuid = itemUuid;
-        transitionRequest.role = PrivacyAsset::PrimaryMediaRole;
-        transitionRequest.ordinal = 0;
-        transitionRequest.mode = PrivacyPublicTransitionMode::ExchangePresent;
-        transitionRequest.currentFact = PrivacyPublicTransitionFactKind::Original;
-        transitionRequest.installedFact = PrivacyPublicTransitionFactKind::Proxy;
+        QList<PrivacyPublicTransitionRequest> transitionRequests;
+
+        for (const PrivacyJournalAsset& asset : loaded.record.assets)
+        {
+            PrivacyPublicTransitionRequest transitionRequest;
+            transitionRequest.absoluteRootPath = request.publicRoot.configuredPath;
+            transitionRequest.rootExpectation = request.rootExpectation;
+            transitionRequest.journalRecord = loaded.record;
+            transitionRequest.authoritativeJournalSha256 = loaded.sha256;
+            transitionRequest.itemUuid = itemUuid;
+            transitionRequest.role = asset.role;
+            transitionRequest.ordinal = asset.ordinal;
+            transitionRequest.mode =
+                ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                 (asset.ordinal == 0))
+                    ? PrivacyPublicTransitionMode::ExchangePresent
+                    : PrivacyPublicTransitionMode::RemovePresent;
+            transitionRequest.currentFact =
+                PrivacyPublicTransitionFactKind::Original;
+            transitionRequest.installedFact =
+                PrivacyPublicTransitionFactKind::Proxy;
+            transitionRequests << transitionRequest;
+        }
+
         const PrivacyPublicTransitionResult transitioned =
-            d->transition.execute(transitionRequest);
+            d->transition.executeBatch(transitionRequests);
 
         if (!transitioned.succeeded())
         {
@@ -1935,6 +2355,24 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                     QStringLiteral("fault after Complete journal"));
     }
 
+    for (const PrivacyJournalAsset& journalAsset : std::as_const(complete.assets))
+    {
+        if (!removeExactFile(request.publicRoot, request.rootExpectation,
+                             journalAsset.stagedRelativePath,
+                             journalAsset.original, true))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        QStringLiteral(
+                            "exact displaced-original cleanup is pending"));
+        }
+    }
+
+    if (d->fault(PrivacyStillItemFaultPoint::AfterProtectedStageCleanup))
+    {
+        return fail(PrivacyStillItemTransactionStatus::FaultInjected,
+                    QStringLiteral("fault after displaced-original cleanup"));
+    }
+
     if (!d->load(&snapshot))
     {
         return fail(PrivacyStillItemTransactionStatus::PersistenceFailure,
@@ -1952,8 +2390,8 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     PrivacyItem publishedItem = *existingItem;
     publishedItem.expectedProxyHash =
-        QString::fromLatin1(prepared.assets.constFirst().proxy.sha256.toHex());
-    publishedItem.expectedProxySize = prepared.assets.constFirst().proxy.size;
+        QString::fromLatin1(primaryPreparedIt->proxy.sha256.toHex());
+    publishedItem.expectedProxySize = primaryPreparedIt->proxy.size;
     publishedItem.transactionState =
         static_cast<int>(PrivacyTransactionState::Complete);
     PrivacyContainer container;
@@ -1971,34 +2409,57 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     container.state = PrivacyContainerState::Verified;
     container.createdAt = existingTransaction->createdAt;
     container.updatedAt = QDateTime::currentDateTimeUtc();
-    PrivacyAsset asset;
-    asset.itemUuid = itemUuid;
-    asset.role = PrivacyAsset::PrimaryMediaRole;
-    asset.ordinal = 0;
-    asset.originalName = QFileInfo(publicRelativePath).fileName();
-    asset.publicRootUuid = request.publicRoot.uuid;
-    asset.publicRelativePath = publicRelativePath;
-    asset.containerUuid = containerUuid;
-    asset.protectedRelativePath = prepared.assets.constFirst().protectedRelativePath;
-    asset.hashAlgorithm = QLatin1String("sha256");
-    asset.originalHash = publishedItem.originalHash;
-    asset.originalSize = publishedItem.originalSize;
-    asset.originalCreationDate = request.originalCreationDate;
-    asset.originalModificationDate = originalModificationDate;
-    asset.portableAttributes = encodePortableMode(originalMode);
-    asset.proxyHashAlgorithm = QLatin1String("sha256");
-    asset.proxyHash = publishedItem.expectedProxyHash;
-    asset.proxySize = publishedItem.expectedProxySize;
-    asset.proxyPresentationVersion = publishedItem.presentationVersion;
-    asset.proxyGeneration = publishedItem.generation;
-    QList<PrivacyAsset> assets = { asset };
+    QList<PrivacyAsset> assets;
+
+    for (const PrivacyJournalAsset& journalAsset : prepared.assets)
+    {
+        const ProtectAssetMetadata* metadata = metadataFor(
+            sourceMetadata, journalAsset.role, journalAsset.ordinal);
+
+        if (!metadata)
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral("asset publication metadata is missing"));
+        }
+
+        PrivacyAsset asset;
+        asset.itemUuid = itemUuid;
+        asset.role = journalAsset.role;
+        asset.ordinal = journalAsset.ordinal;
+        asset.originalName = QFileInfo(
+            journalAsset.publicRelativePath).fileName();
+        asset.publicRootUuid = request.publicRoot.uuid;
+        asset.publicRelativePath = journalAsset.publicRelativePath;
+        asset.containerUuid = containerUuid;
+        asset.protectedRelativePath = journalAsset.protectedRelativePath;
+        asset.hashAlgorithm = QLatin1String("sha256");
+        asset.originalHash = QString::fromLatin1(
+            journalAsset.original.sha256.toHex());
+        asset.originalSize = journalAsset.original.size;
+        asset.originalCreationDate = metadata->creationDate;
+        asset.originalModificationDate = metadata->modificationDate;
+        asset.portableAttributes = metadata->portableAttributes;
+
+        if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+            (asset.ordinal == 0))
+        {
+            asset.proxyHashAlgorithm = QLatin1String("sha256");
+            asset.proxyHash = publishedItem.expectedProxyHash;
+            asset.proxySize = publishedItem.expectedProxySize;
+            asset.proxyPresentationVersion = publishedItem.presentationVersion;
+            asset.proxyGeneration = publishedItem.generation;
+        }
+
+        assets << asset;
+    }
 
     if (existingTransaction->state == PrivacyTransactionState::Complete)
     {
         const PrivacyContainer* storedContainer = containerForItem(snapshot, itemUuid);
         const QList<PrivacyAsset> storedAssets = assetsForItem(snapshot, itemUuid);
 
-        if (!storedContainer || (storedAssets.size() != 1))
+        if (!storedContainer ||
+            (storedAssets.size() != prepared.assets.size()))
         {
             return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                         QStringLiteral("completed mapping facts are incomplete"));
@@ -2125,52 +2586,78 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         QByteArray teardownBytes;
         PrivacyItem teardownItem;
         PrivacyContainer teardownContainer;
-        PrivacyAsset teardownAsset;
+        QList<PrivacyAsset> teardownAssets;
         QString priorProtectUuid;
 
         if (!decodePreparedPayload(transaction->payloadData, &record,
                                    &ignoredStage,
                                    &ignoredModificationDate, &teardownBytes) ||
             !decodeTeardownSnapshot(teardownBytes, &teardownItem,
-                                    &teardownContainer, &teardownAsset,
+                                    &teardownContainer, &teardownAssets,
                                     &priorProtectUuid) ||
-            (record.assets.size() != 1) ||
+            (record.assets.size() != teardownAssets.size()) ||
             (record.categoryUuid != request.categoryUuid) ||
-            (teardownItem.imageId != request.imageId) ||
-            (teardownItem.uuid != record.assets.constFirst().itemUuid) ||
-            (teardownAsset.publicRootUuid != request.publicRoot.uuid))
+            (teardownItem.imageId != request.imageId))
         {
             return fail(PrivacyStillItemTransactionStatus::RecoveryRequired, {},
                         QStringLiteral("detached Unprotect evidence is invalid"));
         }
 
-        const PrivacyJournalAsset& journalAsset = record.assets.constFirst();
-        const QString itemUuid = journalAsset.itemUuid;
+        const auto primaryJournalIt = std::find_if(
+            record.assets.cbegin(), record.assets.cend(),
+            [](const PrivacyJournalAsset& candidate)
+            {
+                return ((candidate.role == PrivacyAsset::PrimaryMediaRole) &&
+                        (candidate.ordinal == 0));
+            });
+
+        if ((primaryJournalIt == record.assets.cend()) ||
+            (teardownItem.uuid != primaryJournalIt->itemUuid))
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired, {},
+                        QStringLiteral("detached primary evidence is invalid"));
+        }
+
+        const PrivacyJournalAsset& primaryJournalAsset = *primaryJournalIt;
+        const QString itemUuid = primaryJournalAsset.itemUuid;
         const QString publicPath = absolutePath(request.publicRoot,
-                                                journalAsset.publicRelativePath);
+                                                primaryJournalAsset.publicRelativePath);
         const PrivacyTransactionJournal* const replayJournal =
             databaseJournalFor(snapshot, transactionUuid,
                                request.publicRoot.uuid);
-        PrivacyJournalObjectFact publicFact;
-        mode_t publicMode = 0;
-        mode_t expectedMode = 0;
-        QDateTime publicModificationDate;
-
-        if (!decodePortableMode(teardownAsset.portableAttributes,
-                                &expectedMode) ||
-            !stableFileFact(publicPath, nullptr, &publicFact, &publicMode,
-                            &publicModificationDate) ||
-            !sameFact(publicFact, journalAsset.original) ||
-            (publicMode != expectedMode) ||
-            (publicModificationDate !=
-             teardownAsset.originalModificationDate.toUTC()))
+        for (const PrivacyAsset& teardownAsset : std::as_const(teardownAssets))
         {
-            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
-                        itemUuid,
-                        QStringLiteral("restored public original is not exact"));
-        }
+            const auto journalIt = std::find_if(
+                record.assets.cbegin(), record.assets.cend(),
+                [&teardownAsset](const PrivacyJournalAsset& candidate)
+                {
+                    return ((candidate.role == teardownAsset.role) &&
+                            (candidate.ordinal == teardownAsset.ordinal));
+                });
+            const QString restoredPath = absolutePath(
+                request.publicRoot, teardownAsset.publicRelativePath);
+            PrivacyJournalObjectFact publicFact;
+            mode_t publicMode = 0;
+            mode_t expectedMode = 0;
+            QDateTime publicModificationDate;
 
-        const QList<PrivacyAsset> teardownAssets = { teardownAsset };
+            if ((journalIt == record.assets.cend()) ||
+                (teardownAsset.publicRootUuid != request.publicRoot.uuid) ||
+                !decodePortableMode(teardownAsset.portableAttributes,
+                                    &expectedMode) ||
+                !stableFileFact(restoredPath, nullptr, &publicFact, &publicMode,
+                                &publicModificationDate) ||
+                !sameFact(publicFact, journalIt->original) ||
+                (publicMode != expectedMode) ||
+                (publicModificationDate !=
+                 teardownAsset.originalModificationDate.toUTC()))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    itemUuid,
+                    QStringLiteral("restored public asset set is not exact"));
+            }
+        }
 
         if (d->runtime.hasProtectedItem(teardownItem, teardownContainer,
                                         teardownAssets) &&
@@ -2202,15 +2689,26 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         }
 
         if (!removeExactFile(request.publicRoot, request.rootExpectation,
-                             journalAsset.containerRelativePath,
-                             journalAsset.container, true) ||
-            !removeExactFile(request.publicRoot, request.rootExpectation,
-                             journalAsset.stagedRelativePath,
-                             journalAsset.proxy, true))
+                             primaryJournalAsset.containerRelativePath,
+                             primaryJournalAsset.container, true))
         {
             return fail(PrivacyStillItemTransactionStatus::CleanupPending,
                         itemUuid,
-                        QStringLiteral("exact archive/proxy cleanup is pending"));
+                        QStringLiteral("exact archive cleanup is pending"));
+        }
+
+        for (const PrivacyJournalAsset& journalAsset : record.assets)
+        {
+            if ((journalAsset.proxy.presence ==
+                 PrivacyJournalExpectedPresence::Present) &&
+                !removeExactFile(request.publicRoot, request.rootExpectation,
+                                 journalAsset.stagedRelativePath,
+                                 journalAsset.proxy, true))
+            {
+                return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                            itemUuid,
+                            QStringLiteral("exact proxy cleanup is pending"));
+            }
         }
 
         if (d->fault(PrivacyStillItemFaultPoint::AfterArchiveCleanup))
@@ -2256,63 +2754,77 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     const PrivacyContainer* containerPointer = containerForItem(snapshot, itemUuid);
     const QList<PrivacyAsset> assets = assetsForItem(snapshot, itemUuid);
 
-    if (!containerPointer || (assets.size() != 1) ||
+    if (!containerPointer || assets.isEmpty() ||
+        (assets.size() > PrivacyTransactionJournalCodec::MaximumAssetCount) ||
         (containerPointer->kind != PrivacyContainerKind::CasualArchive) ||
-        (containerPointer->state != PrivacyContainerState::Verified) ||
-        (assets.constFirst().role != PrivacyAsset::PrimaryMediaRole) ||
-        (assets.constFirst().ordinal != 0) ||
-        (assets.constFirst().publicRootUuid != request.publicRoot.uuid))
+        (containerPointer->state != PrivacyContainerState::Verified))
     {
         return fail(PrivacyStillItemTransactionStatus::AssociatedAssetSetUnsupported,
                     itemUuid,
-                    QStringLiteral("mapping is not one exact Casual primary asset"));
+                    QStringLiteral("mapping is not a bounded Casual asset set"));
     }
 
     const PrivacyContainer container = *containerPointer;
-    const PrivacyAsset asset = assets.constFirst();
-    mode_t restoredMode = 0;
+    const PrivacyAsset* asset = nullptr;
 
-    if (!decodePortableMode(asset.portableAttributes, &restoredMode) ||
-        !asset.originalModificationDate.isValid())
+    for (const PrivacyAsset& candidate : assets)
+    {
+        mode_t candidateMode = 0;
+
+        if ((candidate.itemUuid != itemUuid) ||
+            (candidate.containerUuid != container.uuid) ||
+            (candidate.publicRootUuid != request.publicRoot.uuid) ||
+            !decodePortableMode(candidate.portableAttributes,
+                                &candidateMode) ||
+            !candidate.originalModificationDate.isValid())
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        itemUuid,
+                        QStringLiteral("asset mode/mtime evidence is invalid"));
+        }
+
+        if ((candidate.role == PrivacyAsset::PrimaryMediaRole) &&
+            (candidate.ordinal == 0))
+        {
+            if (asset || (candidate.proxySize < 0))
+            {
+                return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                            itemUuid,
+                            QStringLiteral("primary asset mapping is ambiguous"));
+            }
+
+            asset = &candidate;
+        }
+        else if (candidate.proxySize >= 0)
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        itemUuid,
+                        QStringLiteral(
+                            "associated asset unexpectedly has a public proxy"));
+        }
+    }
+
+    if (!asset)
     {
         return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                     itemUuid,
-                    QStringLiteral("original mode/mtime evidence is invalid"));
+                    QStringLiteral("primary asset mapping is missing"));
     }
 
     const QString publicPath = absolutePath(request.publicRoot,
-                                            asset.publicRelativePath);
+                                            asset->publicRelativePath);
     const QString archivePath = absolutePath(request.publicRoot,
                                              container.objectRelativePath);
-    const QString replacementRelativePath =
-        parentPath(asset.publicRelativePath) +
-        (parentPath(asset.publicRelativePath).isEmpty()
-             ? QString() : QLatin1String("/")) +
-        PrivacyPublicTransitionEngine::expectedStageFileName(
-            transactionUuid, PrivacyAsset::PrimaryMediaRole, 0);
 
-    if (publicPath.isEmpty() || archivePath.isEmpty() ||
-        replacementRelativePath.isEmpty())
+    if (publicPath.isEmpty() || archivePath.isEmpty())
     {
         return fail(PrivacyStillItemTransactionStatus::InvalidRequest, itemUuid,
                     QStringLiteral("stored public/archive path is unsafe"));
     }
 
-    PrivacyJournalObjectFact proxyFact;
-    proxyFact.presence = PrivacyJournalExpectedPresence::Present;
-    proxyFact.size = asset.proxySize;
-    proxyFact.linkCount = 1;
-    proxyFact.sha256 = QByteArray::fromHex(asset.proxyHash.toLatin1());
-    PrivacyJournalObjectFact originalFact;
-    originalFact.presence = PrivacyJournalExpectedPresence::Present;
-    originalFact.size = asset.originalSize;
-    originalFact.linkCount = 1;
-    originalFact.sha256 = QByteArray::fromHex(asset.originalHash.toLatin1());
-    PrivacyJournalObjectFact publicFact;
     PrivacyJournalObjectFact archiveFact;
 
-    if (!stableFileFact(publicPath, nullptr, &publicFact) ||
-        !stableFileFact(archivePath, nullptr, &archiveFact) ||
+    if (!stableFileFact(archivePath, nullptr, &archiveFact) ||
         (QString::fromLatin1(archiveFact.sha256.toHex()) !=
          container.protectedHash) ||
         (archiveFact.size != container.protectedSize))
@@ -2321,131 +2833,44 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                     QStringLiteral("proxy/archive no longer match stored facts"));
     }
 
-    if (transaction)
+    if (!transaction)
     {
-        QString journalDetail;
-        PrivacyJournalError journalError = PrivacyJournalError::None;
-        std::unique_ptr<PrivacyTransactionJournalStore> journalStore =
-            PrivacyTransactionJournalStore::open(
-                request.publicRoot.configuredPath, request.rootExpectation,
-                &journalError, &journalDetail);
-        const PrivacyJournalLoadResult loaded = journalStore
-                                              ? journalStore->load(transactionUuid)
-                                              : PrivacyJournalLoadResult();
-        const PrivacyTransactionJournal* databaseJournal = databaseJournalFor(
-            snapshot, transactionUuid, request.publicRoot.uuid);
-        const bool exactUnboundCreated = journalStore && databaseJournal &&
-            (loaded.disposition == PrivacyJournalLoadDisposition::Missing) &&
-            (transaction->state == PrivacyTransactionState::Created) &&
-            (transaction->generation == 0) &&
-            (databaseJournal->stage ==
-             static_cast<int>(PrivacyJournalStage::Created)) &&
-            databaseJournal->expectedJournalHash.isEmpty();
-
-        if (!exactUnboundCreated && (!journalStore ||
-            (loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
-            !loaded.authoritative || !loaded.hasRecord ||
-            (loaded.record.transactionUuid != transactionUuid) ||
-            (loaded.record.transactionType !=
-             PrivacyTransactionType::UnprotectItem)))
+        for (const PrivacyAsset& candidate : assets)
         {
-            return fail(PrivacyStillItemTransactionStatus::JournalFailure,
-                        itemUuid,
-                        QStringLiteral("Unprotect filesystem journal is not authoritative"));
-        }
+            const QString candidatePath = absolutePath(
+                request.publicRoot, candidate.publicRelativePath);
+            PrivacyJournalObjectFact candidateFact;
 
-        PrivacyJournalObjectFact stagedFact;
-        const bool stagePresent = stableFileFact(
-            absolutePath(request.publicRoot, replacementRelativePath), nullptr,
-            &stagedFact);
-
-        if (exactUnboundCreated)
-        {
-            if (!sameFact(publicFact, proxyFact) || stagePresent)
+            if (candidate.proxySize >= 0)
             {
-                return fail(PrivacyStillItemTransactionStatus::SourceChanged,
-                            itemUuid,
-                            QStringLiteral("unbound Created namespace is not exact"));
+                PrivacyJournalObjectFact expected;
+                expected.presence = PrivacyJournalExpectedPresence::Present;
+                expected.size = candidate.proxySize;
+                expected.linkCount = 1;
+                expected.sha256 = QByteArray::fromHex(
+                    candidate.proxyHash.toLatin1());
+
+                if (!stableFileFact(candidatePath, nullptr, &candidateFact) ||
+                    !sameFact(candidateFact, expected))
+                {
+                    return fail(PrivacyStillItemTransactionStatus::SourceChanged,
+                                itemUuid,
+                                QStringLiteral("public proxy is not exact"));
+                }
+            }
+            else
+            {
+                const QFileInfo candidateInfo(candidatePath);
+
+                if (candidateInfo.exists() || candidateInfo.isSymLink())
+                {
+                    return fail(PrivacyStillItemTransactionStatus::SourceChanged,
+                                itemUuid,
+                                QStringLiteral(
+                                    "associated public asset is unexpectedly present"));
+                }
             }
         }
-        else
-        {
-
-            switch (loaded.record.stage)
-            {
-            case PrivacyJournalStage::Created:
-            case PrivacyJournalStage::Prepared:
-            {
-                if (!sameFact(publicFact, proxyFact))
-                {
-                    return fail(PrivacyStillItemTransactionStatus::SourceChanged,
-                                itemUuid,
-                                QStringLiteral("pre-stage public proxy is not exact"));
-                }
-
-                break;
-            }
-
-            case PrivacyJournalStage::Staged:
-            case PrivacyJournalStage::ProtectedCopyVerified:
-            {
-                if (!sameFact(publicFact, proxyFact) || !stagePresent ||
-                    !sameFact(stagedFact, originalFact))
-                {
-                    return fail(PrivacyStillItemTransactionStatus::SourceChanged,
-                                itemUuid,
-                                QStringLiteral("pre-exchange public/staged pair is not exact"));
-                }
-
-                break;
-            }
-
-            case PrivacyJournalStage::Applying:
-            {
-                const bool exactPre = sameFact(publicFact, proxyFact) &&
-                                      stagePresent &&
-                                      sameFact(stagedFact, originalFact);
-                const bool exactPost = sameFact(publicFact, originalFact) &&
-                                       stagePresent &&
-                                       sameFact(stagedFact, proxyFact);
-
-                if (!exactPre && !exactPost)
-                {
-                    return fail(PrivacyStillItemTransactionStatus::SourceChanged,
-                                itemUuid,
-                                QStringLiteral("Applying public/staged pair is ambiguous"));
-                }
-
-                break;
-            }
-
-            case PrivacyJournalStage::PublicStateVerified:
-            case PrivacyJournalStage::Complete:
-            {
-                if (!sameFact(publicFact, originalFact) || !stagePresent ||
-                    !sameFact(stagedFact, proxyFact))
-                {
-                    return fail(PrivacyStillItemTransactionStatus::SourceChanged,
-                                itemUuid,
-                                QStringLiteral("post-exchange public/staged pair is not exact"));
-                }
-
-                break;
-            }
-
-            case PrivacyJournalStage::ReconciliationRequired:
-            {
-                return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
-                            itemUuid,
-                            QStringLiteral("Unprotect journal requires reconciliation"));
-            }
-            }
-        }
-    }
-    else if (!sameFact(publicFact, proxyFact))
-    {
-        return fail(PrivacyStillItemTransactionStatus::SourceChanged, itemUuid,
-                    QStringLiteral("public proxy no longer matches stored facts"));
     }
 
     QString priorProtectTransactionUuid;
@@ -2479,7 +2904,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     }
 
     const QByteArray exactTeardown = encodeTeardownSnapshot(
-        item, container, asset, priorProtectTransactionUuid);
+        item, container, assets, priorProtectTransactionUuid);
 
     if (exactTeardown.isEmpty())
     {
@@ -2490,7 +2915,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     PrivacyJournalRecord created;
     PrivacyJournalRecord prepared;
     QString payloadPath;
-    QDateTime payloadModificationDate = asset.originalModificationDate;
+    QDateTime payloadModificationDate = asset->originalModificationDate;
     QByteArray payloadTeardown;
 
     if (!transaction)
@@ -2507,23 +2932,48 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         created.fromCredentialGeneration = container.credentialGeneration;
         created.toCredentialGeneration = container.credentialGeneration;
         created.stage = PrivacyJournalStage::Created;
-        PrivacyJournalAsset journalAsset;
-        journalAsset.itemUuid = itemUuid;
-        journalAsset.containerUuid = container.uuid;
-        journalAsset.role = asset.role;
-        journalAsset.ordinal = asset.ordinal;
-        journalAsset.publicRelativePath = asset.publicRelativePath;
-        journalAsset.stagedRelativePath = replacementRelativePath;
-        journalAsset.protectedRelativePath = asset.protectedRelativePath;
-        journalAsset.containerRelativePath = container.objectRelativePath;
-        journalAsset.original.presence = PrivacyJournalExpectedPresence::Present;
-        journalAsset.original.size = asset.originalSize;
-        journalAsset.original.linkCount = 1;
-        journalAsset.original.sha256 = QByteArray::fromHex(
-            asset.originalHash.toLatin1());
-        journalAsset.proxy = proxyFact;
-        journalAsset.container = archiveFact;
-        created.assets << journalAsset;
+        for (const PrivacyAsset& candidate : assets)
+        {
+            PrivacyJournalAsset journalAsset;
+            journalAsset.itemUuid = itemUuid;
+            journalAsset.containerUuid = container.uuid;
+            journalAsset.role = candidate.role;
+            journalAsset.ordinal = candidate.ordinal;
+            journalAsset.publicRelativePath = candidate.publicRelativePath;
+            journalAsset.stagedRelativePath =
+                parentPath(candidate.publicRelativePath) +
+                (parentPath(candidate.publicRelativePath).isEmpty()
+                    ? QString() : QLatin1String("/")) +
+                PrivacyPublicTransitionEngine::expectedStageFileName(
+                    transactionUuid, candidate.role, candidate.ordinal);
+            journalAsset.protectedRelativePath =
+                candidate.protectedRelativePath;
+            journalAsset.containerRelativePath = container.objectRelativePath;
+            journalAsset.original.presence =
+                PrivacyJournalExpectedPresence::Present;
+            journalAsset.original.size = candidate.originalSize;
+            journalAsset.original.linkCount = 1;
+            journalAsset.original.sha256 = QByteArray::fromHex(
+                candidate.originalHash.toLatin1());
+
+            if (candidate.proxySize >= 0)
+            {
+                journalAsset.proxy.presence =
+                    PrivacyJournalExpectedPresence::Present;
+                journalAsset.proxy.size = candidate.proxySize;
+                journalAsset.proxy.linkCount = 1;
+                journalAsset.proxy.sha256 = QByteArray::fromHex(
+                    candidate.proxyHash.toLatin1());
+            }
+            else
+            {
+                journalAsset.proxy.presence =
+                    PrivacyJournalExpectedPresence::Absent;
+            }
+
+            journalAsset.container = archiveFact;
+            created.assets << journalAsset;
+        }
 
         if (!verifyArchiveMember(d->archive, created, archivePath, password))
         {
@@ -2583,6 +3033,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         (transaction->itemUuid != itemUuid) ||
         !decodePreparedPayload(transaction->payloadData, &created, &payloadPath,
                                &payloadModificationDate, &payloadTeardown) ||
+        (payloadPath != container.objectRelativePath) ||
         (payloadTeardown != exactTeardown))
     {
         return fail(PrivacyStillItemTransactionStatus::RecoveryRequired, itemUuid,
@@ -2637,6 +3088,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     if (!transaction ||
         !decodePreparedPayload(transaction->payloadData, &prepared, &payloadPath,
                                &payloadModificationDate, &payloadTeardown) ||
+        (payloadPath != container.objectRelativePath) ||
         (payloadTeardown != exactTeardown) ||
         (prepared.stage != PrivacyJournalStage::Prepared))
     {
@@ -2670,52 +3122,73 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                         itemUuid, detail);
         }
 
-        PrivacyPublicReplacementStageRequest stageRequest;
-        stageRequest.absoluteRootPath = request.publicRoot.configuredPath;
-        stageRequest.rootExpectation = request.rootExpectation;
-        stageRequest.journalRecord = prepared;
-        stageRequest.authoritativeJournalSha256 = journalHash;
-        stageRequest.itemUuid = itemUuid;
-        stageRequest.role = asset.role;
-        stageRequest.ordinal = asset.ordinal;
-        const QString stagedOriginalPath = absolutePath(
-            request.publicRoot, replacementRelativePath);
-        PrivacyJournalObjectFact replayFact;
-
-        if (d->durableReplay && !d->authenticatedCreatedReplay)
+        for (const PrivacyJournalAsset& journalAsset : prepared.assets)
         {
-            if (!QFileInfo::exists(stagedOriginalPath))
-            {
-                return fail(
-                    PrivacyStillItemTransactionStatus::AuthenticationRequired,
-                    itemUuid,
-                    QStringLiteral("Prepared Unprotect original stage must be restored"));
-            }
+            const auto mappedIt = std::find_if(
+                assets.cbegin(), assets.cend(),
+                [&journalAsset](const PrivacyAsset& candidate)
+                {
+                    return ((candidate.role == journalAsset.role) &&
+                            (candidate.ordinal == journalAsset.ordinal));
+                });
 
-            if (!stableFileFact(stagedOriginalPath, nullptr, &replayFact) ||
-                !sameFact(replayFact, prepared.assets.constFirst().original))
+            if (mappedIt == assets.cend())
             {
                 return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                             itemUuid,
-                            QStringLiteral("Prepared Unprotect original stage is not exact"));
+                            QStringLiteral("Unprotect asset mapping disappeared"));
             }
-        }
-        else
-        {
+
+            PrivacyPublicReplacementStageRequest stageRequest;
+            stageRequest.absoluteRootPath = request.publicRoot.configuredPath;
+            stageRequest.rootExpectation = request.rootExpectation;
+            stageRequest.journalRecord = prepared;
+            stageRequest.authoritativeJournalSha256 = journalHash;
+            stageRequest.itemUuid = itemUuid;
+            stageRequest.role = journalAsset.role;
+            stageRequest.ordinal = journalAsset.ordinal;
+            const QString stagedOriginalPath = absolutePath(
+                request.publicRoot, journalAsset.stagedRelativePath);
+            PrivacyJournalObjectFact replayFact;
+
+            if (d->durableReplay && !d->authenticatedCreatedReplay)
+            {
+                if (!QFileInfo::exists(stagedOriginalPath))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                        itemUuid,
+                        QStringLiteral(
+                            "Prepared Unprotect asset stages must be restored"));
+                }
+
+                if (!stableFileFact(stagedOriginalPath, nullptr, &replayFact) ||
+                    !sameFact(replayFact, journalAsset.original))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        itemUuid,
+                        QStringLiteral(
+                            "Prepared Unprotect asset stage is not exact"));
+                }
+
+                continue;
+            }
+
             PrivacyCasualArchiveRestoreRequest restore;
             restore.archivePath = archivePath;
             restore.categoryUuid = request.categoryUuid;
             restore.containerUuid = container.uuid;
             restore.itemUuid = itemUuid;
-            restore.protectedRelativePath = asset.protectedRelativePath;
-            restore.originalName = asset.originalName;
-            restore.role = asset.role;
-            restore.ordinal = asset.ordinal;
+            restore.protectedRelativePath = mappedIt->protectedRelativePath;
+            restore.originalName = mappedIt->originalName;
+            restore.role = mappedIt->role;
+            restore.ordinal = mappedIt->ordinal;
             restore.expectedArchiveSize = archiveFact.size;
             restore.expectedArchiveSha256 = archiveFact.sha256;
-            restore.expectedMemberSize = asset.originalSize;
+            restore.expectedMemberSize = mappedIt->originalSize;
             restore.expectedMemberSha256 = QByteArray::fromHex(
-                asset.originalHash.toLatin1());
+                mappedIt->originalHash.toLatin1());
             const PrivacyPublicReplacementStageResult stageResult =
                 d->transition.stageReplacement(
                     stageRequest,
@@ -2745,7 +3218,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                         }
 
                         const qint64 milliseconds =
-                            asset.originalModificationDate.toMSecsSinceEpoch();
+                            mappedIt->originalModificationDate.toMSecsSinceEpoch();
                         struct timespec times[2] = {};
                         times[0].tv_nsec = UTIME_OMIT;
                         times[1].tv_sec = milliseconds / 1000;
@@ -2757,7 +3230,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                 ((stageResult.error !=
                   PrivacyPublicTransitionError::UnexpectedExistingFile) ||
                  !stableFileFact(stagedOriginalPath, nullptr, &replayFact) ||
-                 !sameFact(replayFact, prepared.assets.constFirst().original)))
+                 !sameFact(replayFact, journalAsset.original)))
             {
                 return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
                             itemUuid, stageResult.detail);
@@ -2851,20 +3324,52 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                         QStringLiteral("Unprotect transition journal is not authoritative"));
         }
 
-        PrivacyPublicTransitionRequest transitionRequest;
-        transitionRequest.absoluteRootPath = request.publicRoot.configuredPath;
-        transitionRequest.rootExpectation = request.rootExpectation;
-        transitionRequest.journalRecord = loaded.record;
-        transitionRequest.authoritativeJournalSha256 = loaded.sha256;
-        transitionRequest.itemUuid = itemUuid;
-        transitionRequest.role = asset.role;
-        transitionRequest.ordinal = asset.ordinal;
-        transitionRequest.mode = PrivacyPublicTransitionMode::ExchangePresent;
-        transitionRequest.currentFact = PrivacyPublicTransitionFactKind::Proxy;
-        transitionRequest.installedFact = PrivacyPublicTransitionFactKind::Original;
-        transitionRequest.installedUnixMode = static_cast<int>(restoredMode);
+        QList<PrivacyPublicTransitionRequest> transitionRequests;
+
+        for (const PrivacyJournalAsset& journalAsset : loaded.record.assets)
+        {
+            const auto mappedIt = std::find_if(
+                assets.cbegin(), assets.cend(),
+                [&journalAsset](const PrivacyAsset& candidate)
+                {
+                    return ((candidate.role == journalAsset.role) &&
+                            (candidate.ordinal == journalAsset.ordinal));
+                });
+            mode_t installedMode = 0;
+
+            if ((mappedIt == assets.cend()) ||
+                !decodePortableMode(mappedIt->portableAttributes,
+                                    &installedMode))
+            {
+                return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                            itemUuid,
+                            QStringLiteral("Unprotect transition mode is missing"));
+            }
+
+            PrivacyPublicTransitionRequest transitionRequest;
+            transitionRequest.absoluteRootPath = request.publicRoot.configuredPath;
+            transitionRequest.rootExpectation = request.rootExpectation;
+            transitionRequest.journalRecord = loaded.record;
+            transitionRequest.authoritativeJournalSha256 = loaded.sha256;
+            transitionRequest.itemUuid = itemUuid;
+            transitionRequest.role = journalAsset.role;
+            transitionRequest.ordinal = journalAsset.ordinal;
+            transitionRequest.mode =
+                (journalAsset.proxy.presence ==
+                 PrivacyJournalExpectedPresence::Present)
+                    ? PrivacyPublicTransitionMode::ExchangePresent
+                    : PrivacyPublicTransitionMode::InstallAbsent;
+            transitionRequest.currentFact =
+                PrivacyPublicTransitionFactKind::Proxy;
+            transitionRequest.installedFact =
+                PrivacyPublicTransitionFactKind::Original;
+            transitionRequest.installedUnixMode =
+                static_cast<int>(installedMode);
+            transitionRequests << transitionRequest;
+        }
+
         const PrivacyPublicTransitionResult transitioned =
-            d->transition.execute(transitionRequest);
+            d->transition.executeBatch(transitionRequests);
 
         if (!transitioned.succeeded())
         {
@@ -2993,12 +3498,24 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     }
 
     if (!removeExactFile(request.publicRoot, request.rootExpectation,
-                         container.objectRelativePath, archiveFact, true) ||
-        !removeExactFile(request.publicRoot, request.rootExpectation,
-                         replacementRelativePath, proxyFact, true))
+                         container.objectRelativePath, archiveFact, true))
     {
         return fail(PrivacyStillItemTransactionStatus::CleanupPending, itemUuid,
-                    QStringLiteral("exact archive/proxy cleanup is pending"));
+                    QStringLiteral("exact archive cleanup is pending"));
+    }
+
+    for (const PrivacyJournalAsset& journalAsset : prepared.assets)
+    {
+        if ((journalAsset.proxy.presence ==
+             PrivacyJournalExpectedPresence::Present) &&
+            !removeExactFile(request.publicRoot, request.rootExpectation,
+                             journalAsset.stagedRelativePath,
+                             journalAsset.proxy, true))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        itemUuid,
+                        QStringLiteral("exact proxy cleanup is pending"));
+        }
     }
 
     if (d->fault(PrivacyStillItemFaultPoint::AfterArchiveCleanup))
@@ -3089,9 +3606,7 @@ PrivacyStillItemTransactionEngine::recoverInternal(
         (record.categoryUuid != transaction->categoryUuid) ||
         (record.rootUuid != publicRoot.uuid) ||
         (record.transactionType != transaction->type) ||
-        (record.assets.size() != 1) ||
-        (record.assets.constFirst().role != PrivacyAsset::PrimaryMediaRole) ||
-        (record.assets.constFirst().ordinal != 0) ||
+        record.assets.isEmpty() ||
         (transaction->fromCredentialGeneration !=
          record.fromCredentialGeneration) ||
         (transaction->toCredentialGeneration != record.toCredentialGeneration))
@@ -3152,7 +3667,36 @@ PrivacyStillItemTransactionEngine::recoverInternal(
                     QStringLiteral("durable still root identity is not exact"));
     }
 
-    const PrivacyJournalAsset& journalAsset = record.assets.constFirst();
+    const auto journalAssetIt = std::find_if(
+        record.assets.cbegin(), record.assets.cend(),
+        [](const PrivacyJournalAsset& candidate)
+        {
+            return ((candidate.role == PrivacyAsset::PrimaryMediaRole) &&
+                    (candidate.ordinal == 0));
+        });
+
+    if (journalAssetIt == record.assets.cend())
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    transaction->itemUuid,
+                    QStringLiteral("durable primary payload is missing"));
+    }
+
+    const PrivacyJournalAsset& journalAsset = *journalAssetIt;
+
+    const QString expectedPayloadPath =
+        (transaction->type == PrivacyTransactionType::ProtectItem)
+            ? protectArchiveStageRelativePath(journalAsset.publicRelativePath,
+                                              transactionUuid)
+            : journalAsset.containerRelativePath;
+
+    if (payloadPath != expectedPayloadPath)
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    journalAsset.itemUuid,
+                    QStringLiteral("durable archive payload path is not exact"));
+    }
+
     const PrivacyItem* item = itemForUuid(snapshot, journalAsset.itemUuid);
     qlonglong imageId = item ? item->imageId : -1;
     PrivacyItem teardownItem;
@@ -3161,19 +3705,30 @@ PrivacyStillItemTransactionEngine::recoverInternal(
         (transaction->state == PrivacyTransactionState::Applying))
     {
         PrivacyContainer teardownContainer;
-        PrivacyAsset teardownAsset;
+        QList<PrivacyAsset> teardownAssets;
         QString priorProtectTransactionUuid;
 
         if (!decodeTeardownSnapshot(metadata, &teardownItem, &teardownContainer,
-                                    &teardownAsset,
+                                    &teardownAssets,
                                     &priorProtectTransactionUuid) ||
             (teardownItem.uuid != journalAsset.itemUuid) ||
             (teardownItem.categoryUuid != transaction->categoryUuid) ||
-            (teardownAsset.publicRootUuid != publicRoot.uuid))
+            (teardownAssets.size() != record.assets.size()))
         {
             return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
                         journalAsset.itemUuid,
                         QStringLiteral("detached durable teardown is not exact"));
+        }
+
+        for (const PrivacyAsset& teardownAsset : std::as_const(teardownAssets))
+        {
+            if (teardownAsset.publicRootUuid != publicRoot.uuid)
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    journalAsset.itemUuid,
+                    QStringLiteral("detached durable root is not exact"));
+            }
         }
 
         imageId = teardownItem.imageId;
@@ -3212,53 +3767,69 @@ PrivacyStillItemTransactionEngine::recoverInternal(
 
     if (transaction->type == PrivacyTransactionType::ProtectItem)
     {
-        const QString publicPath = absolutePath(publicRoot,
-                                                journalAsset.publicRelativePath);
-        quint64 publicDevice = 0;
-        quint64 publicInode = 0;
-        quint64 publicLinkCount = 0;
-        qlonglong publicSize = -1;
-
-#if defined(Q_OS_UNIX)
-        struct stat status = {};
-        const QByteArray encodedPath = QFile::encodeName(publicPath);
-
-        if (publicPath.isEmpty() ||
-            (::lstat(encodedPath.constData(), &status) != 0) ||
-            !S_ISREG(status.st_mode) || S_ISLNK(status.st_mode) ||
-            (status.st_nlink < 1))
-        {
-            return fail(PrivacyStillItemTransactionStatus::SourceChanged,
-                        journalAsset.itemUuid,
-                        QStringLiteral("durable Protect public file is not regular"));
-        }
-
-        publicDevice = static_cast<quint64>(status.st_dev);
-        publicInode = static_cast<quint64>(status.st_ino);
-        publicLinkCount = static_cast<quint64>(status.st_nlink);
-        publicSize = static_cast<qlonglong>(status.st_size);
-#else
-        return fail(PrivacyStillItemTransactionStatus::RootUnavailable,
-                    journalAsset.itemUuid,
-                    QStringLiteral("durable still recovery is unsupported"));
-#endif
-
-        PrivacyInventoryAsset inventoryAsset;
-        inventoryAsset.role = PrivacyInventoryAssetRole::PrimaryMedia;
-        inventoryAsset.ordinal = 0;
-        inventoryAsset.location.root.uuid = publicRoot.uuid;
-        inventoryAsset.location.root.absolutePath = publicRoot.configuredPath;
-        inventoryAsset.location.relativePath = journalAsset.publicRelativePath;
-        inventoryAsset.evidence.type = PrivacyInventoryFileType::Regular;
-        inventoryAsset.evidence.identityComplete = true;
-        inventoryAsset.evidence.deviceId = publicDevice;
-        inventoryAsset.evidence.inode = publicInode;
-        inventoryAsset.evidence.linkCount = publicLinkCount;
-        inventoryAsset.evidence.byteSize = publicSize;
         PrivacyAssetInventoryBridgeItemResult bridgeItem;
         bridgeItem.imageId = imageId;
         bridgeItem.inventory.status = PrivacyInventoryStatus::Ready;
-        bridgeItem.inventory.requiredAssets << inventoryAsset;
+
+        for (const PrivacyJournalAsset& recoveryAsset : record.assets)
+        {
+            PrivacyInventoryAsset inventoryAsset;
+            inventoryAsset.role = static_cast<PrivacyInventoryAssetRole>(
+                recoveryAsset.role);
+            inventoryAsset.ordinal = recoveryAsset.ordinal;
+            inventoryAsset.location.root.uuid = publicRoot.uuid;
+            inventoryAsset.location.root.absolutePath = publicRoot.configuredPath;
+            inventoryAsset.location.relativePath = recoveryAsset.publicRelativePath;
+            inventoryAsset.evidence.type = PrivacyInventoryFileType::Regular;
+            inventoryAsset.evidence.identityComplete = true;
+            inventoryAsset.evidence.deviceId = record.rootDevice;
+            inventoryAsset.evidence.inode =
+                (static_cast<quint64>(
+                     static_cast<quint32>(recoveryAsset.role)) << 32) |
+                (static_cast<quint64>(
+                     static_cast<quint32>(recoveryAsset.ordinal)) + 1);
+            inventoryAsset.evidence.linkCount =
+                recoveryAsset.original.linkCount;
+            inventoryAsset.evidence.byteSize = recoveryAsset.original.size;
+
+            if (created)
+            {
+#if defined(Q_OS_UNIX)
+                const QString publicPath = absolutePath(
+                    publicRoot, recoveryAsset.publicRelativePath);
+                struct stat status = {};
+                const QByteArray encodedPath = QFile::encodeName(publicPath);
+
+                if (publicPath.isEmpty() ||
+                    (::lstat(encodedPath.constData(), &status) != 0) ||
+                    !S_ISREG(status.st_mode) || S_ISLNK(status.st_mode) ||
+                    (status.st_nlink < 1))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::SourceChanged,
+                        journalAsset.itemUuid,
+                        QStringLiteral(
+                            "durable Protect asset is not regular"));
+                }
+
+                inventoryAsset.evidence.deviceId =
+                    static_cast<quint64>(status.st_dev);
+                inventoryAsset.evidence.inode =
+                    static_cast<quint64>(status.st_ino);
+                inventoryAsset.evidence.linkCount =
+                    static_cast<quint64>(status.st_nlink);
+                inventoryAsset.evidence.byteSize =
+                    static_cast<qlonglong>(status.st_size);
+#else
+                return fail(PrivacyStillItemTransactionStatus::RootUnavailable,
+                            journalAsset.itemUuid,
+                            QStringLiteral("durable recovery is unsupported"));
+#endif
+            }
+
+            bridgeItem.inventory.requiredAssets << inventoryAsset;
+        }
+
         PrivacyStillProtectRequest request;
         request.imageId = imageId;
         request.categoryUuid = transaction->categoryUuid;

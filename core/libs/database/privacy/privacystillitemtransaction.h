@@ -196,6 +196,7 @@ enum class PrivacyStillItemFaultPoint
     AfterProtectedCopyJournal,
     AfterPublicTransition,
     AfterCompleteJournal,
+    AfterProtectedStageCleanup,
     AfterDatabasePublication,
     AfterRuntimePublication,
     AfterUnprotectDatabaseTeardown,

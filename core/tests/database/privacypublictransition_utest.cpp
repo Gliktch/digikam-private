@@ -45,6 +45,7 @@ const QString ContainerUuid   = QStringLiteral("55555555-5555-4555-8555-55555555
 
 const QByteArray OriginalBytes  = QByteArrayLiteral("synthetic-original-bytes");
 const QByteArray ProxyBytes     = QByteArrayLiteral("synthetic-proxy-bytes");
+const QByteArray SidecarBytes   = QByteArrayLiteral("synthetic-sidecar-bytes");
 const QByteArray ContainerBytes = QByteArrayLiteral("synthetic-protected-container");
 
 QByteArray digest(const QByteArray& bytes)
@@ -59,6 +60,13 @@ PrivacyJournalObjectFact fact(const QByteArray& bytes)
     result.size     = bytes.size();
     result.linkCount = 1;
     result.sha256   = digest(bytes);
+    return result;
+}
+
+PrivacyJournalObjectFact absentFact()
+{
+    PrivacyJournalObjectFact result;
+    result.presence = PrivacyJournalExpectedPresence::Absent;
     return result;
 }
 
@@ -106,7 +114,8 @@ public:
                     bool createStage = true,
                     bool identicalPublicFacts = false,
                     PrivacyJournalStage initialStage =
-                        PrivacyJournalStage::Staged)
+                        PrivacyJournalStage::Staged,
+                    bool includeAbsentAssociated = false)
     {
         if (!root.isValid())
         {
@@ -155,6 +164,15 @@ public:
         containerPath = containerRelativePath.isEmpty()
                       ? QString()
                       : (root.path() + QLatin1Char('/') + containerRelativePath);
+        associatedPublicRelativePath = QStringLiteral(
+            "album/nested/photo.jpg.xmp");
+        associatedStagedRelativePath = QStringLiteral("album/nested/") +
+            PrivacyPublicTransitionEngine::expectedStageFileName(
+                TransactionUuid, 3, 0);
+        associatedPublicPath = root.path() + QLatin1Char('/') +
+                               associatedPublicRelativePath;
+        associatedStagedPath = root.path() + QLatin1Char('/') +
+                               associatedStagedRelativePath;
 
         const bool installedIsProxy =
             ((type == PrivacyTransactionType::ProtectItem) ||
@@ -168,7 +186,9 @@ public:
 
         if ((createStage && !writeNew(stagedPath, stagedBytes)) ||
             (adjacentContainer && !writeNew(containerPath, ContainerBytes)) ||
-            (publicPresent && !writeNew(publicPath, currentBytes, 0640)))
+            (publicPresent && !writeNew(publicPath, currentBytes, 0640)) ||
+            (includeAbsentAssociated &&
+             !writeNew(associatedPublicPath, SidecarBytes, 0640)))
         {
             return false;
         }
@@ -230,6 +250,24 @@ public:
         record.toCredentialGeneration   = 3;
         record.stage                    = initialStage;
         record.assets                   = { asset };
+
+        if (includeAbsentAssociated)
+        {
+            PrivacyJournalAsset associated;
+            associated.itemUuid = ItemUuid;
+            associated.containerUuid = ContainerUuid;
+            associated.role = 3;
+            associated.ordinal = 0;
+            associated.publicRelativePath = associatedPublicRelativePath;
+            associated.stagedRelativePath = associatedStagedRelativePath;
+            associated.protectedRelativePath = QStringLiteral(
+                "digikam-private/assets/3/0/photo.jpg.xmp");
+            associated.containerRelativePath = containerRelativePath;
+            associated.original = fact(SidecarBytes);
+            associated.proxy = absentFact();
+            associated.container = fact(ContainerBytes);
+            record.assets << associated;
+        }
 
         if (!store->create(record, &journalHash, &journalError, &detail))
         {
@@ -307,6 +345,22 @@ public:
         return request;
     }
 
+    PrivacyPublicTransitionRequest associatedRequest() const
+    {
+        PrivacyPublicTransitionRequest request;
+        request.absoluteRootPath            = root.path();
+        request.rootExpectation             = expectation;
+        request.journalRecord               = record;
+        request.authoritativeJournalSha256  = journalHash;
+        request.itemUuid                    = ItemUuid;
+        request.role                        = 3;
+        request.ordinal                     = 0;
+        request.mode                        = PrivacyPublicTransitionMode::RemovePresent;
+        request.currentFact                 = PrivacyPublicTransitionFactKind::Original;
+        request.installedFact               = PrivacyPublicTransitionFactKind::Proxy;
+        return request;
+    }
+
 public:
 
     QTemporaryDir root;
@@ -318,6 +372,10 @@ public:
     QString stagedPath;
     QString containerPath;
     QString publicAliasPath;
+    QString associatedPublicRelativePath;
+    QString associatedStagedRelativePath;
+    QString associatedPublicPath;
+    QString associatedStagedPath;
     PrivacyJournalRootExpectation expectation;
     std::unique_ptr<PrivacyTransactionJournalStore> store;
     PrivacyJournalRecord record;
@@ -334,6 +392,7 @@ private Q_SLOTS:
 
     void testExchangePresentAndRetainDisplaced();
     void testInstallAbsent();
+    void testBatchExchangeAndRemoveReplaysPartialMutation();
     void testUnprotectDirection();
     void testCrossRootProtectedProof();
     void testAcknowledgedProtectHardlinks();
@@ -380,6 +439,72 @@ void PrivacyPublicTransitionTest::testInstallAbsent()
     QVERIFY(result.namespaceMutated);
     QVERIFY(result.installedVerified);
     QVERIFY(!result.displacedVerified);
+}
+
+void PrivacyPublicTransitionTest::testBatchExchangeAndRemoveReplaysPartialMutation()
+{
+    TransitionFixture fixture;
+    QVERIFY(fixture.initialize(PrivacyTransactionType::ProtectItem,
+                               true, true, true, 1, true, false,
+                               PrivacyJournalStage::Staged, true));
+    PrivacyPublicTransitionEngine engine;
+    int mutations = 0;
+    engine.setFaultHook([&mutations](PrivacyPublicTransitionFaultPoint point)
+    {
+        if (point == PrivacyPublicTransitionFaultPoint::AfterNamespaceMutation)
+        {
+            ++mutations;
+            return (mutations == 1);
+        }
+
+        return false;
+    });
+    const QList<PrivacyPublicTransitionRequest> initialRequests =
+    {
+        fixture.request(), fixture.associatedRequest()
+    };
+    QList<PrivacyPublicTransitionRequest> malformedRequests = initialRequests;
+    malformedRequests[1].installedFact =
+        PrivacyPublicTransitionFactKind::Original;
+    QCOMPARE(engine.executeBatch(malformedRequests).error,
+             PrivacyPublicTransitionError::InvalidRequest);
+    QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+             PrivacyJournalStage::ProtectedCopyVerified);
+    QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
+    QCOMPARE(readBytes(fixture.associatedPublicPath), SidecarBytes);
+
+    const PrivacyPublicTransitionResult interrupted = engine.executeBatch(
+        initialRequests);
+    QCOMPARE(interrupted.error,
+             PrivacyPublicTransitionError::DurabilityUncertain);
+    QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+             PrivacyJournalStage::Applying);
+    QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+    QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+    QCOMPARE(readBytes(fixture.associatedPublicPath), SidecarBytes);
+    QVERIFY(!QFileInfo::exists(fixture.associatedStagedPath));
+
+    engine.setFaultHook({});
+    QVERIFY(fixture.refreshJournal());
+    const QList<PrivacyPublicTransitionRequest> replayRequests =
+    {
+        fixture.request(), fixture.associatedRequest()
+    };
+    const PrivacyPublicTransitionResult recovered = engine.executeBatch(
+        replayRequests);
+    QVERIFY2(recovered.succeeded(), qPrintable(recovered.detail));
+    QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+    QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+    QVERIFY(!QFileInfo::exists(fixture.associatedPublicPath));
+    QCOMPARE(readBytes(fixture.associatedStagedPath), SidecarBytes);
+    QCOMPARE(recovered.displacedRelativePaths.size(), 2);
+    QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+             PrivacyJournalStage::PublicStateVerified);
+
+    QVERIFY(fixture.refreshJournal());
+    const PrivacyPublicTransitionResult replayed = engine.executeBatch(
+        { fixture.request(), fixture.associatedRequest() });
+    QVERIFY2(replayed.succeeded(), qPrintable(replayed.detail));
 }
 
 void PrivacyPublicTransitionTest::testUnprotectDirection()

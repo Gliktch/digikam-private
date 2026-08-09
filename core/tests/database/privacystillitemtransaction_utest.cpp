@@ -458,6 +458,7 @@ private Q_SLOTS:
     void protectFaultReplay();
     void protectUnprotectAndReplayFinalCleanup_data();
     void protectUnprotectAndReplayFinalCleanup();
+    void associatedAssetsProtectUnprotectRoundTrip();
     void videoPreparedReplayRetainsExactProxy();
     void rejectsUnsafeReplayInputs();
 };
@@ -475,6 +476,7 @@ void PrivacyStillItemTransactionTest::protectFaultReplay_data()
         PrivacyStillItemFaultPoint::AfterProtectedCopyJournal,
         PrivacyStillItemFaultPoint::AfterPublicTransition,
         PrivacyStillItemFaultPoint::AfterCompleteJournal,
+        PrivacyStillItemFaultPoint::AfterProtectedStageCleanup,
         PrivacyStillItemFaultPoint::AfterDatabasePublication,
         PrivacyStillItemFaultPoint::AfterRuntimePublication
     };
@@ -616,6 +618,10 @@ void PrivacyStillItemTransactionTest::protectFaultReplay()
         persistence.snapshot.containers.constFirst(),
         persistence.snapshot.assets));
     QVERIFY(QFileInfo::exists(sourcePath + QLatin1String(".digikam-private.zip")));
+    const QString displacedPath = QFileInfo(sourcePath).absolutePath() +
+        QLatin1Char('/') + PrivacyPublicTransitionEngine::expectedStageFileName(
+            ProtectUuid, PrivacyAsset::PrimaryMediaRole, 0);
+    QVERIFY(!QFileInfo::exists(displacedPath));
 }
 
 void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup_data()
@@ -826,6 +832,206 @@ void PrivacyStillItemTransactionTest::protectUnprotectAndReplayFinalCleanup()
     }
     QCOMPARE(restoredStat.st_mtim.tv_sec, time_t(1700000000));
     QCOMPARE(restoredStat.st_mtim.tv_nsec, long(123000000));
+}
+
+void PrivacyStillItemTransactionTest::associatedAssetsProtectUnprotectRoundTrip()
+{
+    QTemporaryDir directory;
+    QString sourcePath;
+    PrivacyStorageRoot root;
+    PrivacyJournalRootExpectation expectation;
+    PrivacyStillProtectRequest protect;
+    QVERIFY(prepareSyntheticStill(directory, &sourcePath, &root,
+                                  &expectation, &protect));
+
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = source.readAll();
+    source.close();
+
+    const QString sidecarPath = sourcePath + QLatin1String(".xmp");
+    const QByteArray sidecarBytes = QByteArrayLiteral(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">synthetic</x:xmpmeta>\n");
+    QFile sidecar(sidecarPath);
+    QVERIFY(sidecar.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+    QCOMPARE(sidecar.write(sidecarBytes), qint64(sidecarBytes.size()));
+    sidecar.close();
+    QVERIFY(::chmod(QFile::encodeName(sidecarPath).constData(), 0600) == 0);
+    const QString sidecarAliasPath = sidecarPath + QLatin1String(".alias");
+    QVERIFY(::link(QFile::encodeName(sidecarPath).constData(),
+                   QFile::encodeName(sidecarAliasPath).constData()) == 0);
+
+    struct timespec primaryTimes[2] = {};
+    primaryTimes[0].tv_nsec = UTIME_OMIT;
+    primaryTimes[1].tv_sec = 1700000100;
+    primaryTimes[1].tv_nsec = 111000000;
+    QVERIFY(::utimensat(AT_FDCWD, QFile::encodeName(sourcePath).constData(),
+                        primaryTimes, 0) == 0);
+    struct timespec sidecarTimes[2] = {};
+    sidecarTimes[0].tv_nsec = UTIME_OMIT;
+    sidecarTimes[1].tv_sec = 1700000200;
+    sidecarTimes[1].tv_nsec = 222000000;
+    QVERIFY(::utimensat(AT_FDCWD, QFile::encodeName(sidecarPath).constData(),
+                        sidecarTimes, 0) == 0);
+
+    struct stat sidecarStat = {};
+    QVERIFY(::stat(QFile::encodeName(sidecarPath).constData(), &sidecarStat) == 0);
+    PrivacyInventoryAsset sidecarAsset;
+    sidecarAsset.role = PrivacyInventoryAssetRole::XmpSidecar;
+    sidecarAsset.ordinal = 0;
+    sidecarAsset.location.root.uuid = RootUuid;
+    sidecarAsset.location.root.absolutePath = directory.path();
+    sidecarAsset.location.relativePath =
+        QDir(directory.path()).relativeFilePath(sidecarPath);
+    sidecarAsset.evidence.type = PrivacyInventoryFileType::Regular;
+    sidecarAsset.evidence.identityComplete = true;
+    sidecarAsset.evidence.deviceId = static_cast<quint64>(sidecarStat.st_dev);
+    sidecarAsset.evidence.inode = static_cast<quint64>(sidecarStat.st_ino);
+    sidecarAsset.evidence.linkCount = static_cast<quint64>(sidecarStat.st_nlink);
+    sidecarAsset.evidence.byteSize = sidecarStat.st_size;
+    protect.preflight.bridge.items[0].inventory.requiredAssets << sidecarAsset;
+
+    FakePersistence persistence;
+    persistence.snapshot.categories << category();
+    persistence.snapshot.storageRoots << root;
+    QSharedPointer<VerifiedRoot> verifier(new VerifiedRoot);
+    QSharedPointer<VerifiedIntegrity> inspector(new VerifiedIntegrity);
+    PrivacyRuntimeCoordinator runtime;
+    runtime.initialize(persistence.snapshot, verifier, {}, inspector);
+    QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+    FakeCache cache;
+    PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+    const PrivacyPassword password = PrivacyPassword::fromUnicode(
+        QLatin1String("synthetic passphrase"));
+
+    const PrivacyStillItemTransactionResult protectedResult = engine.protect(
+        protect, password);
+    QVERIFY2(protectedResult.status ==
+             PrivacyStillItemTransactionStatus::Protected,
+             qPrintable(protectedResult.detail));
+    QCOMPARE(persistence.snapshot.assets.size(), 2);
+    QVERIFY(QFileInfo::exists(sourcePath));
+    QVERIFY(!QFileInfo::exists(sidecarPath));
+    QVERIFY(QFileInfo::exists(sidecarAliasPath));
+    QFile sidecarAlias(sidecarAliasPath);
+    QVERIFY(sidecarAlias.open(QIODevice::ReadOnly));
+    QCOMPARE(sidecarAlias.readAll(), sidecarBytes);
+    sidecarAlias.close();
+    QVERIFY(QFileInfo::exists(sourcePath +
+                              QLatin1String(".digikam-private.zip")));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    QVERIFY(source.readAll() != originalBytes);
+    source.close();
+
+    QCOMPARE(persistence.snapshot.transactions.size(), 1);
+    const QByteArray exactPayload =
+        persistence.snapshot.transactions[0].payloadData;
+    QJsonDocument payloadDocument = QJsonDocument::fromJson(exactPayload);
+    QVERIFY(payloadDocument.isObject());
+    QJsonObject payloadObject = payloadDocument.object();
+    QJsonObject mismatchedPathObject = payloadObject;
+    mismatchedPathObject.insert(
+        QLatin1String("archiveStageRelativePath"),
+        QLatin1String("album/unrelated.digikam-private-stage.zip"));
+    persistence.snapshot.transactions[0].payloadData =
+        QJsonDocument(mismatchedPathObject).toJson(QJsonDocument::Compact);
+    QCOMPARE(engine.recover(root, ProtectUuid).status,
+             PrivacyStillItemTransactionStatus::RecoveryRequired);
+    persistence.snapshot.transactions[0].payloadData = exactPayload;
+
+    PrivacyJournalRecord mismatchedContainerRecord;
+    const QByteArray encodedJournal = QByteArray::fromBase64(
+        payloadObject.value(QLatin1String("journal")).toString().toLatin1(),
+        QByteArray::AbortOnBase64DecodingErrors);
+    QVERIFY(PrivacyTransactionJournalCodec::decode(
+        encodedJournal, &mismatchedContainerRecord));
+    QCOMPARE(mismatchedContainerRecord.assets.size(), 2);
+    mismatchedContainerRecord.assets[1].containerRelativePath =
+        QLatin1String("album/unrelated.digikam-private.zip");
+    const QByteArray mismatchedJournal =
+        PrivacyTransactionJournalCodec::encode(mismatchedContainerRecord);
+    QVERIFY(!mismatchedJournal.isEmpty());
+    payloadObject.insert(QLatin1String("journal"),
+                         QString::fromLatin1(mismatchedJournal.toBase64()));
+    persistence.snapshot.transactions[0].payloadData =
+        QJsonDocument(payloadObject).toJson(QJsonDocument::Compact);
+    QCOMPARE(engine.recover(root, ProtectUuid).status,
+             PrivacyStillItemTransactionStatus::RecoveryRequired);
+    persistence.snapshot.transactions[0].payloadData = exactPayload;
+
+    bool foundPrimary = false;
+    bool foundSidecar = false;
+
+    for (const PrivacyAsset& asset : std::as_const(persistence.snapshot.assets))
+    {
+        if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+            (asset.ordinal == 0))
+        {
+            foundPrimary = true;
+            QVERIFY(asset.proxySize >= 0);
+        }
+        else if ((asset.role ==
+                  static_cast<int>(PrivacyInventoryAssetRole::XmpSidecar)) &&
+                 (asset.ordinal == 0))
+        {
+            foundSidecar = true;
+            QCOMPARE(asset.publicRelativePath,
+                     QDir(directory.path()).relativeFilePath(sidecarPath));
+            QCOMPARE(asset.proxySize, qlonglong(-1));
+        }
+
+        const QString displacedPath = QFileInfo(sourcePath).absolutePath() +
+            QLatin1Char('/') +
+            PrivacyPublicTransitionEngine::expectedStageFileName(
+                ProtectUuid, asset.role, asset.ordinal);
+        QVERIFY2(!QFileInfo::exists(displacedPath), qPrintable(displacedPath));
+    }
+
+    QVERIFY(foundPrimary);
+    QVERIFY(foundSidecar);
+    QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, false));
+
+    PrivacyStillUnprotectRequest unprotect;
+    unprotect.imageId = protect.imageId;
+    unprotect.categoryUuid = protect.categoryUuid;
+    unprotect.transactionUuid = UnprotectUuid;
+    unprotect.publicRoot = root;
+    unprotect.rootExpectation = expectation;
+    unprotect.freshAuthenticationConfirmed = true;
+    const PrivacyStillItemTransactionResult unprotectedResult =
+        engine.unprotect(unprotect, password);
+    QVERIFY2(unprotectedResult.status ==
+             PrivacyStillItemTransactionStatus::Unprotected,
+             qPrintable(unprotectedResult.detail));
+
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    QCOMPARE(source.readAll(), originalBytes);
+    source.close();
+    QVERIFY(sidecar.open(QIODevice::ReadOnly));
+    QCOMPARE(sidecar.readAll(), sidecarBytes);
+    sidecar.close();
+    QVERIFY(sidecarAlias.open(QIODevice::ReadOnly));
+    QCOMPARE(sidecarAlias.readAll(), sidecarBytes);
+    sidecarAlias.close();
+    QVERIFY(!QFileInfo::exists(sourcePath +
+                               QLatin1String(".digikam-private.zip")));
+    QVERIFY(persistence.snapshot.items.isEmpty());
+    QVERIFY(persistence.snapshot.assets.isEmpty());
+    QVERIFY(persistence.snapshot.containers.isEmpty());
+    QVERIFY(persistence.snapshot.transactions.isEmpty());
+
+    struct stat restoredPrimary = {};
+    struct stat restoredSidecar = {};
+    QVERIFY(::stat(QFile::encodeName(sourcePath).constData(),
+                   &restoredPrimary) == 0);
+    QVERIFY(::stat(QFile::encodeName(sidecarPath).constData(),
+                   &restoredSidecar) == 0);
+    QCOMPARE(restoredPrimary.st_mode & 07777, mode_t(0640));
+    QCOMPARE(restoredPrimary.st_mtim.tv_sec, time_t(1700000100));
+    QCOMPARE(restoredPrimary.st_mtim.tv_nsec, long(111000000));
+    QCOMPARE(restoredSidecar.st_mode & 07777, mode_t(0600));
+    QCOMPARE(restoredSidecar.st_mtim.tv_sec, time_t(1700000200));
+    QCOMPARE(restoredSidecar.st_mtim.tv_nsec, long(222000000));
 }
 
 void PrivacyStillItemTransactionTest::videoPreparedReplayRetainsExactProxy()

@@ -75,7 +75,7 @@ public:
         const ItemInfo& info,
         const QString& categoryUuid,
         const QString& passwordText,
-        const ProtectAcknowledgement& acknowledgeWarnings = {});
+        const ProtectAcknowledgement& acknowledgeAssetSet = {});
     PrivacyStillItemTransactionResult unprotect(
         const ItemInfo& info,
         const QString& passwordText);
