@@ -1248,6 +1248,14 @@ bool PrivacyStillItemTransactionResult::succeeded() const
             (status == PrivacyStillItemTransactionStatus::CompatibilityRelocked));
 }
 
+bool PrivacyCompatibilityBatchResult::succeeded() const
+{
+    return ((status ==
+             PrivacyStillItemTransactionStatus::CompatibilityUnlocked) ||
+            (status ==
+             PrivacyStillItemTransactionStatus::CompatibilityRelocked));
+}
+
 PrivacyStillItemTransactionResult PrivacyCompatibilityExposureGuardEngine::relock(
     const PrivacyStorageRoot& publicRoot,
     const PrivacyJournalRootExpectation& rootExpectation,
@@ -4493,6 +4501,235 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
     result.transactionUuid = transactionUuid;
     result.itemUuid = itemUuid;
     return result;
+}
+
+PrivacyCompatibilityBatchResult
+PrivacyStillItemTransactionEngine::compatibilityUnlockBatch(
+    const QList<PrivacyCompatibilityUnlockRequest>& requests,
+    const PrivacyPassword& password,
+    const CompatibilityBatchProgress& progress)
+{
+    PrivacyCompatibilityBatchResult batch;
+    batch.requestedCount = requests.size();
+
+    if (requests.isEmpty() || !password.isValid())
+    {
+        batch.detail = QStringLiteral(
+            "the grouped Compatibility Unlock request is invalid");
+        return batch;
+    }
+
+    const QString categoryUuid = normalizedUuid(
+        requests.constFirst().categoryUuid);
+    const QString groupUuid = normalizedUuid(requests.constFirst().groupUuid);
+    QSet<QString> itemUuids;
+    QSet<QString> transactionUuids;
+    QSet<qlonglong> imageIds;
+
+    for (const PrivacyCompatibilityUnlockRequest& request : requests)
+    {
+        const QString itemUuid = normalizedUuid(request.itemUuid);
+        const QString transactionUuid = normalizedUuid(request.transactionUuid);
+
+        if (categoryUuid.isEmpty() || groupUuid.isEmpty() || itemUuid.isEmpty() ||
+            transactionUuid.isEmpty() || (request.imageId <= 0) ||
+            (normalizedUuid(request.categoryUuid) != categoryUuid) ||
+            (normalizedUuid(request.groupUuid) != groupUuid) ||
+            itemUuids.contains(itemUuid) ||
+            transactionUuids.contains(transactionUuid) ||
+            imageIds.contains(request.imageId))
+        {
+            batch.detail = QStringLiteral(
+                "grouped Compatibility Unlock members conflict");
+            return batch;
+        }
+
+        itemUuids.insert(itemUuid);
+        transactionUuids.insert(transactionUuid);
+        imageIds.insert(request.imageId);
+    }
+
+    for (int index = 0 ; index < requests.size() ; ++index)
+    {
+        const PrivacyStillItemTransactionResult item =
+            compatibilityUnlock(requests.at(index), password);
+        batch.itemResults.append(item);
+        batch.processedCount = index + 1;
+
+        if (progress)
+        {
+            progress(batch.processedCount, batch.requestedCount);
+        }
+
+        if (item.succeeded())
+        {
+            continue;
+        }
+
+        PrivacyRepositorySnapshot snapshot;
+        const bool loaded = d->persistence.loadSnapshot(&snapshot);
+        QSet<QString> activeTransactionUuids;
+
+        if (loaded)
+        {
+            for (const PrivacyTransaction& transaction :
+                 std::as_const(snapshot.transactions))
+            {
+                if (transaction.isActive() &&
+                    transactionUuids.contains(transaction.uuid))
+                {
+                    activeTransactionUuids.insert(transaction.uuid);
+                }
+            }
+        }
+
+        QList<PrivacyCompatibilityRelockRequest> rollbackRequests;
+
+        for (int rollbackIndex = index ; rollbackIndex >= 0 ; --rollbackIndex)
+        {
+            const PrivacyCompatibilityUnlockRequest& request =
+                requests.at(rollbackIndex);
+
+            if (loaded &&
+                !activeTransactionUuids.contains(request.transactionUuid))
+            {
+                continue;
+            }
+
+            PrivacyCompatibilityRelockRequest rollback;
+            rollback.transactionUuid = request.transactionUuid;
+            rollback.publicRoot = request.publicRoot;
+            rollback.rootExpectation = request.rootExpectation;
+            rollbackRequests.append(rollback);
+        }
+
+        const PrivacyCompatibilityBatchResult rolledBack =
+            compatibilityRelockBatch(rollbackRequests);
+        batch.rollbackResults = rolledBack.itemResults;
+        batch.remainingExposureCount = rolledBack.remainingExposureCount;
+
+        if (!loaded || (batch.remainingExposureCount > 0))
+        {
+            batch.status = std::any_of(
+                batch.rollbackResults.cbegin(), batch.rollbackResults.cend(),
+                [](const PrivacyStillItemTransactionResult& result)
+                {
+                    return (result.status ==
+                            PrivacyStillItemTransactionStatus::
+                                ReconciliationRequired);
+                })
+                ? PrivacyStillItemTransactionStatus::ReconciliationRequired
+                : PrivacyStillItemTransactionStatus::RecoveryRequired;
+            batch.detail = QStringLiteral(
+                "Compatibility Unlock stopped after %1 of %2 items; "
+                "%3 exposure(s) still require recovery")
+                               .arg(batch.processedCount)
+                               .arg(batch.requestedCount)
+                               .arg(batch.remainingExposureCount);
+        }
+        else
+        {
+            batch.status = item.status;
+            batch.detail = QStringLiteral(
+                "Compatibility Unlock stopped after %1 of %2 items; "
+                "every started exposure was safely relocked: %3")
+                               .arg(batch.processedCount)
+                               .arg(batch.requestedCount)
+                               .arg(item.detail);
+        }
+
+        return batch;
+    }
+
+    batch.status = PrivacyStillItemTransactionStatus::CompatibilityUnlocked;
+    batch.remainingExposureCount = batch.requestedCount;
+    return batch;
+}
+
+PrivacyCompatibilityBatchResult
+PrivacyStillItemTransactionEngine::compatibilityRelockBatch(
+    const QList<PrivacyCompatibilityRelockRequest>& requests,
+    const CompatibilityBatchProgress& progress)
+{
+    PrivacyCompatibilityBatchResult batch;
+    batch.requestedCount = requests.size();
+
+    if (requests.isEmpty())
+    {
+        batch.detail = QStringLiteral(
+            "the grouped Compatibility Relock request is empty");
+        return batch;
+    }
+
+    QSet<QString> transactionUuids;
+
+    for (const PrivacyCompatibilityRelockRequest& request : requests)
+    {
+        const QString transactionUuid = normalizedUuid(request.transactionUuid);
+
+        if (transactionUuid.isEmpty() ||
+            transactionUuids.contains(transactionUuid) ||
+            !request.publicRoot.isValid())
+        {
+            batch.detail = QStringLiteral(
+                "grouped Compatibility Relock members conflict");
+            return batch;
+        }
+
+        transactionUuids.insert(transactionUuid);
+    }
+
+    bool reconciliationRequired = false;
+
+    for (const PrivacyCompatibilityRelockRequest& request : requests)
+    {
+        const PrivacyStillItemTransactionResult guarded =
+            PrivacyCompatibilityExposureGuardEngine::relock(
+                request.publicRoot, request.rootExpectation,
+                request.transactionUuid);
+        PrivacyStillItemTransactionResult settled = recover(
+            request.publicRoot, request.transactionUuid);
+
+        if (!settled.succeeded() && settled.detail.isEmpty())
+        {
+            settled.detail = guarded.detail;
+        }
+
+        reconciliationRequired = reconciliationRequired ||
+            (guarded.status ==
+             PrivacyStillItemTransactionStatus::ReconciliationRequired) ||
+            (settled.status ==
+             PrivacyStillItemTransactionStatus::ReconciliationRequired);
+        batch.itemResults.append(settled);
+        ++batch.processedCount;
+
+        if (!settled.succeeded())
+        {
+            ++batch.remainingExposureCount;
+        }
+
+        if (progress)
+        {
+            progress(batch.processedCount, batch.requestedCount);
+        }
+    }
+
+    if (batch.remainingExposureCount == 0)
+    {
+        batch.status = PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+    }
+    else
+    {
+        batch.status = reconciliationRequired
+                     ? PrivacyStillItemTransactionStatus::ReconciliationRequired
+                     : PrivacyStillItemTransactionStatus::RecoveryRequired;
+        batch.detail = QStringLiteral(
+            "%1 of %2 Compatibility exposure(s) still require recovery")
+                           .arg(batch.remainingExposureCount)
+                           .arg(batch.requestedCount);
+    }
+
+    return batch;
 }
 
 

@@ -29,7 +29,9 @@
 #include <QMessageBox>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QPointer>
 #include <QSharedPointer>
+#include <QSet>
 #include <QTableWidget>
 #include <QVBoxLayout>
 #include <QtConcurrentRun>
@@ -51,6 +53,7 @@
 #include "privacypassword.h"
 #include "privacyrepository.h"
 #include "privacyruntime.h"
+#include "privacythreadimagestillitemtransactionowner.h"
 
 namespace Digikam
 {
@@ -195,6 +198,36 @@ QString provisionFailureText(const PrivacyManagedRootProvisionResult& result)
     return i18nc("@info", "The selected folder cannot be used as a category store root.");
 }
 
+QString compatibilityFailureText(const PrivacyCompatibilityBatchResult& result)
+{
+    if (!result.detail.isEmpty())
+    {
+        return result.detail;
+    }
+
+    switch (result.status)
+    {
+        case PrivacyStillItemTransactionStatus::AuthenticationRequired:
+            return i18nc("@info", "The category password was not accepted.");
+
+        case PrivacyStillItemTransactionStatus::RootUnavailable:
+            return i18nc("@info",
+                         "One or more collection roots are offline or could not "
+                         "be safely verified.");
+
+        case PrivacyStillItemTransactionStatus::ReconciliationRequired:
+            return i18nc("@info",
+                         "Externally changed content was preserved and requires "
+                         "explicit reconciliation before its proxy can be restored.");
+
+        default:
+            break;
+    }
+
+    return i18nc("@info",
+                 "The Compatibility operation could not be completed safely.");
+}
+
 } // namespace
 
 class PrivacyCategorySettingsDialog::Private
@@ -204,7 +237,8 @@ public:
     explicit Private(PrivacyCategorySettingsDialog* const dialog)
         : q(dialog),
           sessions(PrivacyStartupRecovery::categorySessions()),
-          runtime(PrivacyStartupRecovery::coordinator())
+          runtime(PrivacyStartupRecovery::coordinator()),
+          transactions(PrivacyThreadImageIOStillItemTransactionOwner::current())
     {
     }
 
@@ -252,12 +286,16 @@ public:
         tagVisibilityButton = new QPushButton(
             QIcon::fromTheme(QLatin1String("tag")),
             i18nc("@action:button", "Tag Visibility..."), q);
+        compatibilityButton = new QPushButton(
+            QIcon::fromTheme(QLatin1String("document-decrypt")),
+            i18nc("@action:button", "Compatibility Unlock..."), q);
         lockAllButton = new QPushButton(
             QIcon::fromTheme(QLatin1String("object-locked")),
             i18nc("@action:button", "Lock All"), q);
         actionLayout->addWidget(createButton);
         actionLayout->addWidget(sessionButton);
         actionLayout->addWidget(tagVisibilityButton);
+        actionLayout->addWidget(compatibilityButton);
         actionLayout->addWidget(lockAllButton);
         actionLayout->addStretch(1);
         layout->addLayout(actionLayout);
@@ -277,6 +315,8 @@ public:
                          q, [this]() { runSelectedCategoryAction(); });
         QObject::connect(tagVisibilityButton, &QPushButton::clicked,
                          q, [this]() { editTagVisibility(); });
+        QObject::connect(compatibilityButton, &QPushButton::clicked,
+                         q, [this]() { runCompatibilityAction(); });
         QObject::connect(lockAllButton, &QPushButton::clicked,
                          q, [this]() { lockAll(); });
         QObject::connect(table, &QTableWidget::itemSelectionChanged,
@@ -327,10 +367,31 @@ public:
                   });
 
         QHash<QString, int> itemCounts;
+        QHash<QString, int> compatibilityCounts;
+        QSet<QString> compatibilityReconciliation;
 
         for (const PrivacyItem& item : std::as_const(snapshot.items))
         {
             ++itemCounts[item.categoryUuid];
+        }
+
+        for (const PrivacyTransaction& transaction :
+             std::as_const(snapshot.transactions))
+        {
+            if (!transaction.isActive() ||
+                (transaction.type !=
+                 PrivacyTransactionType::CompatibilityUnlock))
+            {
+                continue;
+            }
+
+            ++compatibilityCounts[transaction.categoryUuid];
+
+            if (transaction.state ==
+                PrivacyTransactionState::NeedsReconciliation)
+            {
+                compatibilityReconciliation.insert(transaction.categoryUuid);
+            }
         }
 
         QHash<QString, PrivacyStore> storesByCategory;
@@ -367,9 +428,25 @@ public:
             }
             else
             {
-                sessionText = (sessions && sessions->ownsSecret(category.uuid))
-                            ? i18nc("@item:inlistbox", "Unlocked")
-                            : i18nc("@item:inlistbox", "Locked");
+                const int compatibilityCount =
+                    compatibilityCounts.value(category.uuid);
+
+                if (compatibilityCount > 0)
+                {
+                    sessionText = compatibilityReconciliation.contains(category.uuid)
+                        ? i18ncp("@item:inlistbox", "%1 Compatibility item needs attention",
+                                 "%1 Compatibility items need attention",
+                                 compatibilityCount)
+                        : i18ncp("@item:inlistbox", "%1 Compatibility item exposed",
+                                 "%1 Compatibility items exposed",
+                                 compatibilityCount);
+                }
+                else
+                {
+                    sessionText = (sessions && sessions->ownsSecret(category.uuid))
+                                ? i18nc("@item:inlistbox", "Unlocked")
+                                : i18nc("@item:inlistbox", "Locked");
+                }
 
                 if (runtime && root.isValid())
                 {
@@ -498,6 +575,11 @@ public:
         sessionButton->setEnabled(false);
         sessionButton->setIcon(QIcon());
         tagVisibilityButton->setEnabled(false);
+        compatibilityButton->setEnabled(false);
+        compatibilityButton->setIcon(
+            QIcon::fromTheme(QLatin1String("document-decrypt")));
+        compatibilityButton->setText(
+            i18nc("@action:button", "Compatibility Unlock..."));
 
         if (busy || !sessions || !category)
         {
@@ -529,6 +611,38 @@ public:
                      : QLatin1String("object-unlocked")));
         sessionButton->setEnabled(true);
         tagVisibilityButton->setEnabled(!runtime.isNull());
+
+        if (transactions)
+        {
+            const PrivacyCompatibilityCategoryContext context =
+                transactions->compatibilityContextForCategory(category->uuid);
+
+            switch (context.availability)
+            {
+                case PrivacyCompatibilityActionAvailability::Unlockable:
+                    compatibilityButton->setEnabled(true);
+                    break;
+
+                case PrivacyCompatibilityActionAvailability::Relockable:
+                    compatibilityButton->setText(
+                        i18nc("@action:button", "Relock Compatibility Originals"));
+                    compatibilityButton->setIcon(
+                        QIcon::fromTheme(QLatin1String("document-encrypt")));
+                    compatibilityButton->setEnabled(true);
+                    break;
+
+                case PrivacyCompatibilityActionAvailability::ReconciliationRequired:
+                    compatibilityButton->setText(
+                        i18nc("@action:button", "Compatibility Attention..."));
+                    compatibilityButton->setIcon(
+                        QIcon::fromTheme(QLatin1String("dialog-warning")));
+                    compatibilityButton->setEnabled(true);
+                    break;
+
+                case PrivacyCompatibilityActionAvailability::Unavailable:
+                    break;
+            }
+        }
     }
 
     void setBusy(bool value)
@@ -987,6 +1101,186 @@ public:
                        i18nc("@info", "The private tag visibility setting was updated."));
     }
 
+    void runCompatibilityAction()
+    {
+        const PrivacyCategory* const selected = selectedCategory();
+
+        if (!transactions || !sessions || busy || !selected ||
+            (selected->lifecycleState != PrivacyCategoryLifecycleState::Active))
+        {
+            return;
+        }
+
+        const PrivacyCategory category = *selected;
+        const PrivacyCompatibilityCategoryContext context =
+            transactions->compatibilityContextForCategory(category.uuid);
+        const bool unlocking =
+            (context.availability ==
+             PrivacyCompatibilityActionAvailability::Unlockable);
+        const bool relocking =
+            (context.availability ==
+             PrivacyCompatibilityActionAvailability::Relockable) ||
+            (context.availability ==
+             PrivacyCompatibilityActionAvailability::ReconciliationRequired);
+
+        if (!unlocking && !relocking)
+        {
+            return;
+        }
+
+        QString password;
+
+        if (unlocking)
+        {
+            const QMessageBox::StandardButton confirmed = QMessageBox::warning(
+                q, i18nc("@title:window", "Compatibility Unlock Category"),
+                i18ncp("@info",
+                       "Compatibility Unlock will place the original for %1 "
+                       "protected item back at its normal public filesystem path.",
+                       "Compatibility Unlock will place the originals for %1 "
+                       "protected items back at their normal public filesystem paths.",
+                       context.protectedItemCount) + QLatin1String("\n\n") +
+                i18nc("@info",
+                      "Other applications, plugins and synchronization tools can "
+                      "then view, copy or modify those originals. Screen lock and "
+                      "system suspend will not relock them because another program "
+                      "may still be using the files. A power loss, or failure of both "
+                      "digiKam and its guard, can leave originals exposed until the "
+                      "next startup recovery. Externally changed content will be "
+                      "preserved for reconciliation rather than overwritten."),
+                QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
+
+            if (confirmed != QMessageBox::Ok)
+            {
+                return;
+            }
+
+            if (!sessions->ownsSecret(category.uuid))
+            {
+                bool accepted = false;
+                password = QInputDialog::getText(
+                    q, i18nc("@title:window", "Unlock Privacy Category"),
+                    i18nc("@label", "Password for %1:", category.name),
+                    QLineEdit::Password, QString(), &accepted);
+
+                if (!accepted)
+                {
+                    wipe(password);
+                    return;
+                }
+            }
+        }
+
+        setBusy(true);
+        auto* const progressDialog = new QProgressDialog(
+            unlocking
+                ? i18nc("@info:progress",
+                        "Preparing public originals for Compatibility access...")
+                : i18nc("@info:progress",
+                        "Relocking Compatibility originals..."),
+            QString(), 0, qMax(1, unlocking ? context.protectedItemCount
+                                            : context.activeExposureCount), q);
+        progressDialog->setWindowTitle(
+            unlocking
+                ? i18nc("@title:window", "Compatibility Unlock")
+                : i18nc("@title:window", "Compatibility Relock"));
+        progressDialog->setCancelButton(nullptr);
+        progressDialog->setWindowModality(Qt::WindowModal);
+        progressDialog->setMinimumDuration(0);
+        progressDialog->setValue(0);
+        progressDialog->show();
+        const QPointer<QProgressDialog> guardedProgress(progressDialog);
+        const PrivacyThreadImageIOStillItemTransactionOwner::CompatibilityProgress
+            progress =
+            [dialog = QPointer<PrivacyCategorySettingsDialog>(q),
+             guardedProgress](int completed, int total)
+            {
+                if (!dialog)
+                {
+                    return;
+                }
+
+                QMetaObject::invokeMethod(
+                    dialog,
+                    [guardedProgress, completed, total]()
+                    {
+                        if (guardedProgress)
+                        {
+                            guardedProgress->setMaximum(qMax(1, total));
+                            guardedProgress->setValue(completed);
+                        }
+                    },
+                    Qt::QueuedConnection);
+            };
+        const QSharedPointer<QString> secret =
+            QSharedPointer<QString>::create(std::move(password));
+        const QSharedPointer<PrivacyThreadImageIOStillItemTransactionOwner> owner =
+            transactions;
+        auto* const watcher =
+            new QFutureWatcher<PrivacyCompatibilityBatchResult>(q);
+        QObject::connect(
+            watcher,
+            &QFutureWatcher<PrivacyCompatibilityBatchResult>::finished,
+            q, [this, watcher, progressDialog, unlocking]()
+        {
+            const PrivacyCompatibilityBatchResult result = watcher->result();
+            watcher->deleteLater();
+            progressDialog->deleteLater();
+            setBusy(false);
+            reload();
+
+            if (result.succeeded())
+            {
+                statusLabel->setText(
+                    unlocking
+                        ? i18ncp("@info",
+                                 "Compatibility Unlock is active for %1 item. "
+                                 "Use Relock Compatibility Originals when finished.",
+                                 "Compatibility Unlock is active for %1 items. "
+                                 "Use Relock Compatibility Originals when finished.",
+                                 result.requestedCount)
+                        : i18ncp("@info",
+                                 "%1 Compatibility original was safely relocked.",
+                                 "%1 Compatibility originals were safely relocked.",
+                                 result.requestedCount));
+            }
+            else
+            {
+                QMessageBox::warning(
+                    q,
+                    unlocking
+                        ? i18nc("@title:window", "Compatibility Unlock Incomplete")
+                        : i18nc("@title:window", "Compatibility Relock Incomplete"),
+                    compatibilityFailureText(result));
+            }
+        });
+        watcher->setFuture(QtConcurrent::run(
+            [owner, category, secret, progress, unlocking]()
+            {
+                PrivacyCompatibilityBatchResult result;
+
+                try
+                {
+                    result = unlocking
+                           ? owner->compatibilityUnlockCategory(
+                                 category.uuid, *secret, progress)
+                           : owner->compatibilityRelockCategory(
+                                 category.uuid, progress);
+                }
+                catch (...)
+                {
+                    result.status =
+                        PrivacyStillItemTransactionStatus::RecoveryRequired;
+                    result.detail = QStringLiteral(
+                        "The Compatibility operation stopped unexpectedly; "
+                        "its exact journals remain available for recovery");
+                }
+
+                wipe(*secret);
+                return result;
+            }));
+    }
+
     void lockAll()
     {
         if (!sessions || busy)
@@ -1017,6 +1311,14 @@ public:
             progress->deleteLater();
             setBusy(false);
             reload();
+            const int compatibilityExposureCount = std::count_if(
+                snapshot.transactions.cbegin(), snapshot.transactions.cend(),
+                [](const PrivacyTransaction& transaction)
+                {
+                    return (transaction.isActive() &&
+                            (transaction.type ==
+                             PrivacyTransactionType::CompatibilityUnlock));
+                });
             const bool failed = std::any_of(
                 results.cbegin(), results.cend(),
                 [](const PrivacyCategorySessionResult& result)
@@ -1029,6 +1331,16 @@ public:
                 QMessageBox::warning(
                     q, i18nc("@title:window", "Lock All Incomplete"),
                     i18nc("@info", "One or more privacy categories could not be safely locked."));
+            }
+            else if (compatibilityExposureCount > 0)
+            {
+                statusLabel->setText(i18ncp(
+                    "@info",
+                    "Ordinary category sessions are locked, but %1 Compatibility "
+                    "original remains publicly exposed until explicitly relocked.",
+                    "Ordinary category sessions are locked, but %1 Compatibility "
+                    "originals remain publicly exposed until explicitly relocked.",
+                    compatibilityExposureCount));
             }
             else
             {
@@ -1057,12 +1369,14 @@ public:
     PrivacyCategorySettingsDialog* q = nullptr;
     QSharedPointer<PrivacyCategorySessionOwner> sessions;
     QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+    QSharedPointer<PrivacyThreadImageIOStillItemTransactionOwner> transactions;
     PrivacyRepositorySnapshot snapshot;
     QList<PrivacyCategory> categories;
     QTableWidget* table = nullptr;
     QPushButton* createButton = nullptr;
     QPushButton* sessionButton = nullptr;
     QPushButton* tagVisibilityButton = nullptr;
+    QPushButton* compatibilityButton = nullptr;
     QPushButton* lockAllButton = nullptr;
     QLabel* statusLabel = nullptr;
     QDialogButtonBox* buttonBox = nullptr;

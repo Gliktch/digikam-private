@@ -73,6 +73,24 @@ public:
     QString detail;
 };
 
+class DIGIKAM_DATABASE_EXPORT PrivacyCompatibilityBatchResult
+{
+public:
+
+    bool succeeded() const;
+
+public:
+
+    PrivacyStillItemTransactionStatus status =
+        PrivacyStillItemTransactionStatus::InvalidRequest;
+    int requestedCount = 0;
+    int processedCount = 0;
+    int remainingExposureCount = 0;
+    QList<PrivacyStillItemTransactionResult> itemResults;
+    QList<PrivacyStillItemTransactionResult> rollbackResults;
+    QString detail;
+};
+
 /**
  * Password- and database-independent emergency relock for one exact
  * Compatibility Unlock journal. This is the narrow filesystem authority used
@@ -130,6 +148,15 @@ public:
     QString itemUuid;
     QString transactionUuid;
     QString groupUuid;
+    PrivacyStorageRoot publicRoot;
+    PrivacyJournalRootExpectation rootExpectation;
+};
+
+class DIGIKAM_DATABASE_EXPORT PrivacyCompatibilityRelockRequest
+{
+public:
+
+    QString transactionUuid;
     PrivacyStorageRoot publicRoot;
     PrivacyJournalRootExpectation rootExpectation;
 };
@@ -257,6 +284,7 @@ public:
         const PrivacyJournalRootExpectation&,
         const QString&,
         QString*)>;
+    using CompatibilityBatchProgress = std::function<void(int, int)>;
 
     PrivacyStillItemTransactionEngine(
         PrivacyStillItemPersistence& persistence,
@@ -276,6 +304,13 @@ public:
     PrivacyStillItemTransactionResult compatibilityUnlock(
         const PrivacyCompatibilityUnlockRequest& request,
         const PrivacyPassword& password);
+    PrivacyCompatibilityBatchResult compatibilityUnlockBatch(
+        const QList<PrivacyCompatibilityUnlockRequest>& requests,
+        const PrivacyPassword& password,
+        const CompatibilityBatchProgress& progress = {});
+    PrivacyCompatibilityBatchResult compatibilityRelockBatch(
+        const QList<PrivacyCompatibilityRelockRequest>& requests,
+        const CompatibilityBatchProgress& progress = {});
 
     /**
      * Resumes one exact durable transaction without a retained password.

@@ -152,6 +152,7 @@ private Q_SLOTS:
     void testCreateCategoryHeaderOnlyCodec();
     void testCodecRejectsMalformedAndCollidingRecords();
     void testCreateAndEveryMonotonicStage();
+    void testTransactionEnumeration();
     void testCompareAndUpdateGuards();
     void testCrashPointsPreserveVerifiedJournal();
     void testInterruptedCreateOffersOnlyRecoveryCandidate();
@@ -237,6 +238,35 @@ void PrivacyTransactionJournalTest::testCreateCategoryHeaderOnlyCodec()
     QVERIFY(PrivacyTransactionJournalCodec::validate(record));
     record.toCredentialGeneration = -1;
     QVERIFY(!PrivacyTransactionJournalCodec::validate(record));
+}
+
+void PrivacyTransactionJournalTest::testTransactionEnumeration()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    PrivacyJournalRootExpectation expectation;
+    auto store = openStore(root.path(), &expectation);
+    QStringList transactionUuids;
+    PrivacyJournalError error = PrivacyJournalError::None;
+    QString detail;
+
+    QVERIFY2(store->transactionUuids(&transactionUuids, &error, &detail),
+             qPrintable(detail));
+    QVERIFY(transactionUuids.isEmpty());
+
+    PrivacyJournalRecord first = makeRecord(*store, expectation);
+    QVERIFY(store->create(first, nullptr, &error, &detail));
+    PrivacyJournalRecord second = first;
+    second.transactionUuid = QStringLiteral(
+        "99999999-9999-4999-8999-999999999999");
+    QVERIFY(store->create(second, nullptr, &error, &detail));
+    QVERIFY(QDir(root.path() + QStringLiteral(
+        "/.digikam-private/transactions")).mkdir(QStringLiteral("not-a-uuid")));
+
+    QVERIFY2(store->transactionUuids(&transactionUuids, &error, &detail),
+             qPrintable(detail));
+    QCOMPARE(transactionUuids,
+             QStringList({ TransactionUuid, second.transactionUuid }));
 }
 
 void PrivacyTransactionJournalTest::testCodecRejectsMalformedAndCollidingRecords()

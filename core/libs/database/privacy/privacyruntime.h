@@ -86,6 +86,13 @@ public:
     virtual bool loadReconciledSnapshot(
         PrivacyRepositorySnapshot* snapshot) const;
 
+    /// Gives the recovery owner one orderly-exit opportunity to restore any
+    /// intentionally exposed public originals before runtime state is reset.
+    virtual bool prepareForShutdown() const
+    {
+        return true;
+    }
+
 private:
 
     Q_DISABLE_COPY(PrivacyTransactionRecovery)
@@ -204,6 +211,7 @@ public:
         const QSharedPointer<const PrivacyTransactionRecovery>& recovery,
         const QSharedPointer<const PrivacyRootIntegrityInspector>& integrityInspector);
     void reset();
+    bool prepareForShutdown() const;
 
     /// Snapshot of the most recent startup initialization. Root state/epoch
     /// accessors are authoritative after reconnect transitions.

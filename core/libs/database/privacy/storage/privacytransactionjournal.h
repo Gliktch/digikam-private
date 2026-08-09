@@ -220,6 +220,15 @@ public:
 
     PrivacyJournalLoadResult load(const QString& transactionUuid) const;
 
+    /**
+     * Lists canonical transaction UUID directories beneath the already
+     * verified root. Unexpected directory entries are ignored; each returned
+     * UUID must still be loaded and validated before its journal is trusted.
+     */
+    bool transactionUuids(QStringList* transactionUuids,
+                          PrivacyJournalError* error = nullptr,
+                          QString* detail = nullptr) const;
+
     bool create(const PrivacyJournalRecord& record,
                 QByteArray* publishedSha256 = nullptr,
                 PrivacyJournalError* error = nullptr,

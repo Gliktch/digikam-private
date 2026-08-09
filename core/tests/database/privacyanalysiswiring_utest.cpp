@@ -164,9 +164,20 @@ void PrivacyAnalysisWiringTest::testCompatibilityActionsUseTransactionOwner()
         "core/app/main/privacythreadimagestillitemtransactionowner.cpp"));
     const QString itemView = source(QStringLiteral(
         "core/app/views/stack/itemiconview_views.cpp"));
+    const QString settings = source(QStringLiteral(
+        "core/app/main/privacycategorysettingsdialog.cpp"));
+    const QString guard = source(QStringLiteral(
+        "core/app/main/privacycompatibilityguard_main.cpp"));
+    const QString runtime = source(QStringLiteral(
+        "core/libs/database/privacy/privacyruntime.cpp"));
+    const QString main = source(QStringLiteral("core/app/main/main.cpp"));
 
     QVERIFY2(!owner.isEmpty(), "Unable to read still-item transaction owner");
     QVERIFY2(!itemView.isEmpty(), "Unable to read item-view action source");
+    QVERIFY2(!settings.isEmpty(), "Unable to read category settings source");
+    QVERIFY2(!guard.isEmpty(), "Unable to read Compatibility guard source");
+    QVERIFY2(!runtime.isEmpty(), "Unable to read privacy runtime source");
+    QVERIFY2(!main.isEmpty(), "Unable to read application main source");
     QVERIFY(owner.contains(QStringLiteral(
         "d->engine.compatibilityUnlock(request, password)")));
     QVERIFY(owner.contains(QStringLiteral(
@@ -176,6 +187,12 @@ void PrivacyAnalysisWiringTest::testCompatibilityActionsUseTransactionOwner()
     QVERIFY(owner.contains(QStringLiteral(
         "d->engine.recover(*root, unlock->uuid)")));
     QVERIFY(owner.contains(QStringLiteral("runWithUnlockedSecret(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->engine.compatibilityUnlockBatch(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->engine.compatibilityRelockBatch(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "compatibilityGuardProcesses.value(root.uuid)")));
     QVERIFY(itemView.contains(QStringLiteral(
         "privacyOwner->compatibilityUnlock(")));
     QVERIFY(itemView.contains(QStringLiteral(
@@ -186,6 +203,35 @@ void PrivacyAnalysisWiringTest::testCompatibilityActionsUseTransactionOwner()
     QVERIFY(itemView.contains(QStringLiteral("crash or power loss")));
     QVERIFY(itemView.contains(QStringLiteral(
         "preserve it and require reconciliation rather than overwrite")));
+    QVERIFY(settings.contains(QStringLiteral(
+        "owner->compatibilityUnlockCategory(")));
+    QVERIFY(settings.contains(QStringLiteral(
+        "owner->compatibilityRelockCategory(")));
+    QVERIFY(settings.contains(QStringLiteral("Screen lock and ")));
+    QVERIFY(settings.contains(QStringLiteral(
+        "system suspend will not relock them")));
+    QVERIFY(settings.contains(QStringLiteral("failure of both ")));
+    QVERIFY(settings.contains(QStringLiteral(
+        "digiKam and its guard")));
+    QVERIFY(settings.contains(QStringLiteral(
+        "remain publicly exposed until explicitly relocked")));
+    QVERIFY(guard.contains(QStringLiteral("all-compatibility")));
+    QVERIFY(guard.contains(QStringLiteral("store->transactionUuids(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "PrivacyThreadImageIOStillItemTransactionOwner::prepareForShutdown()")));
+    QVERIFY(owner.contains(QStringLiteral("compatibilityRelockAll().succeeded()")));
+    const int orderlyRelock = runtime.indexOf(QStringLiteral(
+        "shutdownRuntime->prepareForShutdown()"));
+    const int replacementRuntime = runtime.indexOf(QStringLiteral(
+        "new PrivacyRuntimeCoordinator"), orderlyRelock);
+    const int privacyReset = main.indexOf(QStringLiteral(
+        "PrivacyStartupRecovery::reset()"));
+    const int databaseCleanup = main.indexOf(QStringLiteral(
+        "CoreDbAccess::cleanUpDatabase()"), privacyReset);
+    QVERIFY(orderlyRelock >= 0);
+    QVERIFY(replacementRuntime > orderlyRelock);
+    QVERIFY(privacyReset >= 0);
+    QVERIFY(databaseCleanup > privacyReset);
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)

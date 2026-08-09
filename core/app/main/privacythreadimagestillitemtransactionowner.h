@@ -65,6 +65,16 @@ public:
     QString compatibilityUnlockTransactionUuid;
 };
 
+class PrivacyCompatibilityCategoryContext
+{
+public:
+
+    PrivacyCompatibilityActionAvailability availability =
+        PrivacyCompatibilityActionAvailability::Unavailable;
+    int protectedItemCount = 0;
+    int activeExposureCount = 0;
+};
+
 class PrivacyThreadImageIOStillItemTransactionOwner final
     : public PrivacyTransactionRecovery
 {
@@ -72,6 +82,7 @@ public:
 
     using ProtectAcknowledgement =
         std::function<bool(const PrivacyProtectPreflightResult&)>;
+    using CompatibilityProgress = std::function<void(int, int)>;
 
     static DIGIKAM_GUI_EXPORT QSharedPointer<const PrivacyTransactionRecovery> create(
         PrivacyRuntimeCoordinator& runtime);
@@ -80,6 +91,8 @@ public:
     ~PrivacyThreadImageIOStillItemTransactionOwner() override;
 
     PrivacyStillItemActionContext actionContextForImage(qlonglong imageId) const;
+    PrivacyCompatibilityCategoryContext compatibilityContextForCategory(
+        const QString& categoryUuid) const;
     bool categoryIsUnlocked(const QString& categoryUuid) const;
 
     PrivacyStillItemTransactionResult protect(
@@ -96,6 +109,15 @@ public:
     PrivacyStillItemTransactionResult compatibilityRelock(
         const ItemInfo& info,
         const QString& unlockTransactionUuid);
+    PrivacyCompatibilityBatchResult compatibilityUnlockCategory(
+        const QString& categoryUuid,
+        const QString& passwordText,
+        const CompatibilityProgress& progress = {});
+    PrivacyCompatibilityBatchResult compatibilityRelockCategory(
+        const QString& categoryUuid,
+        const CompatibilityProgress& progress = {}) const;
+    PrivacyCompatibilityBatchResult compatibilityRelockAll(
+        const CompatibilityProgress& progress = {}) const;
     PrivacyStillItemTransactionResult resume(
         qlonglong imageId,
         const QString& transactionUuid,
@@ -107,6 +129,7 @@ public:
         const QList<PrivacyTransactionJournal>& journals) const override;
     bool loadReconciledSnapshot(
         PrivacyRepositorySnapshot* snapshot) const override;
+    bool prepareForShutdown() const override;
 
 private:
 

@@ -756,6 +756,8 @@ MAIN_EXPORT int MAIN_FN(int argc, char** argv)
 
     int ret = app.exec();
 
+    PrivacyStartupRecovery::reset();
+
     CoreDbAccess::cleanUpDatabase();
     ThumbsDbAccess::cleanUpDatabase();
     FaceDbAccess::cleanUpDatabase();

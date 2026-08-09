@@ -1859,6 +1859,24 @@ void PrivacyRuntimeCoordinator::reset()
     d->initialized = false;
 }
 
+bool PrivacyRuntimeCoordinator::prepareForShutdown() const
+{
+    QSharedPointer<const PrivacyTransactionRecovery> recovery;
+
+    {
+        QReadLocker locker(&d->lock);
+
+        if (!d->initialized)
+        {
+            return true;
+        }
+
+        recovery = d->recovery;
+    }
+
+    return !recovery || recovery->prepareForShutdown();
+}
+
 PrivacyStartupReport PrivacyRuntimeCoordinator::report() const
 {
     QReadLocker locker(&d->lock);
@@ -4392,6 +4410,20 @@ void PrivacyStartupRecovery::setTransactionRecoveryFactory(
 
 void PrivacyStartupRecovery::reset()
 {
+    QSharedPointer<PrivacyRuntimeCoordinator> shutdownRuntime;
+
+    {
+        QReadLocker locker(&startupData->lock);
+        shutdownRuntime = startupData->coordinator;
+    }
+
+    // Do not hold startupData->lock here: the recovery owner verifies the
+    // current runtime composition while it relocks Compatibility originals.
+    if (shutdownRuntime)
+    {
+        shutdownRuntime->prepareForShutdown();
+    }
+
     QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
     PrivacyScanGate::setProvider(runtime);
     PrivacyAnalysisGate::setProvider(runtime);

@@ -13,12 +13,14 @@
 // C++ includes
 
 #include <algorithm>
+#include <cerrno>
 #include <utility>
 
 // POSIX includes
 
 #if defined(Q_OS_UNIX)
 #   include <fcntl.h>
+#   include <signal.h>
 #   include <sys/stat.h>
 #   include <unistd.h>
 #endif
@@ -30,6 +32,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QHash>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QProcess>
@@ -96,12 +99,12 @@ QString newUuid()
 bool launchCompatibilityGuard(
     const PrivacyStorageRoot& root,
     const PrivacyJournalRootExpectation& expectation,
-    const QString& transactionUuid, QString* const detail)
+    qint64* const processId, QString* const detail)
 {
 #if !defined(Q_OS_LINUX)
     Q_UNUSED(root);
     Q_UNUSED(expectation);
-    Q_UNUSED(transactionUuid);
+    Q_UNUSED(processId);
 
     if (detail)
     {
@@ -111,9 +114,8 @@ bool launchCompatibilityGuard(
 
     return false;
 #else
-    if (!detail || !root.isValid() ||
-        (root.kind != PrivacyStorageRootKind::AlbumRoot) ||
-        transactionUuid.isEmpty())
+    if (!processId || !detail || !root.isValid() ||
+        (root.kind != PrivacyStorageRootKind::AlbumRoot))
     {
         return false;
     }
@@ -167,14 +169,14 @@ bool launchCompatibilityGuard(
         QString::number(expectation.inode),
         QStringLiteral("--ready-file"), readyPath,
         QStringLiteral("--ready-token"), readyToken,
-        QStringLiteral("--transaction-uuid"), transactionUuid
+        QStringLiteral("--all-compatibility")
     });
     guard.setWorkingDirectory(QCoreApplication::applicationDirPath());
     guard.setStandardOutputFile(QProcess::nullDevice());
     guard.setStandardErrorFile(QProcess::nullDevice());
-    qint64 processId = 0;
+    qint64 launchedProcessId = 0;
 
-    if (!guard.startDetached(&processId) || (processId <= 0))
+    if (!guard.startDetached(&launchedProcessId) || (launchedProcessId <= 0))
     {
         QFile::remove(readyPath);
         *detail = guard.errorString().isEmpty()
@@ -210,7 +212,31 @@ bool launchCompatibilityGuard(
         return false;
     }
 
+    *processId = launchedProcessId;
     return true;
+#endif
+}
+
+bool processIsRunning(qint64 processId)
+{
+#if !defined(Q_OS_LINUX)
+    Q_UNUSED(processId);
+    return false;
+#else
+    if ((processId <= 0) ||
+        ((::kill(static_cast<pid_t>(processId), 0) != 0) &&
+         (errno != EPERM)))
+    {
+        return false;
+    }
+
+    const QString expected = QFileInfo(
+        QDir(QCoreApplication::applicationDirPath()).filePath(
+            QStringLiteral("digikam-private-guard"))).canonicalFilePath();
+    const QString actual = QFileInfo(
+        QStringLiteral("/proc/%1/exe").arg(processId)).symLinkTarget();
+
+    return (!expected.isEmpty() && (QDir::cleanPath(actual) == expected));
 #endif
 }
 
@@ -220,6 +246,17 @@ PrivacyStillItemTransactionResult actionFailure(
     PrivacyStillItemTransactionResult result;
     result.status = status;
     result.detail = detail;
+    return result;
+}
+
+PrivacyCompatibilityBatchResult batchFailure(
+    PrivacyStillItemTransactionStatus status, const QString& detail,
+    int requestedCount = 0)
+{
+    PrivacyCompatibilityBatchResult result;
+    result.status = status;
+    result.detail = detail;
+    result.requestedCount = requestedCount;
     return result;
 }
 
@@ -418,6 +455,7 @@ public:
     PrivacyThreadImageIOStillItemCacheGate  cacheGate;
     mutable QRecursiveMutex                  transactionMutex;
     mutable PrivacyStillItemTransactionEngine engine;
+    mutable QHash<QString, qint64>             compatibilityGuardProcesses;
     mutable QString                          authenticatedTransactionUuid;
     mutable const PrivacyPassword*           authenticatedPassword = nullptr;
     mutable bool                             freshAuthenticationConfirmed = false;
@@ -452,12 +490,29 @@ PrivacyThreadImageIOStillItemTransactionOwner::
     : d(new Private(runtime))
 {
     d->engine.setCompatibilityGuardArmHook(
-        [](const PrivacyStorageRoot& root,
+        [this](const PrivacyStorageRoot& root,
            const PrivacyJournalRootExpectation& expectation,
-           const QString& transactionUuid, QString* const detail)
+           const QString&, QString* const detail)
         {
-            return launchCompatibilityGuard(root, expectation,
-                                            transactionUuid, detail);
+            const qint64 existing =
+                d->compatibilityGuardProcesses.value(root.uuid);
+
+            if (processIsRunning(existing))
+            {
+                return true;
+            }
+
+            qint64 processId = 0;
+
+            if (!launchCompatibilityGuard(root, expectation,
+                                          &processId, detail))
+            {
+                d->compatibilityGuardProcesses.remove(root.uuid);
+                return false;
+            }
+
+            d->compatibilityGuardProcesses.insert(root.uuid, processId);
+            return true;
         });
 }
 
@@ -719,6 +774,90 @@ PrivacyThreadImageIOStillItemTransactionOwner::actionContextForImage(
                                           : (nameOrder < 0);
               });
     result.availability = PrivacyStillItemActionAvailability::Protectable;
+    return result;
+}
+
+PrivacyCompatibilityCategoryContext
+PrivacyThreadImageIOStillItemTransactionOwner::compatibilityContextForCategory(
+    const QString& categoryUuid) const
+{
+    PrivacyCompatibilityCategoryContext result;
+    QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+
+    if (!currentActionComposition(&d->runtime, &runtime))
+    {
+        return result;
+    }
+
+    Q_UNUSED(runtime);
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->persistence.loadSnapshot(&snapshot))
+    {
+        return result;
+    }
+
+    const PrivacyCategory* category = nullptr;
+    int categoryCount = 0;
+    bool otherActiveTransaction = false;
+    bool reconciliationRequired = false;
+
+    for (const PrivacyCategory& candidate : std::as_const(snapshot.categories))
+    {
+        if (candidate.uuid == categoryUuid)
+        {
+            category = &candidate;
+            ++categoryCount;
+        }
+    }
+
+    for (const PrivacyItem& item : std::as_const(snapshot.items))
+    {
+        result.protectedItemCount += (item.categoryUuid == categoryUuid) ? 1 : 0;
+    }
+
+    for (const PrivacyTransaction& transaction :
+         std::as_const(snapshot.transactions))
+    {
+        if (!transaction.isActive() ||
+            (transaction.categoryUuid != categoryUuid))
+        {
+            continue;
+        }
+
+        if (transaction.type == PrivacyTransactionType::CompatibilityUnlock)
+        {
+            ++result.activeExposureCount;
+            reconciliationRequired = reconciliationRequired ||
+                (transaction.state ==
+                 PrivacyTransactionState::NeedsReconciliation);
+        }
+        else
+        {
+            otherActiveTransaction = true;
+        }
+    }
+
+    if ((categoryCount != 1) || !category ||
+        (category->backend != PrivacyBackend::Casual) ||
+        (category->lifecycleState != PrivacyCategoryLifecycleState::Active))
+    {
+        return result;
+    }
+
+    if (result.activeExposureCount > 0)
+    {
+        result.availability = reconciliationRequired
+            ? PrivacyCompatibilityActionAvailability::ReconciliationRequired
+            : PrivacyCompatibilityActionAvailability::Relockable;
+    }
+    else if (!otherActiveTransaction && (result.protectedItemCount > 0))
+    {
+        result.availability =
+            PrivacyCompatibilityActionAvailability::Unlockable;
+    }
+
     return result;
 }
 
@@ -1344,6 +1483,466 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelock(
     PrivacyCompatibilityExposureGuardEngine::relock(
         *root, expectation, unlock->uuid);
     return d->engine.recover(*root, unlock->uuid);
+}
+
+PrivacyCompatibilityBatchResult
+PrivacyThreadImageIOStillItemTransactionOwner::compatibilityUnlockCategory(
+    const QString& categoryUuid, const QString& passwordText,
+    const CompatibilityProgress& progress)
+{
+    if (QUuid(categoryUuid).toString(QUuid::WithoutBraces) != categoryUuid)
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::InvalidRequest,
+            QStringLiteral("The privacy category identifier is invalid"));
+    }
+
+    QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+    QSharedPointer<PrivacyCategorySessionOwner> sessions;
+
+    if (!currentActionComposition(&d->runtime, &runtime, &sessions))
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::CategoryUnavailable,
+            QStringLiteral("Privacy startup is still changing"));
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->persistence.loadSnapshot(&snapshot))
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::PersistenceFailure,
+            QStringLiteral("The privacy catalogue could not be read"));
+    }
+
+    const PrivacyCategory* category = nullptr;
+    int categoryCount = 0;
+    QList<PrivacyItem> items;
+
+    for (const PrivacyCategory& candidate : std::as_const(snapshot.categories))
+    {
+        if (candidate.uuid == categoryUuid)
+        {
+            category = &candidate;
+            ++categoryCount;
+        }
+    }
+
+    for (const PrivacyItem& item : std::as_const(snapshot.items))
+    {
+        if (item.categoryUuid == categoryUuid)
+        {
+            items.append(item);
+        }
+    }
+
+    if ((categoryCount != 1) || !category || items.isEmpty() ||
+        (category->backend != PrivacyBackend::Casual) ||
+        (category->lifecycleState != PrivacyCategoryLifecycleState::Active))
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::CategoryUnavailable,
+            QStringLiteral(
+                "The category is not available for Compatibility Unlock"),
+            items.size());
+    }
+
+    for (const PrivacyTransaction& transaction :
+         std::as_const(snapshot.transactions))
+    {
+        if (transaction.isActive() &&
+            (transaction.categoryUuid == categoryUuid))
+        {
+            return batchFailure(
+                PrivacyStillItemTransactionStatus::RecoveryRequired,
+                QStringLiteral(
+                    "The category already has an operation requiring attention"),
+                items.size());
+        }
+    }
+
+    std::sort(items.begin(), items.end(),
+              [](const PrivacyItem& left, const PrivacyItem& right)
+              {
+                  return (left.uuid < right.uuid);
+              });
+    const QString groupUuid = newUuid();
+    QList<PrivacyCompatibilityUnlockRequest> requests;
+
+    for (const PrivacyItem& item : std::as_const(items))
+    {
+        if (item.imageId <= 0)
+        {
+            return batchFailure(
+                PrivacyStillItemTransactionStatus::PersistenceFailure,
+                QStringLiteral("A protected item has no catalogue identity"),
+                items.size());
+        }
+
+        const PrivacyAsset* primary = nullptr;
+        QString publicRootUuid;
+        int assetCount = 0;
+
+        for (const PrivacyAsset& asset : std::as_const(snapshot.assets))
+        {
+            if (asset.itemUuid != item.uuid)
+            {
+                continue;
+            }
+
+            ++assetCount;
+
+            if (publicRootUuid.isEmpty())
+            {
+                publicRootUuid = asset.publicRootUuid;
+            }
+            else if (publicRootUuid != asset.publicRootUuid)
+            {
+                return batchFailure(
+                    PrivacyStillItemTransactionStatus::PersistenceFailure,
+                    QStringLiteral(
+                        "A protected asset set spans conflicting public roots"),
+                    items.size());
+            }
+
+            if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                (asset.ordinal == 0))
+            {
+                if (primary)
+                {
+                    return batchFailure(
+                        PrivacyStillItemTransactionStatus::PersistenceFailure,
+                        QStringLiteral(
+                            "A protected item has conflicting primary assets"),
+                        items.size());
+                }
+
+                primary = &asset;
+            }
+        }
+
+        const PrivacyStorageRoot* const root = primary
+            ? rootForUuid(snapshot, primary->publicRootUuid)
+            : nullptr;
+        PrivacyJournalRootExpectation expectation;
+
+        if (!primary || (assetCount <= 0) || !root ||
+            (runtime->rootState(root->uuid) !=
+             PrivacyRootRuntimeState::VerifiedAvailable) ||
+            !rootExpectation(*root, &expectation))
+        {
+            return batchFailure(
+                PrivacyStillItemTransactionStatus::RootUnavailable,
+                QStringLiteral(
+                    "Every collection root must be safely available before "
+                    "category Compatibility Unlock begins"),
+                items.size());
+        }
+
+        PrivacyCompatibilityUnlockRequest request;
+        request.imageId = item.imageId;
+        request.categoryUuid = categoryUuid;
+        request.itemUuid = item.uuid;
+        request.transactionUuid = newUuid();
+        request.groupUuid = groupUuid;
+        request.publicRoot = *root;
+        request.rootExpectation = expectation;
+        requests.append(request);
+    }
+
+    if (!sessions->ownsSecret(categoryUuid))
+    {
+        const PrivacyCategorySessionResult unlocked =
+            sessions->unlockCategory(categoryUuid, passwordText);
+
+        if (!unlocked.succeeded())
+        {
+            return batchFailure(
+                categorySessionTransactionStatus(unlocked.status),
+                categorySessionFailureDetail(unlocked.status), requests.size());
+        }
+    }
+
+    PrivacyCompatibilityBatchResult result = batchFailure(
+        PrivacyStillItemTransactionStatus::CategoryUnavailable,
+        QStringLiteral("The category became unavailable"), requests.size());
+    const PrivacyCategoryOperationStatus operationStatus =
+        sessions->runWithUnlockedSecret(
+            categoryUuid,
+            [this, &requests, &result, &progress]
+            (const PrivacyPassword& password)
+            {
+                QMutexLocker locker(&d->transactionMutex);
+                result = d->engine.compatibilityUnlockBatch(
+                    requests, password, progress);
+            });
+
+    if (operationStatus != PrivacyCategoryOperationStatus::Completed)
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::CategoryUnavailable,
+            (operationStatus == PrivacyCategoryOperationStatus::CategoryLocked)
+                ? QStringLiteral(
+                      "The category was locked before Compatibility Unlock began")
+                : QStringLiteral(
+                      "Another category operation is already active"),
+            requests.size());
+    }
+
+    return result;
+}
+
+PrivacyCompatibilityBatchResult
+PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelockCategory(
+    const QString& categoryUuid, const CompatibilityProgress& progress) const
+{
+    if (QUuid(categoryUuid).toString(QUuid::WithoutBraces) != categoryUuid)
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::InvalidRequest,
+            QStringLiteral("The privacy category identifier is invalid"));
+    }
+
+    QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+
+    if (!currentActionComposition(&d->runtime, &runtime))
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::CategoryUnavailable,
+            QStringLiteral("Privacy startup is still changing"));
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->persistence.loadSnapshot(&snapshot))
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::PersistenceFailure,
+            QStringLiteral("The privacy catalogue could not be read"));
+    }
+
+    QList<PrivacyTransaction> transactions;
+
+    for (const PrivacyTransaction& transaction :
+         std::as_const(snapshot.transactions))
+    {
+        if (transaction.isActive() &&
+            (transaction.categoryUuid == categoryUuid) &&
+            (transaction.type == PrivacyTransactionType::CompatibilityUnlock))
+        {
+            transactions.append(transaction);
+        }
+    }
+
+    std::sort(transactions.begin(), transactions.end(),
+              [](const PrivacyTransaction& left,
+                 const PrivacyTransaction& right)
+              {
+                  return (left.uuid < right.uuid);
+              });
+
+    if (transactions.isEmpty())
+    {
+        PrivacyCompatibilityBatchResult complete;
+        complete.status =
+            PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+        return complete;
+    }
+
+    QList<PrivacyCompatibilityRelockRequest> requests;
+    QList<PrivacyStillItemTransactionResult> unavailable;
+    bool reconciliationRequired = false;
+
+    for (const PrivacyTransaction& transaction : std::as_const(transactions))
+    {
+        const PrivacyTransactionJournal* journal = nullptr;
+        int journalCount = 0;
+
+        for (const PrivacyTransactionJournal& candidate :
+             std::as_const(snapshot.transactionJournals))
+        {
+            if (candidate.transactionUuid == transaction.uuid)
+            {
+                journal = &candidate;
+                ++journalCount;
+            }
+        }
+
+        const PrivacyStorageRoot* const root =
+            ((journalCount == 1) && journal)
+                ? rootForUuid(snapshot, journal->rootUuid)
+                : nullptr;
+        PrivacyJournalRootExpectation expectation;
+
+        if (!root ||
+            (runtime->rootState(root->uuid) !=
+             PrivacyRootRuntimeState::VerifiedAvailable) ||
+            !rootExpectation(*root, &expectation))
+        {
+            PrivacyStillItemTransactionResult item = actionFailure(
+                PrivacyStillItemTransactionStatus::RootUnavailable,
+                QStringLiteral(
+                    "The collection root remains offline or unverified"));
+            item.transactionUuid = transaction.uuid;
+            item.itemUuid = transaction.itemUuid;
+            unavailable.append(item);
+            reconciliationRequired = reconciliationRequired ||
+                (transaction.state ==
+                 PrivacyTransactionState::NeedsReconciliation);
+            continue;
+        }
+
+        PrivacyCompatibilityRelockRequest request;
+        request.transactionUuid = transaction.uuid;
+        request.publicRoot = *root;
+        request.rootExpectation = expectation;
+        requests.append(request);
+    }
+
+    PrivacyCompatibilityBatchResult available;
+
+    if (!requests.isEmpty())
+    {
+        CompatibilityProgress availableProgress;
+
+        if (progress)
+        {
+            availableProgress =
+                [progress, total = transactions.size()](int completed, int)
+                {
+                    progress(completed, total);
+                };
+        }
+
+        QMutexLocker locker(&d->transactionMutex);
+        available = d->engine.compatibilityRelockBatch(
+            requests, availableProgress);
+    }
+
+    PrivacyCompatibilityBatchResult result;
+    result.requestedCount = transactions.size();
+    result.processedCount = available.processedCount + unavailable.size();
+    result.remainingExposureCount = available.remainingExposureCount +
+                                    unavailable.size();
+    result.itemResults = available.itemResults;
+    result.itemResults.append(unavailable);
+
+    if (progress && !unavailable.isEmpty())
+    {
+        progress(result.processedCount, result.requestedCount);
+    }
+
+    if (result.remainingExposureCount == 0)
+    {
+        result.status =
+            PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+    }
+    else
+    {
+        result.status = reconciliationRequired ||
+            (available.status ==
+             PrivacyStillItemTransactionStatus::ReconciliationRequired)
+                ? PrivacyStillItemTransactionStatus::ReconciliationRequired
+                : PrivacyStillItemTransactionStatus::RecoveryRequired;
+        result.detail = QStringLiteral(
+            "%1 of %2 Compatibility exposure(s) remain targeted; reconnect "
+            "offline storage and try again")
+                            .arg(result.remainingExposureCount)
+                            .arg(result.requestedCount);
+    }
+
+    return result;
+}
+
+PrivacyCompatibilityBatchResult
+PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelockAll(
+    const CompatibilityProgress& progress) const
+{
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->persistence.loadSnapshot(&snapshot))
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::PersistenceFailure,
+            QStringLiteral("The privacy catalogue could not be read"));
+    }
+
+    QSet<QString> categoryUuids;
+    int total = 0;
+
+    for (const PrivacyTransaction& transaction :
+         std::as_const(snapshot.transactions))
+    {
+        if (transaction.isActive() &&
+            (transaction.type == PrivacyTransactionType::CompatibilityUnlock))
+        {
+            categoryUuids.insert(transaction.categoryUuid);
+            ++total;
+        }
+    }
+
+    PrivacyCompatibilityBatchResult aggregate;
+    aggregate.requestedCount = total;
+
+    if (total == 0)
+    {
+        aggregate.status =
+            PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+        return aggregate;
+    }
+
+    QStringList orderedCategories = categoryUuids.values();
+    std::sort(orderedCategories.begin(), orderedCategories.end());
+    bool reconciliationRequired = false;
+
+    for (const QString& categoryUuid : std::as_const(orderedCategories))
+    {
+        CompatibilityProgress categoryProgress;
+
+        if (progress)
+        {
+            categoryProgress =
+                [progress, offset = aggregate.processedCount, total](int completed,
+                                                                    int)
+                {
+                    progress(offset + completed, total);
+                };
+        }
+
+        const PrivacyCompatibilityBatchResult category =
+            compatibilityRelockCategory(categoryUuid, categoryProgress);
+        aggregate.processedCount += category.processedCount;
+        aggregate.remainingExposureCount += category.remainingExposureCount;
+        aggregate.itemResults.append(category.itemResults);
+        reconciliationRequired = reconciliationRequired ||
+            (category.status ==
+             PrivacyStillItemTransactionStatus::ReconciliationRequired);
+    }
+
+    if (aggregate.remainingExposureCount == 0)
+    {
+        aggregate.status =
+            PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+    }
+    else
+    {
+        aggregate.status = reconciliationRequired
+            ? PrivacyStillItemTransactionStatus::ReconciliationRequired
+            : PrivacyStillItemTransactionStatus::RecoveryRequired;
+        aggregate.detail = QStringLiteral(
+            "%1 of %2 Compatibility exposure(s) remain targeted after shutdown "
+            "recovery")
+                               .arg(aggregate.remainingExposureCount)
+                               .arg(aggregate.requestedCount);
+    }
+
+    return aggregate;
+}
+
+bool PrivacyThreadImageIOStillItemTransactionOwner::prepareForShutdown() const
+{
+    return compatibilityRelockAll().succeeded();
 }
 
 PrivacyStillItemTransactionResult

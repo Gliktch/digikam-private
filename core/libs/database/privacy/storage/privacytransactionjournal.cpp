@@ -34,6 +34,7 @@
 #include <QUuid>
 
 #ifdef Q_OS_UNIX
+#   include <dirent.h>
 #   include <fcntl.h>
 #   include <sys/stat.h>
 #   include <sys/types.h>
@@ -1749,6 +1750,112 @@ PrivacyJournalLoadResult PrivacyTransactionJournalStore::load(
     }
 
     return result;
+#endif
+}
+
+bool PrivacyTransactionJournalStore::transactionUuids(
+    QStringList* const transactionUuids, PrivacyJournalError* const error,
+    QString* const detail) const
+{
+    if (transactionUuids)
+    {
+        transactionUuids->clear();
+    }
+
+#ifndef Q_OS_UNIX
+    Q_UNUSED(transactionUuids);
+    setError(error, PrivacyJournalError::UnsupportedPlatform, detail,
+             QStringLiteral("descriptor-relative journal storage requires Unix"));
+    return false;
+#else
+    if (!d || !transactionUuids || !d->revalidateRoot(detail))
+    {
+        setError(error, PrivacyJournalError::RootIdentityMismatch, detail,
+                 detail ? *detail : QStringLiteral("opened root identity changed"));
+        return false;
+    }
+
+    bool unused = false;
+    const int metadataFd = openOwnedDirectoryAt(
+        d->rootFd, MetadataDirectory.toUtf8(), static_cast<dev_t>(d->device),
+        false, &unused, detail);
+
+    if (metadataFd < 0)
+    {
+        if (errno == ENOENT)
+        {
+            setError(error, PrivacyJournalError::None, detail, {});
+            return true;
+        }
+
+        setError(error, PrivacyJournalError::UnsafeStorage, detail,
+                 detail ? *detail : QString());
+        return false;
+    }
+
+    const int transactionsFd = openOwnedDirectoryAt(
+        metadataFd, TransactionsDirectory.toUtf8(),
+        static_cast<dev_t>(d->device), false, &unused, detail);
+    ::close(metadataFd);
+
+    if (transactionsFd < 0)
+    {
+        if (errno == ENOENT)
+        {
+            setError(error, PrivacyJournalError::None, detail, {});
+            return true;
+        }
+
+        setError(error, PrivacyJournalError::UnsafeStorage, detail,
+                 detail ? *detail : QString());
+        return false;
+    }
+
+    DIR* const directory = ::fdopendir(transactionsFd);
+
+    if (!directory)
+    {
+        ::close(transactionsFd);
+        setError(error, PrivacyJournalError::IoFailure, detail,
+                 QStringLiteral("cannot enumerate transaction journals"));
+        return false;
+    }
+
+    errno = 0;
+
+    while (const dirent* const entry = ::readdir(directory))
+    {
+        const QByteArray name(entry->d_name);
+
+        if ((name == QByteArrayLiteral(".")) ||
+            (name == QByteArrayLiteral("..")))
+        {
+            continue;
+        }
+
+        const QString uuid = QString::fromUtf8(name);
+
+        if (canonicalUuid(uuid))
+        {
+            transactionUuids->append(uuid);
+        }
+    }
+
+    const int enumerationError = errno;
+    ::closedir(directory);
+
+    if (enumerationError != 0)
+    {
+        transactionUuids->clear();
+        setError(error, PrivacyJournalError::IoFailure, detail,
+                 QStringLiteral("cannot enumerate every transaction journal"));
+        return false;
+    }
+
+    std::sort(transactionUuids->begin(), transactionUuids->end());
+    transactionUuids->removeDuplicates();
+    setError(error, PrivacyJournalError::None, detail, {});
+    return true;
 #endif
 }
 

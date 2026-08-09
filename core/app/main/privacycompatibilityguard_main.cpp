@@ -11,6 +11,7 @@
 // C++ includes
 
 #include <cerrno>
+#include <utility>
 
 // POSIX includes
 
@@ -31,6 +32,7 @@
 #include <QDir>
 #include <QFile>
 #include <QProcess>
+#include <QStringList>
 #include <QUuid>
 
 // Local includes
@@ -104,6 +106,90 @@ bool journalIsComplete(const PrivacyStorageRoot& root,
             (loaded.record.stage == PrivacyJournalStage::Complete));
 }
 
+PrivacyStillItemTransactionResult relockAllCompatibility(
+    const PrivacyStorageRoot& root,
+    const PrivacyJournalRootExpectation& expectation)
+{
+    PrivacyStillItemTransactionResult aggregate;
+    aggregate.status = PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+    PrivacyJournalError error = PrivacyJournalError::None;
+    QString detail;
+    std::unique_ptr<PrivacyTransactionJournalStore> store =
+        PrivacyTransactionJournalStore::open(
+            root.configuredPath, expectation, &error, &detail);
+
+    if (!store)
+    {
+        aggregate.status = PrivacyStillItemTransactionStatus::RootUnavailable;
+        aggregate.detail = detail.isEmpty()
+                         ? QStringLiteral("the collection root is unavailable")
+                         : detail;
+        return aggregate;
+    }
+
+    QStringList transactionUuids;
+
+    if (!store->transactionUuids(&transactionUuids, &error, &detail))
+    {
+        aggregate.status = PrivacyStillItemTransactionStatus::JournalFailure;
+        aggregate.detail = detail.isEmpty()
+                         ? QStringLiteral("the transaction journals cannot be enumerated")
+                         : detail;
+        return aggregate;
+    }
+
+    QStringList failures;
+
+    for (const QString& transactionUuid : std::as_const(transactionUuids))
+    {
+        const PrivacyJournalLoadResult loaded = store->load(transactionUuid);
+
+        if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+            !loaded.authoritative || !loaded.hasRecord)
+        {
+            failures << transactionUuid;
+            continue;
+        }
+
+        if ((loaded.record.transactionType !=
+             PrivacyTransactionType::CompatibilityUnlock) ||
+            (loaded.record.stage == PrivacyJournalStage::Complete))
+        {
+            continue;
+        }
+
+        const PrivacyStillItemTransactionResult relocked =
+            PrivacyCompatibilityExposureGuardEngine::relock(
+                root, expectation, transactionUuid);
+
+        if (!relocked.succeeded())
+        {
+            failures << transactionUuid;
+
+            if (relocked.status ==
+                PrivacyStillItemTransactionStatus::ReconciliationRequired)
+            {
+                aggregate.status = relocked.status;
+            }
+        }
+    }
+
+    if (!failures.isEmpty())
+    {
+        if (aggregate.status ==
+            PrivacyStillItemTransactionStatus::CompatibilityRelocked)
+        {
+            aggregate.status = PrivacyStillItemTransactionStatus::RecoveryRequired;
+        }
+
+        aggregate.detail = QStringLiteral(
+            "%1 Compatibility journal(s) require application recovery")
+                               .arg(failures.size());
+    }
+
+    return aggregate;
+}
+
 bool acknowledgeReady(const QString& path, const QString& token)
 {
 #if !defined(__linux__)
@@ -165,13 +251,15 @@ bool acknowledgeReady(const QString& path, const QString& token)
 
 int runGuard(const PrivacyStorageRoot& root,
              const PrivacyJournalRootExpectation& expectation,
-             const QString& transactionUuid, qlonglong parentPid,
+             const QString& transactionUuid, bool allCompatibility,
+             qlonglong parentPid,
              const QString& readyPath, const QString& readyToken)
 {
 #if !defined(__linux__) || !defined(SYS_pidfd_open)
     Q_UNUSED(root);
     Q_UNUSED(expectation);
     Q_UNUSED(transactionUuid);
+    Q_UNUSED(allCompatibility);
     Q_UNUSED(parentPid);
     Q_UNUSED(readyPath);
     Q_UNUSED(readyToken);
@@ -216,7 +304,7 @@ int runGuard(const PrivacyStorageRoot& root,
                 return 12;
             }
 
-            if ((polled == 0) &&
+            if (!allCompatibility && (polled == 0) &&
                 journalIsComplete(root, expectation, transactionUuid))
             {
                 const PrivacyStillItemTransactionResult settled =
@@ -234,9 +322,10 @@ int runGuard(const PrivacyStorageRoot& root,
         ::close(parentFd);
     }
 
-    const PrivacyStillItemTransactionResult relocked =
-        PrivacyCompatibilityExposureGuardEngine::relock(
-            root, expectation, transactionUuid);
+    const PrivacyStillItemTransactionResult relocked = allCompatibility
+        ? relockAllCompatibility(root, expectation)
+        : PrivacyCompatibilityExposureGuardEngine::relock(
+              root, expectation, transactionUuid);
 
     if (relocked.succeeded())
     {
@@ -292,6 +381,9 @@ int main(int argc, char** argv)
         QStringLiteral("transaction-uuid"),
         QStringLiteral("Compatibility Unlock transaction UUID"),
         QStringLiteral("uuid"));
+    const QCommandLineOption allCompatibility(
+        QStringLiteral("all-compatibility"),
+        QStringLiteral("Guard every Compatibility Unlock journal on this root"));
     const QCommandLineOption readyFile(
         QStringLiteral("ready-file"),
         QStringLiteral("Secure parent readiness file"),
@@ -302,7 +394,7 @@ int main(int argc, char** argv)
         QStringLiteral("uuid"));
     parser.addOptions({ parentPid, rootPath, rootUuid, rootMarkerUuid,
                         rootIdentity, albumRootId, rootDevice, rootInode,
-                        transactionUuid, readyFile, readyToken });
+                        transactionUuid, allCompatibility, readyFile, readyToken });
     parser.process(application);
 
     qlonglong parsedParentPid = 0;
@@ -315,6 +407,8 @@ int main(int argc, char** argv)
     const QString configuredPath = QDir::cleanPath(parser.value(rootPath));
     const QString readyPath = QDir::cleanPath(parser.value(readyFile));
     const QUuid parsedReadyToken(parser.value(readyToken));
+    const bool guardAllCompatibility = parser.isSet(allCompatibility);
+    const QUuid parsedTransactionUuid(parser.value(transactionUuid));
 
     if (!parsePositiveLongLong(parser.value(parentPid), &parsedParentPid) ||
         !parsePositiveLongLong(parser.value(albumRootId),
@@ -327,6 +421,10 @@ int main(int argc, char** argv)
         !QDir::isAbsolutePath(configuredPath) || readyPath.isEmpty() ||
         !QDir::isAbsolutePath(readyPath) ||
         parsedReadyToken.isNull() ||
+        (guardAllCompatibility == !parsedTransactionUuid.isNull()) ||
+        (!guardAllCompatibility &&
+         (parsedTransactionUuid.toString(QUuid::WithoutBraces).toLower() !=
+          parser.value(transactionUuid))) ||
         (parsedReadyToken.toString(QUuid::WithoutBraces).toLower() !=
          parser.value(readyToken)))
     {
@@ -357,5 +455,6 @@ int main(int argc, char** argv)
     }
 
     return runGuard(root, expectation, parser.value(transactionUuid),
-                    parsedParentPid, readyPath, parser.value(readyToken));
+                    guardAllCompatibility, parsedParentPid, readyPath,
+                    parser.value(readyToken));
 }
