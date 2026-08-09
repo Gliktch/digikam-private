@@ -198,8 +198,22 @@ const PrivacyJournalObjectFact* factFor(
 
 bool validFactMapping(PrivacyTransactionType type,
                       PrivacyPublicTransitionFactKind current,
-                      PrivacyPublicTransitionFactKind installed)
+                      PrivacyPublicTransitionFactKind installed,
+                      PrivacyPublicTransitionDirection direction)
 {
+    if (direction ==
+        PrivacyPublicTransitionDirection::CompatibilityGuardRelock)
+    {
+        return ((type == PrivacyTransactionType::CompatibilityUnlock) &&
+                (current == PrivacyPublicTransitionFactKind::Original) &&
+                (installed == PrivacyPublicTransitionFactKind::Proxy));
+    }
+
+    if (direction != PrivacyPublicTransitionDirection::TransactionForward)
+    {
+        return false;
+    }
+
     switch (type)
     {
         case PrivacyTransactionType::ProtectItem:
@@ -254,11 +268,21 @@ PrivacyPublicTransitionError validateTransitionRequest(
                                                    &journalDetail) ||
         (request.authoritativeJournalSha256.size() !=
          QCryptographicHash::hashLength(QCryptographicHash::Sha256)) ||
-        ((request.journalRecord.stage !=
-          PrivacyJournalStage::ProtectedCopyVerified) &&
-         (request.journalRecord.stage != PrivacyJournalStage::Applying) &&
-         (request.journalRecord.stage !=
-          PrivacyJournalStage::PublicStateVerified)) ||
+        ((request.direction ==
+          PrivacyPublicTransitionDirection::TransactionForward)
+             ? ((request.journalRecord.stage !=
+                 PrivacyJournalStage::ProtectedCopyVerified) &&
+                (request.journalRecord.stage !=
+                 PrivacyJournalStage::Applying) &&
+                (request.journalRecord.stage !=
+                 PrivacyJournalStage::PublicStateVerified))
+             : ((request.direction !=
+                 PrivacyPublicTransitionDirection::
+                     CompatibilityGuardRelock) ||
+                ((request.journalRecord.stage !=
+                  PrivacyJournalStage::PublicStateVerified) &&
+                 (request.journalRecord.stage !=
+                  PrivacyJournalStage::ReconciliationRequired)))) ||
         request.itemUuid.isEmpty() || (request.role <= 0) ||
         (request.ordinal < 0) ||
         ((request.mode != PrivacyPublicTransitionMode::InstallAbsent) &&
@@ -267,7 +291,8 @@ PrivacyPublicTransitionError validateTransitionRequest(
         (request.installedUnixMode < -1) ||
         (request.installedUnixMode > 07777) ||
         !validFactMapping(request.journalRecord.transactionType,
-                          request.currentFact, request.installedFact))
+                          request.currentFact, request.installedFact,
+                          request.direction))
     {
         *detail = journalDetail.isEmpty()
                 ? QStringLiteral(
@@ -1064,6 +1089,9 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
     const bool install = validated.install;
     const bool exchange = validated.exchange;
     const bool remove = validated.remove;
+    const bool guardRelock =
+        (request.direction ==
+         PrivacyPublicTransitionDirection::CompatibilityGuardRelock);
 
     PrivacyJournalError journalError = PrivacyJournalError::None;
     QString journalDetail;
@@ -1152,7 +1180,7 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
         {
             inspection.preStageStatus = openAndVerifyFile(
                 parent.descriptor.get(), stageName, rootDevice, *installedFact,
-                true, true, &inspection.preStage);
+                true, !guardRelock, &inspection.preStage);
             inspection.prePublicStatus = openAndVerifyFile(
                 parent.descriptor.get(), publicName, rootDevice, *currentFact,
                 false, false, &inspection.prePublic);
@@ -1253,7 +1281,8 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
     QByteArray applyingHash = request.authoritativeJournalSha256;
     PrivacyPublicTransitionResult result;
 
-    if (initialStage == PrivacyJournalStage::PublicStateVerified)
+    if (!guardRelock &&
+        (initialStage == PrivacyJournalStage::PublicStateVerified))
     {
         if ((inspection.state != TransitionDiskState::ExactPost) &&
             (inspection.state != TransitionDiskState::Ambiguous))
@@ -1302,7 +1331,9 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
         return result;
     }
 
-    if (initialStage == PrivacyJournalStage::ProtectedCopyVerified)
+    if ((initialStage == PrivacyJournalStage::ProtectedCopyVerified) ||
+        (guardRelock &&
+         (initialStage == PrivacyJournalStage::PublicStateVerified)))
     {
         if ((inspection.state != TransitionDiskState::ExactPre) &&
             (inspection.state != TransitionDiskState::Ambiguous))
@@ -1333,7 +1364,9 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
                            QStringLiteral("fault injected after staged fsync"));
         }
 
-        applyingRecord.stage = PrivacyJournalStage::Applying;
+        applyingRecord.stage = guardRelock
+                             ? PrivacyJournalStage::ReconciliationRequired
+                             : PrivacyJournalStage::Applying;
 
         if (!journalStore->compareAndUpdate(
                 applyingRecord, request.authoritativeJournalSha256,
@@ -1358,13 +1391,14 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
         if ((applyingLoaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
             !applyingLoaded.authoritative ||
             (applyingLoaded.sha256 != applyingHash) ||
-            (applyingLoaded.record.stage != PrivacyJournalStage::Applying) ||
+            (applyingLoaded.record.stage != applyingRecord.stage) ||
             !rootStillPinned(rootFd.get(), rootDevice, rootInode) ||
             !rootPathStillMatches(request.absoluteRootPath, rootDevice, rootInode) ||
             !parentStillReachable(rootFd.get(), rootDevice, parent))
         {
             result.error  = PrivacyPublicTransitionError::RootIdentityMismatch;
-            result.detail = QStringLiteral("root, parent, or Applying journal changed before mutation");
+            result.detail = QStringLiteral(
+                "root, parent, or transition journal changed before mutation");
             return result;
         }
 
@@ -1385,13 +1419,18 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
         if (inspection.state == TransitionDiskState::Unknown)
         {
             result.error  = inspectionFailure(inspection);
-            result.detail = QStringLiteral("Applying replay found mixed or unknown public bytes");
+            result.detail = QStringLiteral(
+                "transition replay found mixed or unknown public bytes");
             return result;
         }
     }
 
     bool mutateNamespace = (inspection.state == TransitionDiskState::ExactPre) ||
-                           ((initialStage == PrivacyJournalStage::ProtectedCopyVerified) &&
+                           (((initialStage ==
+                              PrivacyJournalStage::ProtectedCopyVerified) ||
+                             (guardRelock &&
+                              (initialStage ==
+                               PrivacyJournalStage::PublicStateVerified))) &&
                             (inspection.state == TransitionDiskState::Ambiguous));
 
     if (mutateNamespace)
@@ -1658,7 +1697,9 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeOne(
     }
 
     PrivacyJournalRecord finalRecord = applyingRecord;
-    finalRecord.stage = PrivacyJournalStage::PublicStateVerified;
+    finalRecord.stage = guardRelock
+                      ? PrivacyJournalStage::Complete
+                      : PrivacyJournalStage::PublicStateVerified;
 
     if (!journalStore->compareAndUpdate(finalRecord, applyingHash,
                                         &result.finalJournalSha256,
@@ -1706,12 +1747,21 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeBatch(
     const QByteArray canonicalJournal = PrivacyTransactionJournalCodec::encode(
         first.journalRecord);
     const PrivacyJournalStage initialStage = first.journalRecord.stage;
+    const bool guardRelock =
+        (first.direction ==
+         PrivacyPublicTransitionDirection::CompatibilityGuardRelock);
 
     if (canonicalJournal.isEmpty() ||
         (requests.size() != first.journalRecord.assets.size()) ||
-        ((initialStage != PrivacyJournalStage::ProtectedCopyVerified) &&
-         (initialStage != PrivacyJournalStage::Applying) &&
-         (initialStage != PrivacyJournalStage::PublicStateVerified)))
+        (guardRelock
+             ? ((initialStage != PrivacyJournalStage::PublicStateVerified) &&
+                (initialStage !=
+                 PrivacyJournalStage::ReconciliationRequired))
+             : ((initialStage !=
+                 PrivacyJournalStage::ProtectedCopyVerified) &&
+                (initialStage != PrivacyJournalStage::Applying) &&
+                (initialStage !=
+                 PrivacyJournalStage::PublicStateVerified))))
     {
         return failure(PrivacyPublicTransitionError::InvalidRequest,
                        QStringLiteral("batch must cover every exact journal asset"));
@@ -1746,6 +1796,7 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeBatch(
                                      .arg(request.ordinal);
 
         if ((request.absoluteRootPath != first.absoluteRootPath) ||
+            (request.direction != first.direction) ||
             !sameExpectation(request.rootExpectation,
                              first.rootExpectation) ||
             (request.authoritativeJournalSha256 !=
@@ -1805,9 +1856,13 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeBatch(
     QByteArray applyingHash = first.authoritativeJournalSha256;
     PrivacyPublicTransitionResult result;
 
-    if (initialStage == PrivacyJournalStage::ProtectedCopyVerified)
+    if ((initialStage == PrivacyJournalStage::ProtectedCopyVerified) ||
+        (guardRelock &&
+         (initialStage == PrivacyJournalStage::PublicStateVerified)))
     {
-        applyingRecord.stage = PrivacyJournalStage::Applying;
+        applyingRecord.stage = guardRelock
+                             ? PrivacyJournalStage::ReconciliationRequired
+                             : PrivacyJournalStage::Applying;
 
         if (!journalStore->compareAndUpdate(
                 applyingRecord, first.authoritativeJournalSha256,
@@ -1858,12 +1913,13 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeBatch(
         {
             result.error = member.error;
             result.detail = member.detail + QStringLiteral(
-                "; batch journal remains Applying for exact replay");
+                "; batch journal remains in its replay stage");
             return result;
         }
     }
 
-    if (initialStage == PrivacyJournalStage::PublicStateVerified)
+    if (!guardRelock &&
+        (initialStage == PrivacyJournalStage::PublicStateVerified))
     {
         result.finalJournalSha256 = first.authoritativeJournalSha256;
         result.error = PrivacyPublicTransitionError::None;
@@ -1871,7 +1927,9 @@ PrivacyPublicTransitionResult PrivacyPublicTransitionEngine::executeBatch(
     }
 
     PrivacyJournalRecord finalRecord = applyingRecord;
-    finalRecord.stage = PrivacyJournalStage::PublicStateVerified;
+    finalRecord.stage = guardRelock
+                      ? PrivacyJournalStage::Complete
+                      : PrivacyJournalStage::PublicStateVerified;
 
     if (!journalStore->compareAndUpdate(finalRecord, applyingHash,
                                         &result.finalJournalSha256,

@@ -42,6 +42,12 @@ enum class PrivacyPublicTransitionFactKind
     Proxy    = 2
 };
 
+enum class PrivacyPublicTransitionDirection
+{
+    TransactionForward       = 1,
+    CompatibilityGuardRelock = 2
+};
+
 enum class PrivacyPublicTransitionError
 {
     None,
@@ -97,6 +103,8 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyPublicTransitionRequest
         static_cast<PrivacyPublicTransitionFactKind>(0);
     PrivacyPublicTransitionFactKind installedFact =
         static_cast<PrivacyPublicTransitionFactKind>(0);
+    PrivacyPublicTransitionDirection direction =
+        PrivacyPublicTransitionDirection::TransactionForward;
     /** Optional final public mode applied only after exact installed-byte
      * verification. -1 preserves the staged mode. */
     int                             installedUnixMode = -1;

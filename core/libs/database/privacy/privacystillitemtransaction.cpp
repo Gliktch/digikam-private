@@ -1395,6 +1395,333 @@ bool PrivacyStillItemTransactionResult::succeeded() const
             (status == PrivacyStillItemTransactionStatus::CompatibilityRelocked));
 }
 
+PrivacyStillItemTransactionResult PrivacyCompatibilityExposureGuardEngine::relock(
+    const PrivacyStorageRoot& publicRoot,
+    const PrivacyJournalRootExpectation& rootExpectation,
+    const QString& unlockTransactionUuid)
+{
+    QString itemUuid;
+    const auto fail = [&](PrivacyStillItemTransactionStatus status,
+                          const QString& detail)
+    {
+        return failure(status, unlockTransactionUuid, itemUuid, detail);
+    };
+
+    if (!canonicalUuid(unlockTransactionUuid) ||
+        !sameRootExpectation(publicRoot, rootExpectation))
+    {
+        return fail(PrivacyStillItemTransactionStatus::InvalidRequest,
+                    QStringLiteral("Compatibility guard request is invalid"));
+    }
+
+    PrivacyJournalError journalError = PrivacyJournalError::None;
+    QString detail;
+    std::unique_ptr<PrivacyTransactionJournalStore> journalStore =
+        PrivacyTransactionJournalStore::open(
+            publicRoot.configuredPath, rootExpectation, &journalError, &detail);
+
+    if (!journalStore)
+    {
+        return fail(PrivacyStillItemTransactionStatus::RootUnavailable,
+                    detail.isEmpty()
+                        ? QStringLiteral("Compatibility guard root is unavailable")
+                        : detail);
+    }
+
+    PrivacyJournalLoadResult loaded = journalStore->load(
+        unlockTransactionUuid);
+
+    if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+        !loaded.authoritative || !loaded.hasRecord)
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                    loaded.detail.isEmpty()
+                        ? QStringLiteral(
+                              "Compatibility guard journal is not authoritative")
+                        : loaded.detail);
+    }
+
+    const PrivacyJournalRecord record = loaded.record;
+
+    if (!record.assets.isEmpty())
+    {
+        itemUuid = record.assets.constFirst().itemUuid;
+    }
+
+    if ((record.transactionUuid != unlockTransactionUuid) ||
+        (record.transactionType !=
+         PrivacyTransactionType::CompatibilityUnlock) ||
+        (record.rootUuid != publicRoot.uuid) ||
+        (record.rootDevice != rootExpectation.device) ||
+        (record.rootInode != rootExpectation.inode) ||
+        (record.rootIdentitySha256 != rootExpectation.identitySha256) ||
+        !singleItemContainerMatches(record) ||
+        ((record.stage != PrivacyJournalStage::Created) &&
+         (record.stage != PrivacyJournalStage::Prepared) &&
+         (record.stage != PrivacyJournalStage::Staged) &&
+         (record.stage != PrivacyJournalStage::ProtectedCopyVerified) &&
+         (record.stage != PrivacyJournalStage::Applying) &&
+         (record.stage != PrivacyJournalStage::PublicStateVerified) &&
+         (record.stage != PrivacyJournalStage::ReconciliationRequired) &&
+         (record.stage != PrivacyJournalStage::Complete)))
+    {
+        return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral(
+                        "Compatibility guard journal facts are not exact"));
+    }
+
+    const PrivacyJournalObjectFact& expectedArchive =
+        record.assets.constFirst().container;
+    const QString archivePath = absolutePath(
+        publicRoot, record.assets.constFirst().containerRelativePath);
+    const auto protectedCopyExact = [&]()
+    {
+        PrivacyJournalObjectFact archiveFact;
+        return (!archivePath.isEmpty() &&
+                stableFileFact(archivePath, nullptr, &archiveFact) &&
+                sameFact(archiveFact, expectedArchive));
+    };
+    const auto publicStateLocked = [&]()
+    {
+        for (const PrivacyJournalAsset& asset : record.assets)
+        {
+            const QString publicPath = absolutePath(
+                publicRoot, asset.publicRelativePath);
+
+            if (publicPath.isEmpty())
+            {
+                return false;
+            }
+
+            if (asset.proxy.presence ==
+                PrivacyJournalExpectedPresence::Present)
+            {
+                PrivacyJournalObjectFact publicFact;
+
+                if (!stableFileFact(publicPath, nullptr, &publicFact) ||
+                    !sameFact(publicFact, asset.proxy))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                const QFileInfo publicInfo(publicPath);
+
+                if (publicInfo.exists() || publicInfo.isSymLink())
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    };
+    const auto cleanupRetainedOriginals = [&]()
+    {
+        if (!protectedCopyExact())
+        {
+            return false;
+        }
+
+        for (const PrivacyJournalAsset& asset : record.assets)
+        {
+            if (!removeExactFile(publicRoot, rootExpectation,
+                                 asset.stagedRelativePath,
+                                 asset.original, true))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    if (record.stage == PrivacyJournalStage::Complete)
+    {
+        if (!publicStateLocked())
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                QStringLiteral(
+                    "guard-complete public content is mixed or changed"));
+        }
+
+        if (!cleanupRetainedOriginals())
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        QStringLiteral(
+                            "guard-complete original cleanup is pending"));
+        }
+
+        PrivacyStillItemTransactionResult result;
+        result.status = PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+        result.transactionUuid = unlockTransactionUuid;
+        result.itemUuid = itemUuid;
+        return result;
+    }
+
+    if ((record.stage == PrivacyJournalStage::Created) ||
+        (record.stage == PrivacyJournalStage::Prepared) ||
+        (record.stage == PrivacyJournalStage::Staged) ||
+        (record.stage == PrivacyJournalStage::ProtectedCopyVerified))
+    {
+        if (!publicStateLocked() || !cleanupRetainedOriginals())
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                QStringLiteral(
+                    "pre-exposure guard cancellation requires reconciliation"));
+        }
+
+        PrivacyJournalRecord complete = record;
+        complete.stage = PrivacyJournalStage::Complete;
+        QByteArray completeHash;
+
+        if (!journalStore->compareAndUpdate(
+                complete, loaded.sha256, &completeHash,
+                &journalError, &detail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                        detail);
+        }
+
+        PrivacyStillItemTransactionResult result;
+        result.status = PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+        result.transactionUuid = unlockTransactionUuid;
+        result.itemUuid = itemUuid;
+        return result;
+    }
+
+    if (!protectedCopyExact())
+    {
+        return fail(PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                    QStringLiteral(
+                        "protected copy changed before guarded relock"));
+    }
+
+    if (record.stage == PrivacyJournalStage::Applying)
+    {
+        QList<PrivacyPublicTransitionRequest> forwardTransitions;
+
+        for (const PrivacyJournalAsset& asset : record.assets)
+        {
+            PrivacyPublicTransitionRequest transition;
+            transition.absoluteRootPath = publicRoot.configuredPath;
+            transition.rootExpectation = rootExpectation;
+            transition.journalRecord = record;
+            transition.authoritativeJournalSha256 = loaded.sha256;
+            transition.itemUuid = asset.itemUuid;
+            transition.role = asset.role;
+            transition.ordinal = asset.ordinal;
+            transition.mode =
+                (asset.proxy.presence ==
+                 PrivacyJournalExpectedPresence::Present)
+                    ? PrivacyPublicTransitionMode::ExchangePresent
+                    : PrivacyPublicTransitionMode::InstallAbsent;
+            transition.currentFact = PrivacyPublicTransitionFactKind::Proxy;
+            transition.installedFact =
+                PrivacyPublicTransitionFactKind::Original;
+            forwardTransitions << transition;
+        }
+
+        const PrivacyPublicTransitionResult exposed =
+            PrivacyPublicTransitionEngine().executeBatch(forwardTransitions);
+
+        if (!exposed.succeeded())
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                exposed.detail.isEmpty()
+                    ? QStringLiteral(
+                          "interrupted exposure requires reconciliation")
+                    : exposed.detail);
+        }
+
+        return relock(publicRoot, rootExpectation, unlockTransactionUuid);
+    }
+
+    QList<PrivacyPublicTransitionRequest> transitions;
+
+    for (const PrivacyJournalAsset& asset : record.assets)
+    {
+        PrivacyPublicTransitionRequest transition;
+        transition.absoluteRootPath = publicRoot.configuredPath;
+        transition.rootExpectation = rootExpectation;
+        transition.journalRecord = record;
+        transition.authoritativeJournalSha256 = loaded.sha256;
+        transition.itemUuid = asset.itemUuid;
+        transition.role = asset.role;
+        transition.ordinal = asset.ordinal;
+        transition.mode =
+            (asset.proxy.presence == PrivacyJournalExpectedPresence::Present)
+                ? PrivacyPublicTransitionMode::ExchangePresent
+                : PrivacyPublicTransitionMode::RemovePresent;
+        transition.currentFact = PrivacyPublicTransitionFactKind::Original;
+        transition.installedFact = PrivacyPublicTransitionFactKind::Proxy;
+        transition.direction =
+            PrivacyPublicTransitionDirection::CompatibilityGuardRelock;
+        transitions << transition;
+    }
+
+    const PrivacyPublicTransitionResult transitioned =
+        PrivacyPublicTransitionEngine().executeBatch(transitions);
+
+    if (!transitioned.succeeded())
+    {
+        loaded = journalStore->load(unlockTransactionUuid);
+
+        if ((loaded.disposition == PrivacyJournalLoadDisposition::Loaded) &&
+            loaded.authoritative && loaded.hasRecord &&
+            (loaded.record.stage ==
+             PrivacyJournalStage::PublicStateVerified))
+        {
+            PrivacyJournalRecord reconciliation = loaded.record;
+            reconciliation.stage =
+                PrivacyJournalStage::ReconciliationRequired;
+            QByteArray ignoredHash;
+            journalStore->compareAndUpdate(
+                reconciliation, loaded.sha256, &ignoredHash,
+                &journalError, &detail);
+        }
+
+        return fail(PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                    transitioned.detail.isEmpty()
+                        ? QStringLiteral("guarded relock requires reconciliation")
+                        : transitioned.detail);
+    }
+
+    loaded = journalStore->load(unlockTransactionUuid);
+
+    if ((loaded.disposition != PrivacyJournalLoadDisposition::Loaded) ||
+        !loaded.authoritative || !loaded.hasRecord ||
+        (loaded.record.stage != PrivacyJournalStage::Complete))
+    {
+        return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                    QStringLiteral(
+                        "guarded relock completion journal is not authoritative"));
+    }
+
+    if (!publicStateLocked())
+    {
+        return fail(PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                    QStringLiteral(
+                        "guarded relock public content did not verify"));
+    }
+
+    if (!cleanupRetainedOriginals())
+    {
+        return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                    QStringLiteral("guarded original cleanup is pending"));
+    }
+
+    PrivacyStillItemTransactionResult result;
+    result.status = PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+    result.transactionUuid = unlockTransactionUuid;
+    result.itemUuid = itemUuid;
+    return result;
+}
+
 bool PrivacyCoreDbStillItemPersistence::loadSnapshot(
     PrivacyRepositorySnapshot* const snapshot) const
 {
@@ -1771,6 +2098,7 @@ public:
     PrivacyVideoProxyGenerator videoProxy;
     PrivacyPublicTransitionEngine transition;
     FaultHook faultHook;
+    CompatibilityGuardArmHook compatibilityGuardArmHook;
     bool durableReplay = false;
     bool authenticatedCreatedReplay = false;
 };
@@ -1788,6 +2116,12 @@ PrivacyStillItemTransactionEngine::~PrivacyStillItemTransactionEngine() = defaul
 void PrivacyStillItemTransactionEngine::setFaultHook(const FaultHook& hook)
 {
     d->faultHook = hook;
+}
+
+void PrivacyStillItemTransactionEngine::setCompatibilityGuardArmHook(
+    const CompatibilityGuardArmHook& hook)
+{
+    d->compatibilityGuardArmHook = hook;
 }
 
 PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
@@ -4132,6 +4466,60 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
                     QStringLiteral("cannot conservatively gate Compatibility exposure"));
     }
 
+    if (d->compatibilityGuardArmHook)
+    {
+        QString guardDetail;
+
+        if (!d->compatibilityGuardArmHook(
+                request.publicRoot, request.rootExpectation,
+                transactionUuid, &guardDetail))
+        {
+            const PrivacyStillItemTransactionResult cancelled =
+                PrivacyCompatibilityExposureGuardEngine::relock(
+                    request.publicRoot, request.rootExpectation,
+                    transactionUuid);
+            const PrivacyJournalRecord complete = recordAt(
+                protectedCopy, PrivacyJournalStage::Complete);
+
+            if (!cancelled.succeeded() ||
+                !d->advanceJournal(request.publicRoot,
+                                   request.rootExpectation,
+                                   protectedCopy, complete,
+                                   &journalHash, &detail))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    guardDetail + QStringLiteral(
+                        "; pre-exposure cancellation requires recovery: ") +
+                    (cancelled.succeeded() ? detail : cancelled.detail));
+            }
+
+            PrivacyTransaction completed = applying;
+            completed.state = PrivacyTransactionState::Complete;
+            completed.generation = 3;
+            completed.payloadData = encodeCompatibilityPayload(
+                complete, request.groupUuid);
+            completed.updatedAt = QDateTime::currentDateTimeUtc();
+
+            if (completed.payloadData.isEmpty() ||
+                !d->persistence.compareAndUpdateTransaction(
+                    completed, PrivacyTransactionState::Applying, 2) ||
+                !d->runtime.publishCompatibilityExposure(
+                    request.imageId, itemUuid, false))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    guardDetail + QStringLiteral(
+                        "; cancelled exposure state requires recovery"));
+            }
+
+            return fail(
+                PrivacyStillItemTransactionStatus::RecoveryRequired,
+                guardDetail + QStringLiteral(
+                    "; Compatibility Unlock was cancelled before exposure"));
+        }
+    }
+
     if (d->fault(PrivacyStillItemFaultPoint::AfterCompatibilityUnlockApplying))
     {
         return fail(
@@ -4958,7 +5346,9 @@ PrivacyStillItemTransactionEngine::recoverCompatibility(
         }
 
         if ((transaction.state != PrivacyTransactionState::Applying) &&
-            (transaction.state != PrivacyTransactionState::Exposed))
+            (transaction.state != PrivacyTransactionState::Exposed) &&
+            (transaction.state !=
+             PrivacyTransactionState::NeedsReconciliation))
         {
             return fail(
                 PrivacyStillItemTransactionStatus::RecoveryRequired,
@@ -4972,6 +5362,147 @@ PrivacyStillItemTransactionEngine::recoverCompatibility(
             return fail(
                 PrivacyStillItemTransactionStatus::RuntimePublicationFailure,
                 QStringLiteral("cannot publish recovered exposure gate"));
+        }
+
+        if ((transaction.state == PrivacyTransactionState::Exposed) ||
+            (transaction.state ==
+             PrivacyTransactionState::NeedsReconciliation))
+        {
+            PrivacyJournalError loadError = PrivacyJournalError::None;
+            std::unique_ptr<PrivacyTransactionJournalStore> journalStore =
+                PrivacyTransactionJournalStore::open(
+                    publicRoot.configuredPath, expectation, &loadError,
+                    &detail);
+
+            if (!journalStore)
+            {
+                return fail(PrivacyStillItemTransactionStatus::JournalFailure,
+                            detail);
+            }
+
+            const PrivacyJournalLoadResult loaded = journalStore->load(
+                transaction.uuid);
+            const bool allowedStage =
+                loaded.hasRecord &&
+                ((loaded.record.stage ==
+                  PrivacyJournalStage::PublicStateVerified) ||
+                 (loaded.record.stage ==
+                  PrivacyJournalStage::ReconciliationRequired) ||
+                 (loaded.record.stage == PrivacyJournalStage::Complete));
+            const PrivacyJournalRecord expectedLoaded = allowedStage
+                ? recordAt(publicVerified, loaded.record.stage)
+                : PrivacyJournalRecord();
+            const QByteArray expectedBytes = allowedStage
+                ? PrivacyTransactionJournalCodec::encode(expectedLoaded)
+                : QByteArray();
+
+            if ((loaded.disposition !=
+                 PrivacyJournalLoadDisposition::Loaded) ||
+                !loaded.authoritative || !allowedStage ||
+                expectedBytes.isEmpty() ||
+                (loaded.canonicalBytes != expectedBytes) ||
+                (loaded.sha256 != PrivacyTransactionJournalCodec::sha256(
+                     expectedBytes)))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::JournalFailure,
+                    QStringLiteral(
+                        "Compatibility exposure journal facts changed"));
+            }
+
+            const bool guardStage =
+                ((loaded.record.stage ==
+                  PrivacyJournalStage::ReconciliationRequired) ||
+                 (loaded.record.stage == PrivacyJournalStage::Complete));
+
+            if (guardStage)
+            {
+                const PrivacyStillItemTransactionResult guarded =
+                    PrivacyCompatibilityExposureGuardEngine::relock(
+                        publicRoot, expectation, transaction.uuid);
+
+                if (!guarded.succeeded())
+                {
+                    if ((guarded.status ==
+                         PrivacyStillItemTransactionStatus::
+                             ReconciliationRequired) &&
+                        (transaction.state ==
+                         PrivacyTransactionState::Exposed))
+                    {
+                        PrivacyTransaction pending = transaction;
+                        pending.state =
+                            PrivacyTransactionState::NeedsReconciliation;
+                        pending.generation = transaction.generation + 1;
+                        pending.payloadData = encodeCompatibilityPayload(
+                            recordAt(
+                                publicVerified,
+                                PrivacyJournalStage::ReconciliationRequired),
+                            groupUuid);
+                        pending.updatedAt = QDateTime::currentDateTimeUtc();
+
+                        if (pending.payloadData.isEmpty() ||
+                            !d->persistence.compareAndUpdateTransaction(
+                                pending, PrivacyTransactionState::Exposed,
+                                transaction.generation))
+                        {
+                            return fail(
+                                PrivacyStillItemTransactionStatus::
+                                    PersistenceFailure,
+                                QStringLiteral(
+                                    "cannot publish guard reconciliation"));
+                        }
+                    }
+
+                    return fail(guarded.status, guarded.detail);
+                }
+
+                const PrivacyJournalRecord complete = recordAt(
+                    publicVerified, PrivacyJournalStage::Complete);
+
+                if (!d->advanceJournal(publicRoot, expectation,
+                                       publicVerified, complete,
+                                       &journalHash, &detail))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::JournalFailure,
+                        detail);
+                }
+
+                PrivacyTransaction completed = transaction;
+                completed.state = PrivacyTransactionState::Complete;
+                completed.generation = transaction.generation + 1;
+                completed.payloadData = encodeCompatibilityPayload(
+                    complete, groupUuid);
+                completed.updatedAt = QDateTime::currentDateTimeUtc();
+
+                if (completed.payloadData.isEmpty() ||
+                    !d->persistence.compareAndUpdateTransaction(
+                        completed, transaction.state,
+                        transaction.generation))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::PersistenceFailure,
+                        QStringLiteral(
+                            "cannot complete guard-relocked exposure"));
+                }
+
+                if (!d->runtime.publishCompatibilityExposure(
+                        item->imageId, item->uuid, false))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::
+                            RuntimePublicationFailure,
+                        QStringLiteral(
+                            "cannot clear guard-relocked exposure gate"));
+                }
+
+                PrivacyStillItemTransactionResult result;
+                result.status =
+                    PrivacyStillItemTransactionStatus::CompatibilityRelocked;
+                result.transactionUuid = transaction.uuid;
+                result.itemUuid = transaction.itemUuid;
+                return result;
+            }
         }
 
         if (transaction.state == PrivacyTransactionState::Applying)

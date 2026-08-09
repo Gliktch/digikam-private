@@ -125,6 +125,24 @@ else()
     install(TARGETS digikam ${INSTALL_TARGETS_DEFAULT_ARGS})
 endif()
 
+if(UNIX AND NOT APPLE)
+
+    add_executable(digikam-private-guard
+                   ${CMAKE_CURRENT_SOURCE_DIR}/main/privacycompatibilityguard_main.cpp)
+
+    target_include_directories(digikam-private-guard
+                               PRIVATE
+                               ${DIGIKAM_TARGET_INCLUDES})
+
+    target_link_libraries(digikam-private-guard
+                          PRIVATE
+                          Qt${QT_VERSION_MAJOR}::Core
+                          digikamdatabase)
+
+    install(TARGETS digikam-private-guard DESTINATION ${KDE_INSTALL_BINDIR})
+
+endif()
+
 if(APPLE)
     install(FILES "$<TARGET_FILE:digikam>.dSYM" DESTINATION "${CMAKE_INSTALL_BINDIR}" CONFIGURATIONS Debug RelWithDebInfo)
 endif()

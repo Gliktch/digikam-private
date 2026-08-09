@@ -275,6 +275,10 @@ ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacystillitemtransaction_utest.cpp
               ${COMMON_TEST_LINK}
 )
 
+if(TARGET digikam-private-guard)
+    add_dependencies(privacystillitemtransaction_utest digikam-private-guard)
+endif()
+
 #------------------------------------------------------------------------
 
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyruntime_utest.cpp

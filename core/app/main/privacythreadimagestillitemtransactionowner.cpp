@@ -26,11 +26,17 @@
 // Qt includes
 
 #include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QProcess>
 #include <QRecursiveMutex>
+#include <QStandardPaths>
+#include <QTemporaryFile>
+#include <QThread>
 #include <QUuid>
 
 // Local includes
@@ -85,6 +91,127 @@ private:
 QString newUuid()
 {
     return QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+}
+
+bool launchCompatibilityGuard(
+    const PrivacyStorageRoot& root,
+    const PrivacyJournalRootExpectation& expectation,
+    const QString& transactionUuid, QString* const detail)
+{
+#if !defined(Q_OS_LINUX)
+    Q_UNUSED(root);
+    Q_UNUSED(expectation);
+    Q_UNUSED(transactionUuid);
+
+    if (detail)
+    {
+        *detail = QStringLiteral(
+            "The independent Compatibility guard requires Linux");
+    }
+
+    return false;
+#else
+    if (!detail || !root.isValid() ||
+        (root.kind != PrivacyStorageRootKind::AlbumRoot) ||
+        transactionUuid.isEmpty())
+    {
+        return false;
+    }
+
+    const QString program = QDir(QCoreApplication::applicationDirPath())
+                                .filePath(
+                                    QStringLiteral("digikam-private-guard"));
+
+    if (!QFileInfo(program).isExecutable())
+    {
+        *detail = QStringLiteral(
+            "The bundled Compatibility guard executable is unavailable");
+        return false;
+    }
+
+    const QString runtimePath = QStandardPaths::writableLocation(
+        QStandardPaths::RuntimeLocation);
+    QTemporaryFile readyFile(QDir(runtimePath).filePath(
+        QStringLiteral("digikam-private-guard-XXXXXX.ready")));
+
+    if (runtimePath.isEmpty() || !QFileInfo(runtimePath).isDir() ||
+        !readyFile.open() ||
+        !readyFile.setPermissions(QFileDevice::ReadOwner |
+                                  QFileDevice::WriteOwner))
+    {
+        *detail = QStringLiteral(
+            "A secure Compatibility guard handshake could not be created");
+        return false;
+    }
+
+    const QString readyPath = readyFile.fileName();
+    const QString readyToken = newUuid();
+    readyFile.setAutoRemove(false);
+    readyFile.close();
+
+    QProcess guard;
+    guard.setProgram(program);
+    guard.setArguments({
+        QStringLiteral("--parent-pid"),
+        QString::number(QCoreApplication::applicationPid()),
+        QStringLiteral("--root-path"), root.configuredPath,
+        QStringLiteral("--root-uuid"), root.uuid,
+        QStringLiteral("--root-marker-uuid"), root.markerUuid,
+        QStringLiteral("--root-identity"),
+        QString::fromLatin1(root.identityData.toBase64()),
+        QStringLiteral("--album-root-id"),
+        QString::number(root.albumRootId),
+        QStringLiteral("--root-device"),
+        QString::number(expectation.device),
+        QStringLiteral("--root-inode"),
+        QString::number(expectation.inode),
+        QStringLiteral("--ready-file"), readyPath,
+        QStringLiteral("--ready-token"), readyToken,
+        QStringLiteral("--transaction-uuid"), transactionUuid
+    });
+    guard.setWorkingDirectory(QCoreApplication::applicationDirPath());
+    guard.setStandardOutputFile(QProcess::nullDevice());
+    guard.setStandardErrorFile(QProcess::nullDevice());
+    qint64 processId = 0;
+
+    if (!guard.startDetached(&processId) || (processId <= 0))
+    {
+        QFile::remove(readyPath);
+        *detail = guard.errorString().isEmpty()
+                ? QStringLiteral("The independent Compatibility guard did not start")
+                : guard.errorString();
+        return false;
+    }
+
+    bool armed = false;
+    QElapsedTimer timer;
+    timer.start();
+
+    while (timer.elapsed() < 2000)
+    {
+        QFile acknowledgement(readyPath);
+
+        if (acknowledgement.open(QIODevice::ReadOnly) &&
+            (acknowledgement.readAll() == readyToken.toUtf8()))
+        {
+            armed = true;
+            break;
+        }
+
+        QThread::msleep(10);
+    }
+
+    QFile::remove(readyPath);
+
+    if (!armed)
+    {
+        *detail = QStringLiteral(
+            "The independent Compatibility guard did not acknowledge readiness");
+        return false;
+    }
+
+    return true;
+#endif
 }
 
 PrivacyStillItemTransactionResult actionFailure(
@@ -324,6 +451,14 @@ PrivacyThreadImageIOStillItemTransactionOwner::
         PrivacyRuntimeCoordinator& runtime)
     : d(new Private(runtime))
 {
+    d->engine.setCompatibilityGuardArmHook(
+        [](const PrivacyStorageRoot& root,
+           const PrivacyJournalRootExpectation& expectation,
+           const QString& transactionUuid, QString* const detail)
+        {
+            return launchCompatibilityGuard(root, expectation,
+                                            transactionUuid, detail);
+        });
 }
 
 PrivacyThreadImageIOStillItemTransactionOwner::
@@ -522,6 +657,17 @@ PrivacyThreadImageIOStillItemTransactionOwner::actionContextForImage(
             {
                 result.compatibilityAvailability =
                     PrivacyCompatibilityActionAvailability::Relockable;
+                result.compatibilityUnlockTransactionUuid =
+                    activeCompatibility->uuid;
+            }
+            else if ((activeCompatibility->type ==
+                      PrivacyTransactionType::CompatibilityUnlock) &&
+                     (activeCompatibility->state ==
+                      PrivacyTransactionState::NeedsReconciliation))
+            {
+                result.compatibilityAvailability =
+                    PrivacyCompatibilityActionAvailability::
+                        ReconciliationRequired;
                 result.compatibilityUnlockTransactionUuid =
                     activeCompatibility->uuid;
             }
@@ -1205,16 +1351,10 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelock(
                 "The exact Compatibility Unlock exposure is unavailable"));
     }
 
-    PrivacyCompatibilityRelockRequest request;
-    request.imageId = info.id();
-    request.categoryUuid = category->uuid;
-    request.itemUuid = item->uuid;
-    request.unlockTransactionUuid = unlock->uuid;
-    request.relockTransactionUuid = newUuid();
-    request.publicRoot = *root;
-    request.rootExpectation = expectation;
     QMutexLocker locker(&d->transactionMutex);
-    return d->engine.compatibilityRelock(request);
+    PrivacyCompatibilityExposureGuardEngine::relock(
+        *root, expectation, unlock->uuid);
+    return d->engine.recover(*root, unlock->uuid);
 }
 
 PrivacyStillItemTransactionResult

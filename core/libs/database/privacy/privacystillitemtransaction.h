@@ -73,6 +73,22 @@ public:
     QString detail;
 };
 
+/**
+ * Password- and database-independent emergency relock for one exact
+ * Compatibility Unlock journal. This is the narrow filesystem authority used
+ * by the detached parent-death guard; application recovery remains responsible
+ * for synchronizing central transaction and runtime state afterward.
+ */
+class DIGIKAM_DATABASE_EXPORT PrivacyCompatibilityExposureGuardEngine
+{
+public:
+
+    static PrivacyStillItemTransactionResult relock(
+        const PrivacyStorageRoot& publicRoot,
+        const PrivacyJournalRootExpectation& rootExpectation,
+        const QString& unlockTransactionUuid);
+};
+
 class DIGIKAM_DATABASE_EXPORT PrivacyStillProtectRequest
 {
 public:
@@ -261,6 +277,11 @@ class DIGIKAM_DATABASE_EXPORT PrivacyStillItemTransactionEngine
 public:
 
     using FaultHook = std::function<bool(PrivacyStillItemFaultPoint)>;
+    using CompatibilityGuardArmHook = std::function<bool(
+        const PrivacyStorageRoot&,
+        const PrivacyJournalRootExpectation&,
+        const QString&,
+        QString*)>;
 
     PrivacyStillItemTransactionEngine(
         PrivacyStillItemPersistence& persistence,
@@ -269,6 +290,8 @@ public:
     ~PrivacyStillItemTransactionEngine();
 
     void setFaultHook(const FaultHook& hook);
+    void setCompatibilityGuardArmHook(
+        const CompatibilityGuardArmHook& hook);
     PrivacyStillItemTransactionResult protect(
         const PrivacyStillProtectRequest& request,
         const PrivacyPassword& password);

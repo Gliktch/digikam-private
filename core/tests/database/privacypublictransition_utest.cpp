@@ -361,6 +361,16 @@ public:
         return request;
     }
 
+    PrivacyPublicTransitionRequest guardRequest() const
+    {
+        PrivacyPublicTransitionRequest request = this->request();
+        request.direction =
+            PrivacyPublicTransitionDirection::CompatibilityGuardRelock;
+        request.currentFact = PrivacyPublicTransitionFactKind::Original;
+        request.installedFact = PrivacyPublicTransitionFactKind::Proxy;
+        return request;
+    }
+
 public:
 
     QTemporaryDir root;
@@ -405,6 +415,7 @@ private Q_SLOTS:
     void testApplyingReplayRejectsMixedBytes();
     void testFinalJournalFailureRequiresReconciliation();
     void testRollbackSuccessAndFailure();
+    void testCompatibilityGuardRelock();
 };
 
 void PrivacyPublicTransitionTest::testExchangePresentAndRetainDisplaced()
@@ -517,6 +528,88 @@ void PrivacyPublicTransitionTest::testUnprotectDirection()
     QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
     QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
     QCOMPARE(readBytes(fixture.containerPath), ContainerBytes);
+}
+
+void PrivacyPublicTransitionTest::testCompatibilityGuardRelock()
+{
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(
+            PrivacyTransactionType::CompatibilityUnlock));
+        PrivacyPublicTransitionEngine engine;
+        QVERIFY(engine.execute(fixture.request()).succeeded());
+        QVERIFY(fixture.refreshJournal());
+        QCOMPARE(fixture.record.stage,
+                 PrivacyJournalStage::PublicStateVerified);
+        QCOMPARE(readBytes(fixture.publicPath), OriginalBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), ProxyBytes);
+
+        const PrivacyPublicTransitionResult guarded = engine.executeBatch(
+            { fixture.guardRequest() });
+        QVERIFY2(guarded.succeeded(), qPrintable(guarded.detail));
+        QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+        QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+                 PrivacyJournalStage::Complete);
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(
+            PrivacyTransactionType::CompatibilityUnlock));
+        PrivacyPublicTransitionEngine engine;
+        QVERIFY(engine.execute(fixture.request()).succeeded());
+        QVERIFY(fixture.refreshJournal());
+        int mutations = 0;
+        engine.setFaultHook(
+            [&mutations](PrivacyPublicTransitionFaultPoint point)
+            {
+                if (point ==
+                    PrivacyPublicTransitionFaultPoint::AfterNamespaceMutation)
+                {
+                    ++mutations;
+                    return true;
+                }
+
+                return false;
+            });
+        const PrivacyPublicTransitionResult interrupted = engine.executeBatch(
+            { fixture.guardRequest() });
+        QCOMPARE(interrupted.error,
+                 PrivacyPublicTransitionError::DurabilityUncertain);
+        QCOMPARE(mutations, 1);
+        QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+                 PrivacyJournalStage::ReconciliationRequired);
+
+        engine.setFaultHook({});
+        QVERIFY(fixture.refreshJournal());
+        const PrivacyPublicTransitionResult replayed = engine.executeBatch(
+            { fixture.guardRequest() });
+        QVERIFY2(replayed.succeeded(), qPrintable(replayed.detail));
+        QCOMPARE(readBytes(fixture.publicPath), ProxyBytes);
+        QCOMPARE(readBytes(fixture.stagedPath), OriginalBytes);
+        QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+                 PrivacyJournalStage::Complete);
+    }
+
+    {
+        TransitionFixture fixture;
+        QVERIFY(fixture.initialize(
+            PrivacyTransactionType::CompatibilityUnlock));
+        PrivacyPublicTransitionEngine engine;
+        QVERIFY(engine.execute(fixture.request()).succeeded());
+        QVERIFY(fixture.refreshJournal());
+        QVERIFY(replaceBytes(fixture.publicPath,
+                             QByteArrayLiteral("outside-change")));
+        const PrivacyPublicTransitionResult changed = engine.executeBatch(
+            { fixture.guardRequest() });
+        QCOMPARE(changed.error,
+                 PrivacyPublicTransitionError::FileFactMismatch);
+        QCOMPARE(readBytes(fixture.publicPath),
+                 QByteArrayLiteral("outside-change"));
+        QCOMPARE(fixture.store->load(TransactionUuid).record.stage,
+                 PrivacyJournalStage::PublicStateVerified);
+    }
 }
 
 void PrivacyPublicTransitionTest::testCrossRootProtectedProof()

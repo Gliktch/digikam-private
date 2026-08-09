@@ -170,7 +170,11 @@ void PrivacyAnalysisWiringTest::testCompatibilityActionsUseTransactionOwner()
     QVERIFY(owner.contains(QStringLiteral(
         "d->engine.compatibilityUnlock(request, password)")));
     QVERIFY(owner.contains(QStringLiteral(
-        "d->engine.compatibilityRelock(request)")));
+        "setCompatibilityGuardArmHook(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "PrivacyCompatibilityExposureGuardEngine::relock(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->engine.recover(*root, unlock->uuid)")));
     QVERIFY(owner.contains(QStringLiteral("runWithUnlockedSecret(")));
     QVERIFY(itemView.contains(QStringLiteral(
         "privacyOwner->compatibilityUnlock(")));
