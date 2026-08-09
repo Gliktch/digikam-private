@@ -545,6 +545,24 @@ bool DFileOperations::copyFile(const QString& srcFile,
                                const QString& dstFile,
                                const bool* const cancel)
 {
+    return copyFileCancellable(
+        srcFile, dstFile,
+        [cancel]()
+        {
+            return cancel && *cancel;
+        });
+}
+
+bool DFileOperations::copyFileCancellable(
+    const QString& srcFile,
+    const QString& dstFile,
+    const std::function<bool()>& isCancelled)
+{
+    if (isCancelled && isCancelled())
+    {
+        return false;
+    }
+
     bool ret = true;
     QString tmpFile(dstFile);
     tmpFile += QLatin1String(".digikamtempfile.tmp");
@@ -574,7 +592,8 @@ bool DFileOperations::copyFile(const QString& srcFile,
 
     while (((len = sFile.read(buffer.data(), MAX_IPC_SIZE)) != 0))
     {
-        if ((cancel && *cancel) || (len == -1) || (dFile.write(buffer.data(), len) != len))
+        if ((isCancelled && isCancelled()) || (len == -1) ||
+            (dFile.write(buffer.data(), len) != len))
         {
             ret = false;
 
@@ -584,6 +603,11 @@ bool DFileOperations::copyFile(const QString& srcFile,
 
     sFile.close();
     dFile.close();
+
+    if (ret && isCancelled && isCancelled())
+    {
+        ret = false;
+    }
 
     if (ret)
     {
@@ -678,6 +702,22 @@ bool DFileOperations::setModificationTime(const QString& srcFile,
                                    << srcFile;
 
     return false;
+}
+
+bool DFileOperations::setPermissionsAndModificationTime(
+    const QString& path,
+    QFileDevice::Permissions permissions,
+    const QDateTime& modificationDate)
+{
+    if (path.isEmpty() || !modificationDate.isValid() ||
+        !QFile::setPermissions(path, permissions | QFileDevice::WriteOwner))
+    {
+        return false;
+    }
+
+    const bool timeSet = setModificationTime(path, modificationDate);
+    const bool permissionsSet = QFile::setPermissions(path, permissions);
+    return timeSet && permissionsSet;
 }
 
 QString DFileOperations::findExecutable(const QString& name,

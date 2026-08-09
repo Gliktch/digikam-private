@@ -11,15 +11,18 @@
 // Qt includes
 
 #include <QHash>
+#include <QSemaphore>
 #include <QTest>
 
 // C++ includes
 
 #include <functional>
+#include <thread>
 
 // Local includes
 
 #include "privacyleaseregistry.h"
+#include "privacypreparedaccessregistry.h"
 
 using namespace Digikam;
 
@@ -28,6 +31,8 @@ namespace
 
 const QString itemUuidA = QLatin1String("20000000-0000-0000-0000-000000000001");
 const QString itemUuidB = QLatin1String("20000000-0000-0000-0000-000000000002");
+const QString categoryUuidA = QLatin1String("10000000-0000-0000-0000-000000000001");
+const QString categoryUuidB = QLatin1String("10000000-0000-0000-0000-000000000002");
 
 class FakeLeaseStateProvider final : public PrivacyLeaseStateProvider
 {
@@ -94,6 +99,10 @@ private Q_SLOTS:
     void testTamperAndExplicitRevocation();
     void testIssueFailsClosed();
     void testStateChangesDuringIssueAndValidation();
+    void testPreparedAccessOwnership();
+    void testPreparedAccessRejectsInvalidInput();
+    void testPreparedAccessQuiesceBarrier();
+    void testPreparedAccessCrossThreadQuiesce();
 };
 
 void PrivacyLeaseRegistryTest::testIssueAndValidate()
@@ -251,6 +260,140 @@ void PrivacyLeaseRegistryTest::testStateChangesDuringIssueAndValidation()
     };
 
     QCOMPARE(registry.validate(lease), PrivacyLeaseValidation::Revoked);
+}
+
+void PrivacyLeaseRegistryTest::testPreparedAccessOwnership()
+{
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 0);
+    QVERIFY(!PrivacyPreparedAccessRegistry::hasActiveAccess());
+
+    const PrivacyPreparedAccessToken tokenA =
+        PrivacyPreparedAccessRegistry::acquire({ categoryUuidA,
+                                                 categoryUuidA });
+    QVERIFY(tokenA.isValid());
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 1);
+    QVERIFY(PrivacyPreparedAccessRegistry::hasActiveAccess());
+    QVERIFY(PrivacyPreparedAccessRegistry::hasActiveAccess(categoryUuidA));
+    QVERIFY(!PrivacyPreparedAccessRegistry::hasActiveAccess(categoryUuidB));
+
+    const PrivacyPreparedAccessToken tokenAB =
+        PrivacyPreparedAccessRegistry::acquire({ categoryUuidB,
+                                                 categoryUuidA });
+    QVERIFY(tokenAB.isValid());
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 2);
+    QVERIFY(PrivacyPreparedAccessRegistry::hasActiveAccess(categoryUuidB));
+
+    QVERIFY(PrivacyPreparedAccessRegistry::release(tokenA));
+    QVERIFY(!PrivacyPreparedAccessRegistry::release(tokenA));
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 1);
+    QVERIFY(PrivacyPreparedAccessRegistry::hasActiveAccess(categoryUuidA));
+    QVERIFY(PrivacyPreparedAccessRegistry::hasActiveAccess(categoryUuidB));
+
+    QVERIFY(PrivacyPreparedAccessRegistry::release(tokenAB));
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 0);
+    QVERIFY(!PrivacyPreparedAccessRegistry::hasActiveAccess());
+}
+
+void PrivacyLeaseRegistryTest::testPreparedAccessRejectsInvalidInput()
+{
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 0);
+
+    const PrivacyPreparedAccessToken empty =
+        PrivacyPreparedAccessRegistry::acquire({});
+    QVERIFY(!empty.isValid());
+    QVERIFY(!PrivacyPreparedAccessRegistry::release(empty));
+
+    const PrivacyPreparedAccessToken invalid =
+        PrivacyPreparedAccessRegistry::acquire({ categoryUuidA,
+                                                 QLatin1String("not-a-uuid") });
+    QVERIFY(!invalid.isValid());
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 0);
+
+    // Invalid category queries fail closed without mutating the registry.
+    QVERIFY(PrivacyPreparedAccessRegistry::hasActiveAccess(
+        QLatin1String("not-a-uuid")));
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 0);
+}
+
+void PrivacyLeaseRegistryTest::testPreparedAccessQuiesceBarrier()
+{
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 0);
+
+    const PrivacyPreparedAccessToken active =
+        PrivacyPreparedAccessRegistry::acquire({ categoryUuidA });
+    QVERIFY(active.isValid());
+
+    {
+        PrivacyPreparedAccessQuiesceGuard blocked;
+        QVERIFY(!blocked.isAcquired());
+    }
+
+    QVERIFY(PrivacyPreparedAccessRegistry::release(active));
+
+    {
+        PrivacyPreparedAccessQuiesceGuard outer;
+        QVERIFY(outer.isAcquired());
+        QVERIFY(!PrivacyPreparedAccessRegistry::acquire(
+                     { categoryUuidA }).isValid());
+
+        {
+            PrivacyPreparedAccessQuiesceGuard nested;
+            QVERIFY(nested.isAcquired());
+            QVERIFY(!PrivacyPreparedAccessRegistry::acquire(
+                         { categoryUuidB }).isValid());
+        }
+
+        QVERIFY(!PrivacyPreparedAccessRegistry::acquire(
+                     { categoryUuidA }).isValid());
+    }
+
+    const PrivacyPreparedAccessToken after =
+        PrivacyPreparedAccessRegistry::acquire({ categoryUuidB });
+    QVERIFY(after.isValid());
+    QVERIFY(PrivacyPreparedAccessRegistry::release(after));
+}
+
+void PrivacyLeaseRegistryTest::testPreparedAccessCrossThreadQuiesce()
+{
+    QCOMPARE(PrivacyPreparedAccessRegistry::activeAccessCount(), 0);
+
+    QSemaphore entered;
+    QSemaphore finish;
+    bool workerAcquired = false;
+
+    std::thread worker(
+        [&entered, &finish, &workerAcquired]
+        {
+            PrivacyPreparedAccessQuiesceGuard guard;
+            workerAcquired = guard.isAcquired();
+            entered.release();
+            finish.acquire();
+        });
+
+    const bool workerEntered = entered.tryAcquire(1, 5000);
+    bool competingGuardAcquired = false;
+    bool competingTokenAcquired = false;
+
+    if (workerEntered)
+    {
+        PrivacyPreparedAccessQuiesceGuard competingGuard;
+        competingGuardAcquired = competingGuard.isAcquired();
+        competingTokenAcquired = PrivacyPreparedAccessRegistry::acquire(
+            { categoryUuidA }).isValid();
+    }
+
+    finish.release();
+    worker.join();
+
+    QVERIFY(workerEntered);
+    QVERIFY(workerAcquired);
+    QVERIFY(!competingGuardAcquired);
+    QVERIFY(!competingTokenAcquired);
+
+    const PrivacyPreparedAccessToken after =
+        PrivacyPreparedAccessRegistry::acquire({ categoryUuidA });
+    QVERIFY(after.isValid());
+    QVERIFY(PrivacyPreparedAccessRegistry::release(after));
 }
 
 QTEST_GUILESS_MAIN(PrivacyLeaseRegistryTest)

@@ -55,6 +55,7 @@ public:
 public:
 
     bool                    protectedItem = false;
+    QString                 itemUuid;
     QString                 categoryUuid;
     PrivacyItemAccess       access = PrivacyItemAccess::Unprotected;
     PrivacyRootRuntimeState publicRootState = PrivacyRootRuntimeState::Unknown;
@@ -92,6 +93,7 @@ public:
 
     PrivacyActionItem              logicalItem;
     PrivacyActionPolicyDisposition disposition = PrivacyActionPolicyDisposition::Denied;
+    QString                        itemUuid;
     QString                        categoryUuid;
     bool                           mayUseProxy = false;
 };

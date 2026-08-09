@@ -33,6 +33,7 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QStandardPaths>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QUuid>
@@ -56,6 +57,7 @@
 #include "privacycasualoriginalreader.h"
 #include "privacycategorysessionowner.h"
 #include "privacyderivativestore.h"
+#include "privacypreparedaccessregistry.h"
 #include "privacyrepository.h"
 #include "loadingcacheinterface.h"
 #include "privacysourceresolver.h"
@@ -70,14 +72,16 @@ namespace
 {
 
 constexpr qlonglong MaximumMaterializedOriginalBytes = 512LL * 1024LL * 1024LL;
+constexpr qlonglong PreparedScratchMinimumReserveBytes = 1024LL * 1024LL * 1024LL;
 
-class MaterializedOriginal final
+class MaterializedOriginal final : public PrivacySourceLifetime
 {
 public:
 
     ~MaterializedOriginal()
     {
-        if (!physicalPath.isEmpty())
+        if (!physicalPath.isEmpty() &&
+            !physicalPath.startsWith(QLatin1String("/proc/self/fd/")))
         {
             QFile::remove(physicalPath);
         }
@@ -110,6 +114,12 @@ public:
 
     bool setPresentationAvailable(const QString& categoryUuid, bool available)
     {
+        if (!available &&
+            PrivacyPreparedAccessRegistry::hasActiveAccess(categoryUuid))
+        {
+            return false;
+        }
+
         QSet<QString> changedPaths;
         QList<QSharedPointer<MaterializedOriginal> > originals;
 
@@ -182,7 +192,8 @@ public:
                 PrivacyCacheTransition::purge(token, inventory, &backend);
 
             if (!token.isValid() ||
-                (purge.status != PrivacyCacheTransition::Complete))
+                (purge.status != PrivacyCacheTransition::Complete) ||
+                PrivacyPreparedAccessRegistry::hasActiveAccess(categoryUuid))
             {
                 if (token.isValid())
                 {
@@ -361,8 +372,20 @@ public:
                     }
                 }
 
+                const bool preparedAccess =
+                    (request.consumer == PrivacySourceRequest::PreparedAccess);
+
+                if (!preparedAccess &&
+                    ((request.assetRole != PrivacyAsset::PrimaryMediaRole) ||
+                     (request.assetOrdinal != 0)))
+                {
+                    return PrivacySourceResult::denied(cacheNamespace);
+                }
+
                 const QSharedPointer<MaterializedOriginal> original =
-                    originalSource(imageId, request.logicalFilePath, itemState);
+                    originalSource(imageId, request.logicalFilePath, itemState,
+                                   request.assetRole, request.assetOrdinal,
+                                   !preparedAccess, request.isCancelled);
 
                 if (!original)
                 {
@@ -370,9 +393,11 @@ public:
                         QLatin1String("privacy-original-unavailable"));
                 }
 
-                return PrivacySourceResult::resolved(
+                PrivacySourceResult result = PrivacySourceResult::resolved(
                     original->physicalPath, original->cacheNamespace,
                     PrivacySourceResult::MemoryOnly);
+                result.lifetimeOwner = original;
+                return result;
             }
 
             return PrivacySourceResult::resolved(request.logicalFilePath,
@@ -505,17 +530,20 @@ private:
 #else
         QMutexLocker locker(&m_clearLock);
 
-        if (m_originalRuntimeDir && m_originalRuntimeDir->isValid())
+        std::unique_ptr<QTemporaryDir>& directoryOwner = m_originalRuntimeDir;
+
+        if (directoryOwner && directoryOwner->isValid())
         {
-            return m_originalRuntimeDir->path();
+            return directoryOwner->path();
         }
 
-        const QString runtime = QStandardPaths::writableLocation(
+        const QString base = QStandardPaths::writableLocation(
             QStandardPaths::RuntimeLocation);
-        const QString parent = QDir(runtime).filePath(
+        const QString parent = QDir(base).filePath(
             QLatin1String("digikam-private"));
 
-        if (runtime.isEmpty() || !QDir().mkpath(parent) ||
+        if (base.isEmpty() ||
+            !QDir().mkpath(parent) ||
             !QFile::setPermissions(parent, QFileDevice::ReadOwner |
                                            QFileDevice::WriteOwner |
                                            QFileDevice::ExeOwner))
@@ -534,24 +562,32 @@ private:
             return {};
         }
 
-        m_originalRuntimeDir = std::move(directory);
-        return m_originalRuntimeDir->path();
+        directoryOwner = std::move(directory);
+        return directoryOwner->path();
 #endif
     }
 
     QSharedPointer<MaterializedOriginal> originalSource(
         qlonglong imageId, const QString& logicalPath,
-        const PrivacyActionItemState& actionState) const
+        const PrivacyActionItemState& actionState,
+        int assetRole, int assetOrdinal,
+        bool retainInProviderCache,
+        const std::function<bool()>& isCancelled) const
     {
 #if !defined(Q_OS_LINUX)
         Q_UNUSED(imageId);
         Q_UNUSED(logicalPath);
         Q_UNUSED(actionState);
+        Q_UNUSED(assetRole);
+        Q_UNUSED(assetOrdinal);
+        Q_UNUSED(retainInProviderCache);
+        Q_UNUSED(isCancelled);
         return {};
 #else
         if (!m_sessions || !actionState.protectedItem ||
             (actionState.access != PrivacyItemAccess::Unlocked) ||
-            !actionState.originalReady || actionState.unresolvedTransaction)
+            !actionState.originalReady || actionState.unresolvedTransaction ||
+            (isCancelled && isCancelled()))
         {
             return {};
         }
@@ -565,13 +601,19 @@ private:
             m_sessions->runWithUnlockedSecret(
                 actionState.categoryUuid,
                 [this, imageId, &logicalPath, &prepared, &before,
-                 &backing, &linkPath, &restored](const PrivacyPassword& password)
+                 &backing, &linkPath, &restored,
+                 assetRole, assetOrdinal,
+                 retainInProviderCache,
+                 &isCancelled](const PrivacyPassword& password)
                 {
                     PrivacyRepositorySnapshot snapshot;
                     PrivacyCasualOriginalReader reader;
 
-                    if (!PrivacyRepository().loadRuntimeSnapshot(&snapshot) ||
-                        !reader.prepare(snapshot, imageId, logicalPath, &prepared) ||
+                    if ((isCancelled && isCancelled()) ||
+                        !PrivacyRepository().loadRuntimeSnapshot(&snapshot) ||
+                        !reader.prepareAsset(snapshot, imageId, logicalPath,
+                                             assetRole, assetOrdinal,
+                                             &prepared) ||
                         !m_runtime->currentState(prepared.itemUuid, &before) ||
                         !before.isValid() || !before.categoryUnlocked ||
                         !before.publicRootAvailable || !before.storeRootAvailable ||
@@ -587,13 +629,16 @@ private:
                         QLatin1Char(':') + QString::number(before.categoryEpoch) +
                         QLatin1Char(':') + QString::number(before.publicRootEpoch) +
                         QLatin1Char(':') + QString::number(before.storeRootEpoch) +
+                        QLatin1Char(':') + QString::number(assetRole) +
+                        QLatin1Char(':') + QString::number(assetOrdinal) +
                         QLatin1Char(':') + prepared.originalHash;
 
                     {
                         QMutexLocker locker(&m_clearLock);
                         const auto existing = m_originals.constFind(cacheNamespace);
 
-                        if ((existing != m_originals.constEnd()) && existing.value() &&
+                        if (retainInProviderCache &&
+                            (existing != m_originals.constEnd()) && existing.value() &&
                             QFileInfo::exists(existing.value()->physicalPath))
                         {
                             restored = true;
@@ -609,19 +654,39 @@ private:
                                            ? original->backing->size() : 0;
                         }
 
-                        if ((prepared.originalSize > MaximumMaterializedOriginalBytes) ||
+                        if (retainInProviderCache &&
+                            ((prepared.originalSize > MaximumMaterializedOriginalBytes) ||
                             (retainedBytes > (MaximumMaterializedOriginalBytes -
-                                              prepared.originalSize)))
+                                              prepared.originalSize))))
                         {
                             return;
                         }
                     }
 
-                    const QString runtimePath = originalRuntimePath();
+                    const QString runtimePath = retainInProviderCache
+                        ? originalRuntimePath()
+                        : QFileInfo(prepared.restore.archivePath).absolutePath();
 
                     if (runtimePath.isEmpty())
                     {
                         return;
+                    }
+
+                    if (!retainInProviderCache)
+                    {
+                        const QStorageInfo storage(runtimePath);
+                        const qint64 reserve = qMax(
+                            PreparedScratchMinimumReserveBytes,
+                            storage.bytesTotal() / 20);
+
+                        if (!storage.isValid() || !storage.isReady() ||
+                            storage.isReadOnly() ||
+                            (prepared.originalSize > storage.bytesAvailable()) ||
+                            ((storage.bytesAvailable() - prepared.originalSize) <
+                             reserve))
+                        {
+                            return;
+                        }
                     }
 
                     backing.reset(new QTemporaryFile(
@@ -635,9 +700,25 @@ private:
                         return;
                     }
 
+                    if (!retainInProviderCache)
+                    {
+                        const QString temporaryPath = backing->fileName();
+
+                        if ((backing->handle() < 0) ||
+                            !QFile::remove(temporaryPath))
+                        {
+                            backing.clear();
+                            return;
+                        }
+
+                        linkPath = QLatin1String("/proc/self/fd/") +
+                                   QString::number(backing->handle());
+                    }
+
                     PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
 
-                    if (!reader.restore(prepared, password, backing.data(), &error) ||
+                    if (!reader.restore(prepared, password, backing.data(),
+                                        &error, isCancelled) ||
                         !backing->flush() ||
                         (backing->size() != prepared.originalSize) ||
                         !backing->seek(0) ||
@@ -656,20 +737,29 @@ private:
                         suffix.clear();
                     }
 
-                    linkPath = QDir(runtimePath).filePath(
-                        QUuid::createUuid().toString(QUuid::WithoutBraces) +
-                        (suffix.isEmpty() ? QString() : (QLatin1Char('.') + suffix)));
-                    const QString temporaryPath = backing->fileName();
-
-                    if (!QFile::remove(temporaryPath) ||
-                        !QFile::link(QLatin1String("/proc/self/fd/") +
-                                         QString::number(backing->handle()),
-                                     linkPath))
+                    if (retainInProviderCache)
                     {
-                        QFile::remove(linkPath);
-                        backing.clear();
-                        linkPath.clear();
-                        return;
+                        const QString temporaryPath = backing->fileName();
+
+                        if (!QFile::remove(temporaryPath))
+                        {
+                            backing.clear();
+                            return;
+                        }
+
+                        linkPath = QDir(runtimePath).filePath(
+                            QUuid::createUuid().toString(QUuid::WithoutBraces) +
+                            (suffix.isEmpty()
+                                 ? QString() : (QLatin1Char('.') + suffix)));
+
+                        if (!QFile::link(QLatin1String("/proc/self/fd/") +
+                                             QString::number(backing->handle()),
+                                         linkPath))
+                        {
+                            backing.clear();
+                            linkPath.clear();
+                            return;
+                        }
                     }
 
                     PrivacyLeaseCurrentState after;
@@ -689,11 +779,14 @@ private:
             QLatin1Char(':') + QString::number(before.categoryEpoch) +
             QLatin1Char(':') + QString::number(before.publicRootEpoch) +
             QLatin1Char(':') + QString::number(before.storeRootEpoch) +
+            QLatin1Char(':') + QString::number(assetRole) +
+            QLatin1Char(':') + QString::number(assetOrdinal) +
             QLatin1Char(':') + prepared.originalHash;
         QMutexLocker locker(&m_clearLock);
         const auto existing = m_originals.constFind(cacheNamespace);
 
-        if ((existing != m_originals.constEnd()) && existing.value())
+        if (retainInProviderCache &&
+            (existing != m_originals.constEnd()) && existing.value())
         {
             QFile::remove(linkPath);
             return existing.value();
@@ -715,9 +808,10 @@ private:
                            ? retained->backing->size() : 0;
         }
 
-        if ((prepared.originalSize > MaximumMaterializedOriginalBytes) ||
+        if (retainInProviderCache &&
+            ((prepared.originalSize > MaximumMaterializedOriginalBytes) ||
             (retainedBytes > (MaximumMaterializedOriginalBytes -
-                              prepared.originalSize)))
+                              prepared.originalSize))))
         {
             QFile::remove(linkPath);
             return {};
@@ -730,7 +824,11 @@ private:
         original->physicalPath = linkPath;
         original->cacheNamespace = cacheNamespace;
         original->backing = backing;
-        m_originals.insert(cacheNamespace, original);
+        if (retainInProviderCache)
+        {
+            m_originals.insert(cacheNamespace, original);
+        }
+
         m_knownPathsByCategory[prepared.categoryUuid].insert(original->logicalPath);
         return original;
 #endif
@@ -754,18 +852,43 @@ private:
 
 bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, const QString& suggestedAlbumRoot, bool ignoreDisappearedLocations)
 {
+    PrivacyPreparedAccessQuiesceGuard preparedAccessQuiesce;
+
+    if (!preparedAccessQuiesce.isAcquired())
+    {
+        QMessageBox::warning(
+            qApp ? qApp->activeWindow() : nullptr,
+            qApp ? qApp->applicationName() : QLatin1String("digiKam"),
+            i18n("The database cannot be changed while an operation is using "
+                 "unlocked private media. Finish or cancel that operation, "
+                 "then try again."));
+        return false;
+    }
+
     // This is to ensure that the setup does not overrule the command line.
     // TODO: there is a bug that setup is showing something different here.
 
-    if      (priority)
-    {
-        d->hasPriorizedDbPath = true;
-    }
-    else if (d->hasPriorizedDbPath)
+    if (!priority && d->hasPriorizedDbPath)
     {
         // ignore change without priority
 
         return true;
+    }
+
+    if (!PrivacyStartupRecovery::reset())
+    {
+        QMessageBox::warning(
+            qApp ? qApp->activeWindow() : nullptr,
+            qApp ? qApp->applicationName() : QLatin1String("digiKam"),
+            i18n("The database cannot be changed because private media could "
+                 "not be safely closed or relocked. Resolve the active "
+                 "private operation, then try again."));
+        return false;
+    }
+
+    if (priority)
+    {
+        d->hasPriorizedDbPath = true;
     }
 
     d->changed = true;
@@ -779,7 +902,6 @@ bool AlbumManager::setDatabase(const DbEngineParameters& params, bool priority, 
 
     ScanController::instance()->cancelAllAndSuspendCollectionScan();
     PrivacySourceResolver::resetProvider();
-    PrivacyStartupRecovery::reset();
 
     disconnect(CollectionManager::instance(), nullptr, this, nullptr);
     CollectionManager::instance()->setWatchDisabled();

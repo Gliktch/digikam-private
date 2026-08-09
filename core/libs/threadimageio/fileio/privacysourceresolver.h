@@ -14,6 +14,10 @@
 
 #pragma once
 
+// C++ includes
+
+#include <functional>
+
 // Qt includes
 
 #include <QByteArray>
@@ -38,7 +42,8 @@ public:
     {
         Image,
         Preview,
-        Thumbnail
+        Thumbnail,
+        PreparedAccess
     };
 
 public:
@@ -47,6 +52,23 @@ public:
     QVariant itemReference;
     Consumer consumer = Image;
     bool     detailThumbnail = false;
+    int      assetRole = 1;
+    int      assetOrdinal = 0;
+    std::function<bool()> isCancelled;
+};
+
+// -----------------------------------------------------------------------------
+
+class DIGIKAM_EXPORT PrivacySourceLifetime
+{
+public:
+
+    PrivacySourceLifetime()          = default;
+    virtual ~PrivacySourceLifetime() = default;
+
+private:
+
+    Q_DISABLE_COPY(PrivacySourceLifetime)
 };
 
 // -----------------------------------------------------------------------------
@@ -85,6 +107,7 @@ public:
     QByteArray  encodedBytes;
     QString     cacheNamespace;
     CachePolicy cachePolicy = Persistent;
+    QSharedPointer<PrivacySourceLifetime> lifetimeOwner;
 
     /**
      * Resolver-owned provider generation. Providers must not set or interpret

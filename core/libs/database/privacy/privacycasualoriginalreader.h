@@ -58,11 +58,17 @@ public:
                  qlonglong imageId,
                  const QString& logicalFilePath,
                  PrivacyCasualOriginalSource* source) const;
+    bool prepareAsset(const PrivacyRepositorySnapshot& snapshot,
+                      qlonglong imageId,
+                      const QString& logicalFilePath,
+                      int role, int ordinal,
+                      PrivacyCasualOriginalSource* source) const;
 
     bool restore(const PrivacyCasualOriginalSource& source,
                  const PrivacyPassword& password,
                  QIODevice* destination,
-                 PrivacyCasualArchiveError* error = nullptr) const;
+                 PrivacyCasualArchiveError* error = nullptr,
+                 const PrivacyCasualArchiveEngine::CancellationCheck& isCancelled = {}) const;
 };
 
 } // namespace Digikam

@@ -94,6 +94,7 @@ using namespace Magick;
 #include "dbengineparameters.h"
 #include "digikamapp.h"
 #include "scancontroller.h"
+#include "privacysourceresolver.h"
 #include "coredbaccess.h"
 #include "thumbsdbaccess.h"
 #include "facedbaccess.h"
@@ -756,7 +757,16 @@ MAIN_EXPORT int MAIN_FN(int argc, char** argv)
 
     int ret = app.exec();
 
-    PrivacyStartupRecovery::reset();
+    if (PrivacyStartupRecovery::reset())
+    {
+        PrivacySourceResolver::resetProvider();
+    }
+    else
+    {
+        qCWarning(DIGIKAM_GENERAL_LOG)
+            << "Private media could not be fully closed during shutdown; "
+               "durable recovery state is retained";
+    }
 
     CoreDbAccess::cleanUpDatabase();
     ThumbsDbAccess::cleanUpDatabase();

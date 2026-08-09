@@ -57,6 +57,7 @@ public:
         }
 
         state->protectedItem     = true;
+        state->itemUuid          = QLatin1String("22222222-2222-4222-8222-222222222222");
         state->categoryUuid      = QLatin1String("11111111-1111-4111-8111-111111111111");
         state->access            = (imageId == 2) ? PrivacyItemAccess::Unlocked
                                                   : PrivacyItemAccess::Locked;

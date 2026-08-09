@@ -23,6 +23,7 @@ namespace
 {
 
 const QString categoryUuid = QLatin1String("10000000-0000-0000-0000-000000000001");
+const QString itemUuid     = QLatin1String("20000000-0000-0000-0000-000000000002");
 
 class FakeActionStateProvider final : public PrivacyActionStateProvider
 {
@@ -78,6 +79,7 @@ PrivacyActionItemState protectedState(PrivacyItemAccess access = PrivacyItemAcce
 {
     PrivacyActionItemState state;
     state.protectedItem    = true;
+    state.itemUuid         = itemUuid;
     state.categoryUuid     = categoryUuid;
     state.access           = access;
     state.publicRootState  = PrivacyRootRuntimeState::VerifiedAvailable;
@@ -170,6 +172,7 @@ void PrivacyActionPolicyTest::testMixedLockedExportChoices()
     QCOMPARE(result.affectedCategoryUuids, QStringList { categoryUuid });
     QCOMPARE(result.items.at(1).disposition,
              PrivacyActionPolicyDisposition::UnlockRequired);
+    QCOMPARE(result.items.at(1).itemUuid, itemUuid);
     QVERIFY(result.items.at(1).mayUseProxy);
     QVERIFY(result.canContinueWithProxy);
     QVERIFY(result.canExcludeAffected);

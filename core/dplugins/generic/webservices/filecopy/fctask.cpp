@@ -16,11 +16,16 @@
 
 #include "fctask.h"
 
+// C++ includes
+
+#include <algorithm>
+
 // Qt includes
 
 #include <QDir>
 #include <QFile>
 #include <QMimeDatabase>
+#include <QSet>
 
 // KDE includes
 
@@ -47,17 +52,23 @@ public:
 
 public:
 
-    QUrl        srcUrl;
-    FCContainer settings;
+    DItemAccessEntry                  item;
+    FCContainer                       settings;
+    QSharedPointer<DItemAccessHandle> accessHandle;
+    QSharedPointer<DItemAccessCancellationToken> cancellation;
 };
 
-FCTask::FCTask(const QUrl& srcUrl,
-               const FCContainer& settings)
+FCTask::FCTask(
+    const DItemAccessEntry& item,
+    const FCContainer& settings,
+    const QSharedPointer<DItemAccessHandle>& accessHandle)
     : ActionJob(),
       d        (new Private)
 {
-    d->srcUrl   = srcUrl;
-    d->settings = settings;
+    d->item         = item;
+    d->settings     = settings;
+    d->accessHandle = accessHandle;
+    d->cancellation.reset(new DItemAccessCancellationToken);
 }
 
 FCTask::~FCTask()
@@ -66,21 +77,61 @@ FCTask::~FCTask()
     delete d;
 }
 
+void FCTask::cancel()
+{
+    if (d->cancellation)
+    {
+        d->cancellation->cancel();
+    }
+
+    ActionJob::cancel();
+}
+
 void FCTask::run()
 {
+    const QSharedPointer<DItemAccessHandle> accessHandle = d->accessHandle;
+    const QSharedPointer<DItemAccessCancellationToken> cancellation =
+        d->cancellation;
+    d->accessHandle.clear();
+
     ActionJob::run();       // To customize thread name
 
-    if (m_cancel)
+    if (m_cancel || !cancellation || cancellation->isCanceled())
     {
         return;
     }
 
     bool ok   = true;
     QUrl dest = d->settings.destUrl.adjusted(QUrl::StripTrailingSlash);
+    const QUrl logicalUrl = d->item.logicalUrl;
+    const QSharedPointer<DItemAccessSourceHandle> source =
+        accessHandle
+        ? accessHandle->acquireSource(logicalUrl, cancellation)
+        : QSharedPointer<DItemAccessSourceHandle>();
+
+    if (!d->item.isValid() || !source || !source->validateAccess() ||
+        cancellation->isCanceled())
+    {
+        Q_EMIT signalDone();
+        return;
+    }
+
+    const QUrl physicalUrl = source->entry().physicalUrl;
+    const QList<DItemAssociatedAccessEntry> associatedEntries =
+        source->associatedEntries();
+    const bool hasPreparedSidecars = std::any_of(
+        associatedEntries.cbegin(), associatedEntries.cend(),
+        [](const DItemAssociatedAccessEntry& associated)
+        {
+            return (associated.role ==
+                    static_cast<int>(DItemAssociatedRole::XmpSidecar)) ||
+                   (associated.role ==
+                    static_cast<int>(DItemAssociatedRole::ConfiguredSidecar));
+        });
 
     if (d->settings.iface && d->settings.iface->supportAlbums() && d->settings.albumPath)
     {
-        DItemInfo info(d->settings.iface->itemInfo(d->srcUrl));
+        DItemInfo info(d->settings.iface->itemInfo(logicalUrl));
         DAlbumInfo album(d->settings.iface->albumInfo(info.albumId()));
 
         dest.setPath(dest.path() + album.albumPath());
@@ -94,24 +145,44 @@ void FCTask::run()
 
     dest.setPath(dest.path() +
                  QLatin1Char('/') +
-                 d->srcUrl.fileName());
+                 logicalUrl.fileName());
 
-    if (d->srcUrl == dest)
+    if (logicalUrl == dest)
     {
         Q_EMIT signalDone();
 
         return;
     }
 
+    QSet<QString> destinationNames {
+        logicalUrl.fileName().toCaseFolded()
+    };
+
+    for (const DItemAssociatedAccessEntry& associated : associatedEntries)
+    {
+        const QString name = associated.logicalUrl.fileName();
+        const QString foldedName = name.toCaseFolded();
+
+        // File Copy flattens one item's associated assets into the same
+        // directory. Reject ambiguous names before writing the primary.
+        if (name.isEmpty() || destinationNames.contains(foldedName))
+        {
+            Q_EMIT signalDone();
+            return;
+        }
+
+        destinationNames.insert(foldedName);
+    }
+
     QUrl sidecarDest = DMetadata::sidecarUrl(dest);
 
     if      (ok && (d->settings.behavior == FCContainer::CopyFile))
     {
-        QFileInfo srcInfo(d->srcUrl.toLocalFile());
+        QFileInfo srcInfo(logicalUrl.toLocalFile());
         QString suffix = srcInfo.suffix().toUpper();
 
         QMimeDatabase mimeDB;
-        QString mimeType(mimeDB.mimeTypeForUrl(d->srcUrl).name());
+        QString mimeType(mimeDB.mimeTypeForUrl(logicalUrl).name());
 
         if (d->settings.changeImageProperties             &&
             (
@@ -126,19 +197,36 @@ void FCTask::run()
             )
            )
         {
-            ok = imageResize(d->srcUrl.toLocalFile(), dest);
+            ok = !cancellation->isCanceled() &&
+                 imageResize(physicalUrl.toLocalFile(), dest);
+
+            if (ok && cancellation->isCanceled())
+            {
+                QFile::remove(dest.toLocalFile());
+                ok = false;
+            }
         }
         else
         {
             dest = getUrlOrDelete(dest);
-            ok   = DFileOperations::copyFile(d->srcUrl.toLocalFile(),
-                                             dest.toLocalFile());
+            ok   = DFileOperations::copyFileCancellable(
+                physicalUrl.toLocalFile(), dest.toLocalFile(),
+                [cancellation]()
+                {
+                    return cancellation->isCanceled();
+                });
 
-            if (d->settings.sidecars && DMetadata::hasSidecar(d->srcUrl.toLocalFile()))
+            if (d->settings.sidecars && !hasPreparedSidecars &&
+                DMetadata::hasSidecar(physicalUrl.toLocalFile()))
             {
                 sidecarDest = getUrlOrDelete(sidecarDest);
-                DFileOperations::copyFile(DMetadata::sidecarUrl(d->srcUrl).toLocalFile(),
-                                          sidecarDest.toLocalFile());
+                DFileOperations::copyFileCancellable(
+                    DMetadata::sidecarUrl(physicalUrl).toLocalFile(),
+                    sidecarDest.toLocalFile(),
+                    [cancellation]()
+                    {
+                        return cancellation->isCanceled();
+                    });
             }
 
             if (d->settings.writeMetadataToFile &&
@@ -146,10 +234,70 @@ void FCTask::run()
             {
                 QScopedPointer<DMetadata> meta(new DMetadata);
 
-                if (meta->load(d->srcUrl.toLocalFile()))
+                if (meta->load(physicalUrl.toLocalFile()))
                 {
                     meta->setMetadataWritingMode(DMetadata::WRITE_TO_FILE_ONLY);
                     meta->save(dest.toLocalFile());
+                }
+            }
+        }
+
+        if (ok && source->entry().fileFacts.available &&
+            !DFileOperations::setPermissionsAndModificationTime(
+                dest.toLocalFile(), source->entry().fileFacts.permissions,
+                source->entry().fileFacts.modificationDate))
+        {
+            QFile::remove(dest.toLocalFile());
+            ok = false;
+        }
+
+        if (ok && !associatedEntries.isEmpty())
+        {
+            const QDir destinationDirectory = QFileInfo(dest.toLocalFile()).dir();
+
+            for (const DItemAssociatedAccessEntry& associated : associatedEntries)
+            {
+                if (cancellation->isCanceled())
+                {
+                    ok = false;
+                    break;
+                }
+
+                const bool sidecar =
+                    (associated.role ==
+                     static_cast<int>(DItemAssociatedRole::XmpSidecar)) ||
+                    (associated.role ==
+                     static_cast<int>(DItemAssociatedRole::ConfiguredSidecar));
+
+                if (sidecar && !d->settings.sidecars)
+                {
+                    continue;
+                }
+
+                QUrl associatedDestination = getUrlOrDelete(
+                    QUrl::fromLocalFile(destinationDirectory.filePath(
+                        associated.logicalUrl.fileName())));
+                ok = DFileOperations::copyFileCancellable(
+                    associated.physicalUrl.toLocalFile(),
+                    associatedDestination.toLocalFile(),
+                    [cancellation]()
+                    {
+                        return cancellation->isCanceled();
+                    });
+
+                if (ok && associated.fileFacts.available &&
+                    !DFileOperations::setPermissionsAndModificationTime(
+                        associatedDestination.toLocalFile(),
+                        associated.fileFacts.permissions,
+                        associated.fileFacts.modificationDate))
+                {
+                    QFile::remove(associatedDestination.toLocalFile());
+                    ok = false;
+                }
+
+                if (!ok)
+                {
+                    break;
                 }
             }
         }
@@ -171,24 +319,26 @@ void FCTask::run()
 
         if (d->settings.behavior == FCContainer::FullSymLink)
         {
-            ok = QFile::link(d->srcUrl.toLocalFile(),
+            ok = QFile::link(physicalUrl.toLocalFile(),
                              dest.toLocalFile());
 
-            if (d->settings.sidecars && DMetadata::hasSidecar(d->srcUrl.toLocalFile()))
+            if (d->settings.sidecars &&
+                DMetadata::hasSidecar(physicalUrl.toLocalFile()))
             {
-                QFile::link(DMetadata::sidecarUrl(d->srcUrl).toLocalFile(),
+                QFile::link(DMetadata::sidecarUrl(physicalUrl).toLocalFile(),
                             sidecarDest.toLocalFile());
             }
         }
         else
         {
             QDir dir(d->settings.destUrl.toLocalFile());
-            QString path = dir.relativeFilePath(d->srcUrl.toLocalFile());
+            QString path = dir.relativeFilePath(physicalUrl.toLocalFile());
             QUrl srcUrl  = QUrl::fromLocalFile(path);
             ok           = QFile::link(srcUrl.toLocalFile(),
                                        dest.toLocalFile());
 
-            if (d->settings.sidecars && DMetadata::hasSidecar(d->srcUrl.toLocalFile()))
+            if (d->settings.sidecars &&
+                DMetadata::hasSidecar(physicalUrl.toLocalFile()))
             {
                 QFile::link(DMetadata::sidecarUrl(srcUrl).toLocalFile(),
                             sidecarDest.toLocalFile());
@@ -198,7 +348,7 @@ void FCTask::run()
 
     if (ok)
     {
-        Q_EMIT signalUrlProcessed(d->srcUrl, dest);
+        Q_EMIT signalUrlProcessed(logicalUrl, dest);
     }
 
     Q_EMIT signalDone();

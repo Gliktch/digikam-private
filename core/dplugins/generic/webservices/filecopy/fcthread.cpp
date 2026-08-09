@@ -39,14 +39,34 @@ FCThread::~FCThread()
     wait();
 }
 
-void FCThread::createCopyJobs(const QList<QUrl>& itemsList,
-                              const FCContainer& settings)
+void FCThread::createCopyJobs(
+    const QList<DItemAccessEntry>& items,
+    const FCContainer& settings,
+    const QSharedPointer<DItemAccessHandle>& accessHandle)
 {
+    bool hasDeferredSources = false;
+
+    for (const DItemAccessEntry& item : items)
+    {
+        hasDeferredSources = hasDeferredSources || item.deferred;
+    }
+
+    if (hasDeferredSources)
+    {
+        // Retained category-secret operations are exclusive. Serial execution
+        // also bounds plaintext source lifetime and temporary-disk pressure.
+        setMaximumNumberOfThreads(1);
+    }
+    else
+    {
+        setDefaultMaximumNumberOfThreads();
+    }
+
     ActionJobCollection collection;
 
-    for (const QUrl& srcUrl : std::as_const(itemsList))
+    for (const DItemAccessEntry& item : items)
     {
-        FCTask* const t = new FCTask(srcUrl, settings);
+        FCTask* const t = new FCTask(item, settings, accessHandle);
 
         connect(t, SIGNAL(signalUrlProcessed(QUrl,QUrl)),
                 this, SIGNAL(signalUrlProcessed(QUrl,QUrl)));

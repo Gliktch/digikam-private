@@ -11,6 +11,7 @@
 // Qt includes
 
 #include <QHash>
+#include <QBuffer>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -25,6 +26,7 @@
 // Local includes
 
 #include "privacycontracts.h"
+#include "privacycasualoriginalreader.h"
 #include "privacycategorysessionowner.h"
 #include "privacyruntime.h"
 #include "privacyscangate.h"
@@ -374,6 +376,7 @@ private Q_SLOTS:
     void testScanGateFailsClosedWithoutProvider();
     void testExpectedProxyAndCanonicalAsset();
     void testOnDisplayProxyValidation();
+    void testCasualOriginalAssetPreparation();
     void testOfflineAndMismatchedRoot();
     void testCompatibilityTransactionRecovery();
     void testCompatibilityRecoverySnapshotHandoff();
@@ -621,6 +624,12 @@ void PrivacyRuntimeTest::testOnDisplayProxyValidation()
     QVERIFY(!actionState.proxyReady);
     QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
              PrivacyPublicProxyDisplayResult::Verified);
+    QBuffer snapshotBytes;
+    QVERIFY(snapshotBytes.open(QIODevice::ReadWrite));
+    QVERIFY(runtime.snapshotVerifiedPublicProxy(42, proxyPath,
+                                                &snapshotBytes));
+    QCOMPARE(snapshotBytes.data(), proxyBytes);
+    QCOMPARE(snapshotBytes.pos(), qint64(0));
     QVERIFY(runtime.stateForItem(42, &actionState));
     QVERIFY(actionState.proxyReady);
     QCOMPARE(runtime.validatePublicProxyForDisplay(
@@ -690,6 +699,52 @@ void PrivacyRuntimeTest::testOnDisplayProxyValidation()
     QVERIFY(QFileInfo(directory.filePath(QLatin1String("album"))).isSymLink());
     QCOMPARE(runtime.validatePublicProxyForDisplay(42, proxyPath),
              PrivacyPublicProxyDisplayResult::Denied);
+}
+
+void PrivacyRuntimeTest::testCasualOriginalAssetPreparation()
+{
+    PrivacyRepositorySnapshot snapshot = makeSnapshot();
+    const QString originalHash(64, QLatin1Char('a'));
+    const QString proxyHash(64, QLatin1Char('b'));
+    const QString archiveHash(64, QLatin1Char('c'));
+    snapshot.categories[0].backend = PrivacyBackend::Casual;
+    snapshot.items[0].originalHash = originalHash;
+    snapshot.items[0].originalSize = 100;
+    snapshot.items[0].expectedProxyHash = proxyHash;
+    snapshot.items[0].expectedProxySize = 55;
+    snapshot.containers[0].protectedHash = archiveHash;
+
+    for (PrivacyAsset& asset : snapshot.assets)
+    {
+        asset.originalHash = originalHash;
+        asset.originalSize = 100;
+        asset.proxyHash = proxyHash;
+
+        if (asset.role != PrivacyAsset::PrimaryMediaRole)
+        {
+            asset.proxyHashAlgorithm.clear();
+            asset.proxyHash.clear();
+            asset.proxySize = -1;
+            asset.proxyPresentationVersion = 0;
+            asset.proxyGeneration = -1;
+        }
+    }
+
+    PrivacyCasualOriginalReader reader;
+    PrivacyCasualOriginalSource primary;
+    PrivacyCasualOriginalSource associated;
+    const QString logicalPath =
+        QLatin1String("/synthetic/collection/album/item.jpg");
+    QVERIFY(reader.prepare(snapshot, 42, logicalPath, &primary));
+    QCOMPARE(primary.originalName, QLatin1String("item.jpg"));
+    QCOMPARE(primary.restore.role, PrivacyAsset::PrimaryMediaRole);
+    QVERIFY(reader.prepareAsset(snapshot, 42, logicalPath, 2, 0,
+                                &associated));
+    QCOMPARE(associated.originalName, QLatin1String("item.xmp"));
+    QCOMPARE(associated.restore.role, 2);
+    QCOMPARE(associated.restore.ordinal, 0);
+    QVERIFY(!reader.prepareAsset(snapshot, 42, logicalPath, 3, 0,
+                                 &associated));
 }
 
 void PrivacyRuntimeTest::testOfflineAndMismatchedRoot()
@@ -1096,7 +1151,18 @@ void PrivacyRuntimeTest::testCategorySessionOwnerShutdown()
     QCOMPARE(owner->runWhileUnlocked(categoryUuid, [] {}),
              PrivacyCategoryOperationStatus::CategoryLocked);
 
-    owner->shutdown();
+    bool allowShutdown = false;
+    owner->setPresentationAvailabilityCallback(
+        [&allowShutdown](const QString&, bool available)
+        {
+            return available || allowShutdown;
+        });
+    QVERIFY(!owner->shutdown());
+    QCOMPARE(owner->runWhileUnlocked(categoryUuid, [] {}),
+             PrivacyCategoryOperationStatus::CategoryLocked);
+    allowShutdown = true;
+
+    QVERIFY(owner->shutdown());
     QCOMPARE(owner->runWhileUnlocked(categoryUuid, [] {}),
              PrivacyCategoryOperationStatus::TransactionBlocked);
     QCOMPARE(owner->unlockCategory(categoryUuid, QLatin1String("secret")).status,
@@ -1104,7 +1170,7 @@ void PrivacyRuntimeTest::testCategorySessionOwnerShutdown()
     QCOMPARE(owner->lockAllCategories().constFirst().status,
              PrivacyCategorySessionStatus::TransactionBlocked);
     QVERIFY(!owner->ownsSecret(categoryUuid));
-    owner->shutdown();
+    QVERIFY(owner->shutdown());
 }
 
 void PrivacyRuntimeTest::testManualTagVisibilityProvider()

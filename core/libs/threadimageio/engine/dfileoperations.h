@@ -14,11 +14,16 @@
 
 #pragma once
 
+// C++ includes
+
+#include <functional>
+
 // Qt includes
 
 #include <QUrl>
 #include <QString>
 #include <QDateTime>
+#include <QFileDevice>
 #include <QStringList>
 
 // Local includes
@@ -102,6 +107,11 @@ public:
                          const QString& dstFile,
                          const bool* const cancel = nullptr);
 
+    static bool copyFileCancellable(
+        const QString& srcFile,
+        const QString& dstFile,
+        const std::function<bool()>& isCancelled);
+
     /**
      * If the destination file already exists,
      * it will be removed. Copy file and keep
@@ -121,6 +131,13 @@ public:
      */
     static bool setModificationTime(const QString& srcFile,
                                     const QDateTime& dateTime);
+
+    /** Apply a supplied modification time and final permission mode. The file
+     * is made owner-writable only while the timestamp is changed. */
+    static bool setPermissionsAndModificationTime(
+        const QString& path,
+        QFileDevice::Permissions permissions,
+        const QDateTime& modificationDate);
     /**
      * Returns the path to a program under Windows by searching
      * in the Windows registry.

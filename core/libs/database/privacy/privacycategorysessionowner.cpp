@@ -102,6 +102,7 @@ public:
 
     mutable QReadWriteLock                         lifecycleLock;
     bool                                           closed = false;
+    bool                                           presentationBlocked = false;
     QSharedPointer<PrivacyRuntimeCoordinator>      runtime;
     QSharedPointer<const PrivacyRootVerifier>      rootVerifier;
     QProcessPrivacyProcessRunner                   processRunner;
@@ -135,7 +136,7 @@ PrivacyCategorySessionOwner::PrivacyCategorySessionOwner(
 
 PrivacyCategorySessionOwner::~PrivacyCategorySessionOwner()
 {
-    shutdown();
+    (void)shutdown();
 }
 
 PrivacyCategorySessionResult PrivacyCategorySessionOwner::createCategory(
@@ -379,20 +380,41 @@ bool PrivacyCategorySessionOwner::ownsSecret(const QString& categoryUuid) const
     return (!d->closed && d->coordinator.ownsSecret(categoryUuid));
 }
 
-void PrivacyCategorySessionOwner::shutdown()
+bool PrivacyCategorySessionOwner::shutdown()
 {
     QWriteLocker locker(&d->lifecycleLock);
-    d->closed = true;
 
-    if (d->presentationAvailability)
+    if (d->closed)
     {
-        (void)d->presentationAvailability(QString(), false);
+        return true;
+    }
+
+    if (d->presentationAvailability && !d->presentationBlocked)
+    {
+        if (!d->presentationAvailability(QString(), false))
+        {
+            return false;
+        }
+
+        d->presentationBlocked = true;
     }
 
     // Retry retained sessions when an earlier backend unmount failed. The
     // coordinator keeps those sessions specifically so a later attempt can
     // finish without losing the lease or authentication secret.
-    d->coordinator.lockAllCategories();
+    const QList<PrivacyCategorySessionResult> results =
+        d->coordinator.lockAllCategories();
+
+    for (const PrivacyCategorySessionResult& result : results)
+    {
+        if (!result.succeeded())
+        {
+            return false;
+        }
+    }
+
+    d->closed = true;
+    return true;
 }
 
 } // namespace Digikam

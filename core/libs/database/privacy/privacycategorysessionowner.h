@@ -87,7 +87,7 @@ public:
      * Prevents new calls, waits for current calls, then locks all categories.
      * Do not call this from an operation callback on the same owner.
      */
-    void shutdown();
+    bool shutdown();
 
 private:
 

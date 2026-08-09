@@ -345,6 +345,46 @@ ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyleaseregistry_utest.cpp
 
 #------------------------------------------------------------------------
 
+ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyitemaccess_utest.cpp
+
+              NAME_PREFIX
+
+              "digikam-"
+
+              LINK_LIBRARIES
+
+              digikamcore
+
+              ${COMMON_TEST_LINK}
+)
+
+#------------------------------------------------------------------------
+
+ecm_add_test(${CMAKE_CURRENT_SOURCE_DIR}/privacyfilecopyaccess_utest.cpp
+             ${CMAKE_SOURCE_DIR}/core/dplugins/generic/webservices/filecopy/fctask.cpp
+
+             TEST_NAME
+
+             digikam-privacyfilecopyaccess_utest
+
+             LINK_LIBRARIES
+
+             digikamcore
+
+             Qt${QT_VERSION_MAJOR}::Core
+             Qt${QT_VERSION_MAJOR}::Widgets
+
+             KF${QT_VERSION_MAJOR}::I18n
+
+             ${COMMON_TEST_LINK}
+)
+
+target_include_directories(digikam-privacyfilecopyaccess_utest
+                           PRIVATE
+                           ${CMAKE_SOURCE_DIR}/core/dplugins/generic/webservices/filecopy)
+
+#------------------------------------------------------------------------
+
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/databasesqliteinit_utest.cpp
 
               NAME_PREFIX

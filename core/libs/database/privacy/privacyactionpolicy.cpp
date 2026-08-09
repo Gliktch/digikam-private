@@ -182,13 +182,13 @@ bool PrivacyActionItemState::isValid() const
 {
     if (!protectedItem)
     {
-        return (categoryUuid.isEmpty() &&
+        return (itemUuid.isEmpty() && categoryUuid.isEmpty() &&
                 (access == PrivacyItemAccess::Unprotected) &&
                 !proxyReady && !originalReady && !checkoutReady &&
                 !unresolvedTransaction && (itemGeneration < 0));
     }
 
-    return (isCanonicalUuid(categoryUuid) &&
+    return (isCanonicalUuid(itemUuid) && isCanonicalUuid(categoryUuid) &&
             ((access == PrivacyItemAccess::Locked) ||
              (access == PrivacyItemAccess::Unlocked)) &&
             isKnownRootState(publicRootState) &&
@@ -212,16 +212,18 @@ bool PrivacyActionPolicyItem::isValid() const
 
     if (disposition == PrivacyActionPolicyDisposition::UnprotectedPassThrough)
     {
-        return (categoryUuid.isEmpty() && !mayUseProxy);
+        return (itemUuid.isEmpty() && categoryUuid.isEmpty() && !mayUseProxy);
     }
 
     if (disposition == PrivacyActionPolicyDisposition::Denied)
     {
-        return (categoryUuid.isEmpty() || isCanonicalUuid(categoryUuid));
+        return ((itemUuid.isEmpty() || isCanonicalUuid(itemUuid)) &&
+                (categoryUuid.isEmpty() || isCanonicalUuid(categoryUuid)));
     }
 
     return ((disposition >= PrivacyActionPolicyDisposition::ReadyWithoutPixels) &&
             (disposition < PrivacyActionPolicyDisposition::Denied) &&
+            isCanonicalUuid(itemUuid) &&
             isCanonicalUuid(categoryUuid));
 }
 
@@ -360,6 +362,7 @@ PrivacyActionPolicyResult PrivacyActionPolicy::classify(
 
         ++result.protectedItemCount;
         categories.insert(state.categoryUuid);
+        policyItem.itemUuid = state.itemUuid;
         policyItem.categoryUuid = state.categoryUuid;
         policyItem.mayUseProxy = (actionAllowsProxyFallback(request.actionKind) &&
                                   state.proxyReady &&

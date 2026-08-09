@@ -23,6 +23,7 @@
 // Local includes
 
 #include "actionthreadbase.h"
+#include "dinfointerface.h"
 #include "fccontainer.h"
 
 using namespace Digikam;
@@ -39,8 +40,10 @@ public:
     explicit FCThread(QObject* const parent);
     ~FCThread()     override;
 
-    void createCopyJobs(const QList<QUrl>& itemsList,
-                        const FCContainer& settings);
+    void createCopyJobs(
+        const QList<DItemAccessEntry>& items,
+        const FCContainer& settings,
+        const QSharedPointer<DItemAccessHandle>& accessHandle);
     void cancel()   override;
 
 Q_SIGNALS:

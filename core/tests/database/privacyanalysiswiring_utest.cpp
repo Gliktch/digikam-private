@@ -59,6 +59,7 @@ private Q_SLOTS:
     void testProtectedPublicWritesRemainGated();
     void testEditorSavesCannotOverwriteProtectedItems();
     void testUnlockedOriginalsUseRevocableMemorySources();
+    void testPreparedPluginSourcesOwnLifetime();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -341,6 +342,92 @@ void PrivacyAnalysisWiringTest::testUnlockedOriginalsUseRevocableMemorySources()
         "PrivacyCacheTransition::rollback(")));
     QVERIFY(sessionOwner.contains(QStringLiteral(
         "if (!d->presentationAvailability(categoryUuid, false))")));
+}
+
+void PrivacyAnalysisWiringTest::testPreparedPluginSourcesOwnLifetime()
+{
+    const QString interface = source(QStringLiteral(
+        "core/libs/dplugins/iface/dinfointerface.h"));
+    const QString databaseInterface = source(QStringLiteral(
+        "core/libs/database/utils/ifaces/dbinfoiface.cpp"));
+    const QString accessBroker = source(QStringLiteral(
+        "core/libs/database/utils/ifaces/privacyitemaccessbroker.cpp"));
+    const QString albumManager = source(QStringLiteral(
+        "core/libs/album/manager/albummanager_database.cpp"));
+    const QString runtime = source(QStringLiteral(
+        "core/libs/database/privacy/privacyruntime.cpp"));
+    const QString exportWindow = source(QStringLiteral(
+        "core/dplugins/generic/webservices/filecopy/fcexportwindow.cpp"));
+    const QString exportTask = source(QStringLiteral(
+        "core/dplugins/generic/webservices/filecopy/fctask.cpp"));
+
+    QVERIFY2(!interface.isEmpty(), "Unable to read generic item interface");
+    QVERIFY2(!databaseInterface.isEmpty(), "Unable to read DB item interface");
+    QVERIFY2(!accessBroker.isEmpty(), "Unable to read privacy access broker");
+    QVERIFY2(!albumManager.isEmpty(), "Unable to read album-manager source");
+    QVERIFY2(!runtime.isEmpty(), "Unable to read privacy runtime source");
+    QVERIFY2(!exportWindow.isEmpty(), "Unable to read File Copy window");
+    QVERIFY2(!exportTask.isEmpty(), "Unable to read File Copy task");
+    QVERIFY(interface.contains(QStringLiteral(
+        "virtual QSharedPointer<DItemAccessHandle> prepareItemAccess")));
+    QVERIFY(interface.contains(QStringLiteral(
+        "virtual bool validateAccess(const QUrl& physicalUrl) const")));
+    QVERIFY(interface.contains(QStringLiteral(
+        "DItemAccessConsumerScope consumerScope")));
+    QVERIFY(databaseInterface.contains(QStringLiteral(
+        "return preparePrivacyItemAccess(request)")));
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "PrivacySourceResolver::resolve(sourceRequest)")));
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "new PrivacySourceUseGuard(logicalPath, source)")));
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "PrivacyPreparedAccessRegistry::acquire(categories)")));
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "brokerSupportsProtectedRequest(request)")));
+    QVERIFY(!accessBroker.contains(QStringLiteral(
+        "rootContainsProtectedItems")));
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "asset.publicRelativePath")));
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "journal.journalRelativePath")));
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "snapshotVerifiedPublicProxy(")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "PrivacyPreparedAccessQuiesceGuard preparedAccessQuiesce")));
+    QCOMPARE(occurrences(runtime, QStringLiteral(
+        "PrivacyPreparedAccessQuiesceGuard preparedAccessQuiesce")), 2);
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "class PreparedAccessLifetime")));
+    QCOMPARE(occurrences(accessBroker, QStringLiteral(
+        "m_lifetime(lifetime)")), 2);
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "leases->validate(prepared->lease)")));
+    QCOMPARE(occurrences(albumManager, QStringLiteral(
+        "PrivacyPreparedAccessRegistry::hasActiveAccess(categoryUuid)")), 2);
+    QVERIFY(exportWindow.contains(QStringLiteral(
+        "d->iface->prepareItemAccess(accessRequest)")));
+    QVERIFY(exportWindow.contains(QStringLiteral(
+        "d->preparedAccess = prepared")));
+    QVERIFY(exportWindow.contains(QStringLiteral(
+        "DItemAccessConsumerScope::SameProcess")));
+    QVERIFY(exportWindow.contains(QStringLiteral(
+        "DItemAccessConsumerScope::DetachedProcess")));
+    QVERIFY(exportTask.contains(QStringLiteral(
+        "accessHandle->acquireSource(logicalUrl, cancellation)")));
+    QVERIFY(exportTask.contains(QStringLiteral(
+        "d->accessHandle.clear()")));
+    QVERIFY(exportTask.contains(QStringLiteral(
+        "source->validateAccess()")));
+    QVERIFY(exportTask.contains(QStringLiteral(
+        "source->associatedEntries()")));
+    QVERIFY(exportTask.contains(QStringLiteral(
+        "d->settings.iface->itemInfo(logicalUrl)")));
+    QVERIFY(exportTask.contains(QStringLiteral(
+        "DFileOperations::copyFileCancellable(")));
+    QVERIFY(exportTask.contains(QStringLiteral(
+        "DFileOperations::setPermissionsAndModificationTime(")));
+    QVERIFY(accessBroker.contains(QStringLiteral(
+        "fileFactsForAsset(asset)")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)

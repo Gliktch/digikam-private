@@ -20,6 +20,8 @@
 #include "digikamapp_p.h"
 #include "facepipelineedit.h"
 #include "facebackgroundrecognition.h"
+#include "privacyruntime.h"
+#include "privacysourceresolver.h"
 #include "systemsettings.h"
 
 namespace Digikam
@@ -517,6 +519,23 @@ bool DigikamApp::queryClose()
     if (QueueMgrWindow::queueManagerWindowCreated())
     {
         ret &= QueueMgrWindow::queueManagerWindow()->queryClose();
+    }
+
+    if (ret)
+    {
+        if (PrivacyStartupRecovery::reset())
+        {
+            PrivacySourceResolver::resetProvider();
+        }
+        else
+        {
+            QMessageBox::warning(
+                this, i18nc("@title:window", "Private Media Still in Use"),
+                i18n("digiKam cannot close while private media is still being "
+                     "prepared, copied, or safely relocked. Finish or cancel "
+                     "the active private operation, then close digiKam again."));
+            ret = false;
+        }
     }
 
     return ret;

@@ -20,6 +20,8 @@
 // Qt includes
 
 #include <QMap>
+#include <QAtomicInt>
+#include <QSharedPointer>
 #include <QString>
 #include <QObject>
 #include <QVariant>
@@ -29,6 +31,7 @@
 #include <QDateTime>
 #include <QDate>
 #include <QAbstractItemModel>
+#include <QFileDevice>
 
 // Local includes
 
@@ -43,6 +46,204 @@
 
 namespace Digikam
 {
+
+enum class DItemAccessPurpose
+{
+    Export          = 1,
+    Print           = 2,
+    View            = 3,
+    BatchProcess    = 4,
+    ExternalOpen    = 5,
+    DragOrClipboard = 6,
+    MetadataWrite   = 7
+};
+
+enum class DItemAccessMutation
+{
+    ReadOnly         = 1,
+    MayCreateOutputs = 2,
+    MayModifyInputs  = 3
+};
+
+enum class DItemAccessSource
+{
+    PublicRepresentation = 1,
+    InternalOriginal     = 2,
+    WritableCheckout     = 3,
+    PublicOriginal       = 4
+};
+
+enum class DItemAccessConsumerScope
+{
+    SameProcess     = 1,
+    DetachedProcess = 2
+};
+
+enum class DItemAssociatedRole
+{
+    CompanionMedia    = 2,
+    XmpSidecar        = 3,
+    ConfiguredSidecar = 4
+};
+
+class DIGIKAM_EXPORT DItemAccessCancellationToken
+{
+public:
+
+    DItemAccessCancellationToken() = default;
+
+    void cancel();
+    bool isCanceled() const;
+
+private:
+
+    QAtomicInt m_canceled = 0;
+
+private:
+
+    Q_DISABLE_COPY(DItemAccessCancellationToken)
+};
+
+class DIGIKAM_EXPORT DItemAccessRequest
+{
+public:
+
+    bool isValid() const;
+
+public:
+
+    QString                 consumerIdentity;
+    QList<QUrl>             logicalUrls;
+    DItemAccessPurpose      purpose = static_cast<DItemAccessPurpose>(0);
+    DItemAccessMutation     mutation = static_cast<DItemAccessMutation>(0);
+    DItemAccessSource       requestedSource =
+        static_cast<DItemAccessSource>(0);
+    DItemAccessConsumerScope consumerScope =
+        static_cast<DItemAccessConsumerScope>(0);
+    bool                    allowPlaceholderFallback = false;
+    bool                    allowPartialSelection = false;
+};
+
+class DIGIKAM_EXPORT DItemAccessFileFacts
+{
+public:
+
+    bool isValid() const;
+
+public:
+
+    QDateTime               modificationDate;
+    QFileDevice::Permissions permissions;
+    bool                    available = false;
+};
+
+class DIGIKAM_EXPORT DItemAccessEntry
+{
+public:
+
+    bool isValid() const;
+
+public:
+
+    QUrl logicalUrl;
+    /// Concrete source URL only when deferred is false. A deferred entry is an
+    /// authorization plan; acquireSource() is the sole way to obtain its I/O
+    /// URL and the returned source handle owns that URL's lifetime.
+    QUrl physicalUrl;
+    bool placeholder = false;
+    /// physicalUrl is empty until acquireSource() owns a bounded source for
+    /// this item.
+    bool deferred = false;
+    /// True for sources such as /proc/self/fd links which are meaningful only
+    /// inside the process that prepared them.
+    bool sameProcessOnly = false;
+    /// Original/snapshot filesystem facts to apply after writing an exported
+    /// copy. They deliberately exclude ownership, ACLs and POSIX special bits.
+    DItemAccessFileFacts fileFacts;
+};
+
+class DIGIKAM_EXPORT DItemAssociatedAccessEntry
+{
+public:
+
+    bool isValid() const;
+
+public:
+
+    QUrl logicalUrl;
+    QUrl physicalUrl;
+    int  role = 0;
+    int  ordinal = -1;
+    bool sameProcessOnly = false;
+    DItemAccessFileFacts fileFacts;
+};
+
+class DIGIKAM_EXPORT DItemAccessSourceHandle
+{
+public:
+
+    virtual ~DItemAccessSourceHandle();
+
+    bool isValid() const;
+    DItemAccessEntry entry() const;
+    QList<DItemAssociatedAccessEntry> associatedEntries() const;
+    virtual bool validateAccess() const;
+
+protected:
+
+    explicit DItemAccessSourceHandle(
+        const DItemAccessEntry& entry,
+        const QList<DItemAssociatedAccessEntry>& associatedEntries = {});
+
+private:
+
+    friend class DItemAccessHandle;
+
+    DItemAccessEntry m_entry;
+    QList<DItemAssociatedAccessEntry> m_associatedEntries;
+};
+
+/**
+ * Owned item-source preparation. Callers must retain this object for the full
+ * lifetime of every worker, dialog, process handoff or server using its
+ * physical URLs. Destroying it releases host-specific access leases.
+ */
+class DIGIKAM_EXPORT DItemAccessHandle
+{
+public:
+
+    virtual ~DItemAccessHandle();
+
+    bool isValid() const;
+    bool isCanceled() const;
+    QList<DItemAccessEntry> entries() const;
+    QList<QUrl> physicalUrls() const;
+    QList<QUrl> excludedLogicalUrls() const;
+    QUrl logicalUrlFor(const QUrl& physicalUrl) const;
+
+    /** Revalidates host-specific access immediately before source I/O. */
+    virtual bool validateAccess(const QUrl& physicalUrl) const;
+    virtual QSharedPointer<DItemAccessSourceHandle> acquireSource(
+        const QUrl& logicalUrl,
+        const QSharedPointer<DItemAccessCancellationToken>& cancellation = {}) const;
+
+    static QSharedPointer<DItemAccessHandle> passThrough(
+        const DItemAccessRequest& request);
+    static QSharedPointer<DItemAccessHandle> canceled(
+        const DItemAccessRequest& request);
+
+protected:
+
+    DItemAccessHandle(const QList<DItemAccessEntry>& entries,
+                      const QList<QUrl>& excludedLogicalUrls,
+                      bool canceled);
+
+private:
+
+    QList<DItemAccessEntry> m_entries;
+    QList<QUrl>             m_excludedLogicalUrls;
+    bool                    m_canceled = false;
+};
 
 class DIGIKAM_EXPORT DInfoInterface : public QObject
 {
@@ -88,6 +289,14 @@ public:
     virtual QList<QUrl> albumItems(int)                                             const;
     virtual QList<QUrl> albumsItems(const DAlbumIDs&)                               const;
     virtual QList<QUrl> allAlbumItems()                                             const;
+
+    /**
+     * Prepares explicit logical items for an operation with an owned lifetime.
+     * The base implementation is an unprotected pass-through. Database-aware
+     * hosts may authenticate, exclude, substitute or lease different sources.
+     */
+    virtual QSharedPointer<DItemAccessHandle> prepareItemAccess(
+        const DItemAccessRequest& request) const;
 
     virtual DInfoMap albumInfo(int)                                                 const;
     virtual void     setAlbumInfo(int, const DInfoMap&)                             const;

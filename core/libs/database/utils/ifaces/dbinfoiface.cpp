@@ -16,10 +16,19 @@
 
 #include "dbinfoiface.h"
 
+// C++ includes
+
+#include <algorithm>
+
 // Qt includes
 
 #include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
+
+// KDE includes
+
+#include <klocalizedstring.h>
 
 // Local includes
 
@@ -54,6 +63,8 @@
 #include "tagsactionmngr.h"
 #include "setup.h"
 #include "applicationsettings.h"
+#include "privacyactionpolicy.h"
+#include "privacyitemaccessbroker_p.h"
 
 #ifdef HAVE_GEOLOCATION
 #   include "itemgps.h"
@@ -61,7 +72,6 @@
 
 namespace Digikam
 {
-
 class Q_DECL_HIDDEN DBInfoIface::Private
 {
 public:
@@ -423,6 +433,24 @@ QList<QUrl> DBInfoIface::allAlbumItems() const
     }
 
     return imageList;
+}
+
+QSharedPointer<DItemAccessHandle> DBInfoIface::prepareItemAccess(
+    const DItemAccessRequest& request) const
+{
+    if (!request.isValid())
+    {
+        return {};
+    }
+
+    // Preserve ordinary digiKam behavior before or outside a privacy runtime.
+
+    if (!PrivacyActionGate::isInstalled())
+    {
+        return DInfoInterface::prepareItemAccess(request);
+    }
+
+    return preparePrivacyItemAccess(request);
 }
 
 DBInfoIface::DInfoMap DBInfoIface::albumInfo(int gid) const

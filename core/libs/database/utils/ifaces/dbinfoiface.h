@@ -54,6 +54,8 @@ public:
     QList<QUrl> albumItems(int id)                                           const override;
     QList<QUrl> albumsItems(const DAlbumIDs&)                                const override;
     QList<QUrl> allAlbumItems()                                              const override;
+    QSharedPointer<DItemAccessHandle> prepareItemAccess(
+        const DItemAccessRequest& request)                                   const override;
 
     DInfoMap    albumInfo(int)                                               const override;
 

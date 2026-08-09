@@ -33,6 +33,8 @@
 #include "privacyservice.h"
 #include "privacytypes.h"
 
+class QIODevice;
+
 namespace Digikam
 {
 
@@ -239,6 +241,9 @@ public:
     qlonglong expectedPublicProxySize(qlonglong imageId) const;
     PrivacyPublicProxyDisplayResult validatePublicProxyForDisplay(
         qlonglong imageId, const QString& absolutePath);
+    bool snapshotVerifiedPublicProxy(qlonglong imageId,
+                                     const QString& absolutePath,
+                                     QIODevice* destination);
     bool clearThumbnailSource(qlonglong imageId,
                               PrivacyClearThumbnailSource* source) const;
 
@@ -348,7 +353,7 @@ public:
             PrivacyRuntimeCoordinator&)>;
 
     static PrivacyStartupReport run();
-    static void reset();
+    static bool reset();
     static void setTransactionRecoveryFactory(
         const TransactionRecoveryFactory& factory);
     static PrivacyStartupReport report();

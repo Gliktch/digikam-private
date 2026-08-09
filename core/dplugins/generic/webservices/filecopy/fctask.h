@@ -36,13 +36,19 @@ class FCTask : public ActionJob
 
 public:
 
-    explicit FCTask(const QUrl& srcUrl,
-                    const FCContainer& settings);
+    explicit FCTask(
+        const DItemAccessEntry& item,
+        const FCContainer& settings,
+        const QSharedPointer<DItemAccessHandle>& accessHandle);
     ~FCTask()  override;
 
 Q_SIGNALS:
 
     void signalUrlProcessed(const QUrl& from, const QUrl& to);
+
+public Q_SLOTS:
+
+    void cancel();
 
 protected:
 

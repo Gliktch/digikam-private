@@ -110,6 +110,7 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycontracts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacymanagedrootprovisioner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyleaseregistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacypreparedaccessregistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyprotectpreflight.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyproxygenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacyderivativestore.cpp
@@ -266,6 +267,7 @@ set(libdatabasemain_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/widgets/searchtextbardb.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/ifaces/dbinfoiface.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/ifaces/privacyitemaccessbroker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/ifaces/syncjob.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/ifaces/dio.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/ifaces/diofinders.cpp

@@ -98,7 +98,19 @@ bool PrivacyCasualOriginalReader::prepare(
     const QString& logicalFilePath,
     PrivacyCasualOriginalSource* const source) const
 {
-    if (!source || (imageId <= 0) || !QDir::isAbsolutePath(logicalFilePath))
+    return prepareAsset(snapshot, imageId, logicalFilePath,
+                        PrivacyAsset::PrimaryMediaRole, 0, source);
+}
+
+bool PrivacyCasualOriginalReader::prepareAsset(
+    const PrivacyRepositorySnapshot& snapshot,
+    qlonglong imageId,
+    const QString& logicalFilePath,
+    int role, int ordinal,
+    PrivacyCasualOriginalSource* const source) const
+{
+    if (!source || (imageId <= 0) || !QDir::isAbsolutePath(logicalFilePath) ||
+        (role <= 0) || (ordinal < 0))
     {
         return false;
     }
@@ -137,6 +149,14 @@ bool PrivacyCasualOriginalReader::prepare(
                     (candidate.role == PrivacyAsset::PrimaryMediaRole) &&
                     (candidate.ordinal == 0));
         });
+    const PrivacyAsset* const selected = uniqueValue(
+        snapshot.assets,
+        [item, role, ordinal](const PrivacyAsset& candidate)
+        {
+            return ((candidate.itemUuid == item->uuid) &&
+                    (candidate.role == role) &&
+                    (candidate.ordinal == ordinal));
+        });
 
     if (!category || !category->isValid() ||
         (category->backend != PrivacyBackend::Casual) ||
@@ -144,9 +164,11 @@ bool PrivacyCasualOriginalReader::prepare(
         !container || !container->isValid() ||
         (container->kind != PrivacyContainerKind::CasualArchive) ||
         (container->state != PrivacyContainerState::Verified) ||
-        !primary || !primary->isValid() ||
+        !primary || !primary->isValid() || !selected || !selected->isValid() ||
         (primary->containerUuid != container->uuid) ||
         (primary->publicRootUuid != container->rootUuid) ||
+        (selected->containerUuid != container->uuid) ||
+        (selected->publicRootUuid != container->rootUuid) ||
         (primary->proxyGeneration != item->generation) ||
         (primary->originalHash != item->originalHash) ||
         (primary->originalSize != item->originalSize))
@@ -183,7 +205,7 @@ bool PrivacyCasualOriginalReader::prepare(
     const QByteArray archiveHash = sha256Bytes(
         container->protectedHashAlgorithm, container->protectedHash);
     const QByteArray memberHash = sha256Bytes(
-        primary->hashAlgorithm, primary->originalHash);
+        selected->hashAlgorithm, selected->originalHash);
     const QString archivePath = absoluteObjectPath(
         *root, container->objectRelativePath);
 
@@ -198,20 +220,20 @@ bool PrivacyCasualOriginalReader::prepare(
     prepared.logicalFilePath  = cleanLogicalPath;
     prepared.categoryUuid     = category->uuid;
     prepared.itemUuid         = item->uuid;
-    prepared.originalName     = primary->originalName;
-    prepared.originalHash     = primary->originalHash;
-    prepared.originalSize     = primary->originalSize;
+    prepared.originalName     = selected->originalName;
+    prepared.originalHash     = selected->originalHash;
+    prepared.originalSize     = selected->originalSize;
     prepared.restore.archivePath = archivePath;
     prepared.restore.categoryUuid = category->uuid;
     prepared.restore.containerUuid = container->uuid;
     prepared.restore.itemUuid = item->uuid;
-    prepared.restore.protectedRelativePath = primary->protectedRelativePath;
-    prepared.restore.originalName = primary->originalName;
-    prepared.restore.role = primary->role;
-    prepared.restore.ordinal = primary->ordinal;
+    prepared.restore.protectedRelativePath = selected->protectedRelativePath;
+    prepared.restore.originalName = selected->originalName;
+    prepared.restore.role = selected->role;
+    prepared.restore.ordinal = selected->ordinal;
     prepared.restore.expectedArchiveSize = container->protectedSize;
     prepared.restore.expectedArchiveSha256 = archiveHash;
-    prepared.restore.expectedMemberSize = primary->originalSize;
+    prepared.restore.expectedMemberSize = selected->originalSize;
     prepared.restore.expectedMemberSha256 = memberHash;
 
     if (!prepared.isValid())
@@ -227,7 +249,8 @@ bool PrivacyCasualOriginalReader::restore(
     const PrivacyCasualOriginalSource& source,
     const PrivacyPassword& password,
     QIODevice* const destination,
-    PrivacyCasualArchiveError* const error) const
+    PrivacyCasualArchiveError* const error,
+    const PrivacyCasualArchiveEngine::CancellationCheck& isCancelled) const
 {
     if (!source.isValid() || !password.isValid() || !destination)
     {
@@ -240,7 +263,7 @@ bool PrivacyCasualOriginalReader::restore(
     }
 
     return PrivacyCasualArchiveEngine().restoreMember(
-        source.restore, password, destination, {}, error);
+        source.restore, password, destination, isCancelled, error);
 }
 
 } // namespace Digikam

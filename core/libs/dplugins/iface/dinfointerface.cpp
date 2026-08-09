@@ -21,6 +21,9 @@
 
 #include <QtGlobal>
 
+#include <QDir>
+#include <QSet>
+
 // Local includes
 
 #include "digikam_globals.h"
@@ -28,6 +31,327 @@
 
 namespace Digikam
 {
+
+namespace
+{
+
+bool isLocalAbsoluteUrl(const QUrl& url)
+{
+    return (url.isLocalFile() && !url.toLocalFile().isEmpty() &&
+            QDir::isAbsolutePath(url.toLocalFile()));
+}
+
+} // namespace
+
+void DItemAccessCancellationToken::cancel()
+{
+    m_canceled.storeRelease(1);
+}
+
+bool DItemAccessCancellationToken::isCanceled() const
+{
+    return (m_canceled.loadAcquire() != 0);
+}
+
+bool DItemAccessRequest::isValid() const
+{
+    const bool externalWritableSource =
+        ((requestedSource == DItemAccessSource::WritableCheckout) ||
+         (requestedSource == DItemAccessSource::PublicOriginal));
+
+    if (consumerIdentity.trimmed().isEmpty() || logicalUrls.isEmpty() ||
+        (purpose < DItemAccessPurpose::Export) ||
+        (purpose > DItemAccessPurpose::MetadataWrite) ||
+        (mutation < DItemAccessMutation::ReadOnly) ||
+        (mutation > DItemAccessMutation::MayModifyInputs) ||
+        (requestedSource < DItemAccessSource::PublicRepresentation) ||
+        (requestedSource > DItemAccessSource::PublicOriginal) ||
+        (consumerScope < DItemAccessConsumerScope::SameProcess) ||
+        (consumerScope > DItemAccessConsumerScope::DetachedProcess) ||
+        ((consumerScope == DItemAccessConsumerScope::DetachedProcess) &&
+         (requestedSource == DItemAccessSource::InternalOriginal)) ||
+        ((mutation == DItemAccessMutation::MayModifyInputs) &&
+         (requestedSource != DItemAccessSource::WritableCheckout) &&
+         (requestedSource != DItemAccessSource::PublicOriginal)) ||
+        (externalWritableSource &&
+         ((purpose != DItemAccessPurpose::ExternalOpen) ||
+          (mutation != DItemAccessMutation::MayModifyInputs) ||
+          (consumerScope != DItemAccessConsumerScope::DetachedProcess) ||
+          allowPlaceholderFallback)))
+    {
+        return false;
+    }
+
+    QSet<QString> paths;
+
+    for (const QUrl& url : logicalUrls)
+    {
+        const QString path = QDir::cleanPath(url.toLocalFile());
+
+        if (!isLocalAbsoluteUrl(url) || paths.contains(path))
+        {
+            return false;
+        }
+
+        paths.insert(path);
+    }
+
+    return true;
+}
+
+bool DItemAccessFileFacts::isValid() const
+{
+    const QFileDevice::Permissions supported =
+        QFileDevice::ReadOwner  | QFileDevice::WriteOwner |
+        QFileDevice::ExeOwner   | QFileDevice::ReadUser   |
+        QFileDevice::WriteUser  | QFileDevice::ExeUser    |
+        QFileDevice::ReadGroup  | QFileDevice::WriteGroup |
+        QFileDevice::ExeGroup   | QFileDevice::ReadOther  |
+        QFileDevice::WriteOther | QFileDevice::ExeOther;
+
+    if (!available)
+    {
+        return (!modificationDate.isValid() && (permissions == QFileDevice::Permissions()));
+    }
+
+    return (modificationDate.isValid() &&
+            ((permissions & ~supported) == QFileDevice::Permissions()));
+}
+
+bool DItemAccessEntry::isValid() const
+{
+    return (isLocalAbsoluteUrl(logicalUrl) &&
+            (deferred ? physicalUrl.isEmpty()
+                      : isLocalAbsoluteUrl(physicalUrl)) &&
+            fileFacts.isValid());
+}
+
+bool DItemAssociatedAccessEntry::isValid() const
+{
+    return (isLocalAbsoluteUrl(logicalUrl) &&
+            isLocalAbsoluteUrl(physicalUrl) &&
+            (role >= static_cast<int>(DItemAssociatedRole::CompanionMedia)) &&
+            (role <= static_cast<int>(DItemAssociatedRole::ConfiguredSidecar)) &&
+            (ordinal >= 0) && fileFacts.isValid());
+}
+
+DItemAccessSourceHandle::DItemAccessSourceHandle(
+    const DItemAccessEntry& entry,
+    const QList<DItemAssociatedAccessEntry>& associatedEntries)
+    : m_entry(entry),
+      m_associatedEntries(associatedEntries)
+{
+}
+
+DItemAccessSourceHandle::~DItemAccessSourceHandle() = default;
+
+bool DItemAccessSourceHandle::isValid() const
+{
+    if (!m_entry.isValid() || m_entry.deferred)
+    {
+        return false;
+    }
+
+    QSet<QString> logicalPaths {
+        QDir::cleanPath(m_entry.logicalUrl.toLocalFile())
+    };
+    QSet<QString> physicalPaths {
+        QDir::cleanPath(m_entry.physicalUrl.toLocalFile())
+    };
+
+    for (const DItemAssociatedAccessEntry& associated : m_associatedEntries)
+    {
+        const QString logical =
+            QDir::cleanPath(associated.logicalUrl.toLocalFile());
+        const QString physical =
+            QDir::cleanPath(associated.physicalUrl.toLocalFile());
+
+        if (!associated.isValid() || logicalPaths.contains(logical) ||
+            physicalPaths.contains(physical))
+        {
+            return false;
+        }
+
+        logicalPaths.insert(logical);
+        physicalPaths.insert(physical);
+    }
+
+    return true;
+}
+
+DItemAccessEntry DItemAccessSourceHandle::entry() const
+{
+    return m_entry;
+}
+
+QList<DItemAssociatedAccessEntry>
+DItemAccessSourceHandle::associatedEntries() const
+{
+    return m_associatedEntries;
+}
+
+bool DItemAccessSourceHandle::validateAccess() const
+{
+    return isValid();
+}
+
+DItemAccessHandle::DItemAccessHandle(
+    const QList<DItemAccessEntry>& entries,
+    const QList<QUrl>& excludedLogicalUrls,
+    bool canceled)
+    : m_entries(entries),
+      m_excludedLogicalUrls(excludedLogicalUrls),
+      m_canceled(canceled)
+{
+}
+
+DItemAccessHandle::~DItemAccessHandle() = default;
+
+bool DItemAccessHandle::isValid() const
+{
+    QSet<QString> logicalPaths;
+    QSet<QString> physicalPaths;
+
+    for (const DItemAccessEntry& entry : m_entries)
+    {
+        const QString logical = QDir::cleanPath(entry.logicalUrl.toLocalFile());
+        const QString physical = entry.deferred
+            ? QString() : QDir::cleanPath(entry.physicalUrl.toLocalFile());
+
+        if (!entry.isValid() || logicalPaths.contains(logical) ||
+            (!physical.isEmpty() && physicalPaths.contains(physical)))
+        {
+            return false;
+        }
+
+        logicalPaths.insert(logical);
+        if (!physical.isEmpty())
+        {
+            physicalPaths.insert(physical);
+        }
+    }
+
+    for (const QUrl& excluded : m_excludedLogicalUrls)
+    {
+        const QString path = QDir::cleanPath(excluded.toLocalFile());
+
+        if (!isLocalAbsoluteUrl(excluded) || logicalPaths.contains(path))
+        {
+            return false;
+        }
+
+        logicalPaths.insert(path);
+    }
+
+    return m_canceled ? m_entries.isEmpty() : !m_entries.isEmpty();
+}
+
+bool DItemAccessHandle::isCanceled() const
+{
+    return m_canceled;
+}
+
+QList<DItemAccessEntry> DItemAccessHandle::entries() const
+{
+    return m_entries;
+}
+
+QList<QUrl> DItemAccessHandle::physicalUrls() const
+{
+    QList<QUrl> urls;
+
+    for (const DItemAccessEntry& entry : m_entries)
+    {
+        if (!entry.deferred)
+        {
+            urls << entry.physicalUrl;
+        }
+    }
+
+    return urls;
+}
+
+QList<QUrl> DItemAccessHandle::excludedLogicalUrls() const
+{
+    return m_excludedLogicalUrls;
+}
+
+QUrl DItemAccessHandle::logicalUrlFor(const QUrl& physicalUrl) const
+{
+    for (const DItemAccessEntry& entry : m_entries)
+    {
+        if (!entry.deferred && (entry.physicalUrl == physicalUrl))
+        {
+            return entry.logicalUrl;
+        }
+    }
+
+    return {};
+}
+
+bool DItemAccessHandle::validateAccess(const QUrl& physicalUrl) const
+{
+    return (!m_canceled && !logicalUrlFor(physicalUrl).isEmpty());
+}
+
+QSharedPointer<DItemAccessSourceHandle> DItemAccessHandle::acquireSource(
+    const QUrl& logicalUrl,
+    const QSharedPointer<DItemAccessCancellationToken>& cancellation) const
+{
+    if (m_canceled || (cancellation && cancellation->isCanceled()))
+    {
+        return {};
+    }
+
+    for (const DItemAccessEntry& entry : m_entries)
+    {
+        if ((entry.logicalUrl == logicalUrl) && !entry.deferred &&
+            validateAccess(entry.physicalUrl))
+        {
+            QSharedPointer<DItemAccessSourceHandle> source(
+                new DItemAccessSourceHandle(entry));
+            return source->isValid()
+                 ? source : QSharedPointer<DItemAccessSourceHandle>();
+        }
+    }
+
+    return {};
+}
+
+QSharedPointer<DItemAccessHandle> DItemAccessHandle::passThrough(
+    const DItemAccessRequest& request)
+{
+    if (!request.isValid())
+    {
+        return {};
+    }
+
+    QList<DItemAccessEntry> entries;
+
+    for (const QUrl& url : request.logicalUrls)
+    {
+        entries << DItemAccessEntry { url, url, false, false, false, {} };
+    }
+
+    QSharedPointer<DItemAccessHandle> handle(
+        new DItemAccessHandle(entries, {}, false));
+
+    return handle->isValid() ? handle : QSharedPointer<DItemAccessHandle>();
+}
+
+QSharedPointer<DItemAccessHandle> DItemAccessHandle::canceled(
+    const DItemAccessRequest& request)
+{
+    if (!request.isValid())
+    {
+        return {};
+    }
+
+    QSharedPointer<DItemAccessHandle> handle(
+        new DItemAccessHandle({}, request.logicalUrls, true));
+
+    return handle->isValid() ? handle : QSharedPointer<DItemAccessHandle>();
+}
 
 DInfoInterface::DInfoInterface(QObject* const parent)
     : QObject(parent)
@@ -59,6 +383,12 @@ QList<QUrl> DInfoInterface::currentAlbumItems() const
 QList<QUrl> DInfoInterface::allAlbumItems() const
 {
     return QList<QUrl>();
+}
+
+QSharedPointer<DItemAccessHandle> DInfoInterface::prepareItemAccess(
+    const DItemAccessRequest& request) const
+{
+    return DItemAccessHandle::passThrough(request);
 }
 
 QUrl DInfoInterface::currentActiveItem() const

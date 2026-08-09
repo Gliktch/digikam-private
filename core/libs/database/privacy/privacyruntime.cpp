@@ -40,6 +40,7 @@
 #include "collectionlocation.h"
 #include "collectionmanager.h"
 #include "privacycategorysessionowner.h"
+#include "privacypreparedaccessregistry.h"
 #include "privacyrepository.h"
 #include "privacyrootidentity_p.h"
 
@@ -107,7 +108,8 @@ bool pathHasSymlinkComponent(const QString& absolutePath);
 bool stablePublicProxySha256(const QString& absolutePath,
                              qlonglong expectedProxySize,
                              qlonglong expectedOriginalSize,
-                             QByteArray* const sha256)
+                             QByteArray* const sha256,
+                             QIODevice* const snapshot = nullptr)
 {
     if (!sha256 || !QDir::isAbsolutePath(absolutePath) ||
         (QDir::cleanPath(absolutePath) != absolutePath) ||
@@ -157,6 +159,11 @@ bool stablePublicProxySha256(const QString& absolutePath,
         }
 
         hash.addData(chunk);
+
+        if (snapshot && (snapshot->write(chunk) != chunk.size()))
+        {
+            return false;
+        }
     }
 
     if (file.error() != QFileDevice::NoError)
@@ -217,6 +224,11 @@ bool stablePublicProxySha256(const QString& absolutePath,
         }
 
         hash.addData(chunk);
+
+        if (snapshot && (snapshot->write(chunk) != chunk.size()))
+        {
+            return false;
+        }
     }
 
     if (file.error() != QFileDevice::NoError)
@@ -2132,6 +2144,111 @@ PrivacyRuntimeCoordinator::validatePublicProxyForDisplay(
          : PrivacyPublicProxyDisplayResult::NewlyFailedValidation;
 }
 
+bool PrivacyRuntimeCoordinator::snapshotVerifiedPublicProxy(
+    qlonglong imageId, const QString& absolutePath,
+    QIODevice* const destination)
+{
+    if (!destination || !destination->isWritable() ||
+        (validatePublicProxyForDisplay(imageId, absolutePath) !=
+         PrivacyPublicProxyDisplayResult::Verified))
+    {
+        return false;
+    }
+
+    QString itemUuid;
+    QString publicRootUuid;
+    QString publicRelativePath;
+    QString expectedAbsolutePath;
+    QByteArray expectedProxySha256;
+    qlonglong expectedProxySize = -1;
+    qlonglong expectedOriginalSize = -1;
+    qlonglong itemGeneration = -1;
+    int presentationVersion = -1;
+    quint64 rootEpoch = 0;
+
+    {
+        QReadLocker locker(&d->lock);
+        const auto itemIt = d->items.constFind(imageId);
+
+        if (!d->initialized || (itemIt == d->items.constEnd()) ||
+            itemIt->mappingConflict ||
+            d->conflictingItemUuids.contains(itemIt->item.uuid) ||
+            itemIt->publicRootUuid.isEmpty())
+        {
+            return false;
+        }
+
+        itemUuid             = itemIt->item.uuid;
+        itemGeneration       = itemIt->item.generation;
+        presentationVersion  = itemIt->item.presentationVersion;
+        expectedProxySize    = itemIt->expectedProxySize;
+        expectedOriginalSize = itemIt->item.originalSize;
+        expectedProxySha256  = QByteArray::fromHex(
+            itemIt->item.expectedProxyHash.toLatin1());
+        publicRootUuid       = itemIt->publicRootUuid;
+        publicRelativePath   = itemIt->publicRelativePath;
+        rootEpoch            = d->rootEpochs.value(publicRootUuid);
+
+        int rootCount = 0;
+
+        for (const PrivacyStorageRoot& root : std::as_const(d->snapshot.storageRoots))
+        {
+            if (root.uuid == publicRootUuid)
+            {
+                expectedAbsolutePath = QDir(root.configuredPath).absoluteFilePath(
+                    publicRelativePath);
+                ++rootCount;
+            }
+        }
+
+        if ((rootCount != 1) ||
+            (d->rootStates.value(publicRootUuid,
+                                 PrivacyRootRuntimeState::Unknown) !=
+             PrivacyRootRuntimeState::VerifiedAvailable))
+        {
+            return false;
+        }
+    }
+
+    if ((QDir::cleanPath(absolutePath) !=
+         QDir::cleanPath(expectedAbsolutePath)) ||
+        (expectedProxySha256.size() !=
+         QCryptographicHash::hashLength(QCryptographicHash::Sha256)))
+    {
+        return false;
+    }
+
+    QByteArray actualSha256;
+
+    if (!stablePublicProxySha256(absolutePath, expectedProxySize,
+                                 expectedOriginalSize, &actualSha256,
+                                 destination) ||
+        (actualSha256 != expectedProxySha256) || !destination->seek(0))
+    {
+        return false;
+    }
+
+    QReadLocker locker(&d->lock);
+    const auto itemIt = d->items.constFind(imageId);
+
+    return (d->initialized && (itemIt != d->items.constEnd()) &&
+            !itemIt->mappingConflict &&
+            !d->conflictingItemUuids.contains(itemUuid) &&
+            (itemIt->item.uuid == itemUuid) &&
+            (itemIt->item.generation == itemGeneration) &&
+            (itemIt->item.presentationVersion == presentationVersion) &&
+            (QByteArray::fromHex(itemIt->item.expectedProxyHash.toLatin1()) ==
+             expectedProxySha256) &&
+            (itemIt->expectedProxySize == expectedProxySize) &&
+            (itemIt->item.originalSize == expectedOriginalSize) &&
+            (itemIt->publicRootUuid == publicRootUuid) &&
+            (itemIt->publicRelativePath == publicRelativePath) &&
+            (d->rootEpochs.value(publicRootUuid) == rootEpoch) &&
+            (d->rootStates.value(publicRootUuid,
+                                 PrivacyRootRuntimeState::Unknown) ==
+             PrivacyRootRuntimeState::VerifiedAvailable));
+}
+
 bool PrivacyRuntimeCoordinator::clearThumbnailSource(
     qlonglong imageId, PrivacyClearThumbnailSource* const source) const
 {
@@ -3700,6 +3817,7 @@ bool PrivacyRuntimeCoordinator::stateForItem(qlonglong imageId,
     }
 
     state->protectedItem       = true;
+    state->itemUuid            = runtime.item.uuid;
     state->categoryUuid        = sessionState.categoryUuid;
     state->access              = sessionState.access;
     state->publicRootState     = publicRootState;
@@ -4573,6 +4691,32 @@ createDefaultPrivacyRootIntegrityInspector()
 
 PrivacyStartupReport PrivacyStartupRecovery::run()
 {
+    PrivacyPreparedAccessQuiesceGuard preparedAccessQuiesce;
+
+    if (!preparedAccessQuiesce.isAcquired())
+    {
+        QReadLocker locker(&startupData->lock);
+        return startupData->report;
+    }
+
+    QSharedPointer<PrivacyRuntimeCoordinator> previousRuntime;
+    QSharedPointer<PrivacyCategorySessionOwner> previousCategorySessions;
+
+    {
+        QReadLocker locker(&startupData->lock);
+        previousRuntime = startupData->coordinator;
+        previousCategorySessions = startupData->categorySessions;
+    }
+
+    // A replacement recovery pass can mutate journals and public exposure.
+    // Close the installed generation before any such work begins.
+    if ((previousRuntime && !previousRuntime->prepareForShutdown()) ||
+        (previousCategorySessions && !previousCategorySessions->shutdown()))
+    {
+        QReadLocker locker(&startupData->lock);
+        return startupData->report;
+    }
+
     PrivacyRepositorySnapshot snapshot;
     PrivacyRepository repository;
     QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
@@ -4636,21 +4780,11 @@ PrivacyStartupReport PrivacyStartupRecovery::run()
     PrivacyAnalysisGate::setProvider(runtime);
     PrivacyManualTagVisibilityGate::setProvider(runtime);
 
-    QSharedPointer<PrivacyRuntimeCoordinator> previousRuntime;
-    QSharedPointer<PrivacyCategorySessionOwner> previousCategorySessions;
-
     {
         QWriteLocker locker(&startupData->lock);
-        previousRuntime = startupData->coordinator;
-        previousCategorySessions = startupData->categorySessions;
         startupData->coordinator = runtime;
         startupData->categorySessions = categorySessions;
         startupData->report      = result;
-    }
-
-    if (previousCategorySessions && (previousCategorySessions != categorySessions))
-    {
-        previousCategorySessions->shutdown();
     }
 
     if (previousRuntime && (previousRuntime != runtime))
@@ -4668,20 +4802,30 @@ void PrivacyStartupRecovery::setTransactionRecoveryFactory(
     startupData->transactionRecoveryFactory = factory;
 }
 
-void PrivacyStartupRecovery::reset()
+bool PrivacyStartupRecovery::reset()
 {
+    PrivacyPreparedAccessQuiesceGuard preparedAccessQuiesce;
+
+    if (!preparedAccessQuiesce.isAcquired())
+    {
+        return false;
+    }
+
     QSharedPointer<PrivacyRuntimeCoordinator> shutdownRuntime;
+    QSharedPointer<PrivacyCategorySessionOwner> shutdownCategorySessions;
 
     {
         QReadLocker locker(&startupData->lock);
         shutdownRuntime = startupData->coordinator;
+        shutdownCategorySessions = startupData->categorySessions;
     }
 
     // Do not hold startupData->lock here: the recovery owner verifies the
     // current runtime composition while it relocks Compatibility originals.
-    if (shutdownRuntime)
+    if ((shutdownRuntime && !shutdownRuntime->prepareForShutdown()) ||
+        (shutdownCategorySessions && !shutdownCategorySessions->shutdown()))
     {
-        shutdownRuntime->prepareForShutdown();
+        return false;
     }
 
     QSharedPointer<PrivacyRuntimeCoordinator> runtime(new PrivacyRuntimeCoordinator);
@@ -4691,26 +4835,21 @@ void PrivacyStartupRecovery::reset()
     PrivacyManualTagVisibilityGate::setProvider(runtime);
 
     QSharedPointer<PrivacyRuntimeCoordinator> previousRuntime;
-    QSharedPointer<PrivacyCategorySessionOwner> previousCategorySessions;
 
     {
         QWriteLocker locker(&startupData->lock);
         previousRuntime = startupData->coordinator;
-        previousCategorySessions = startupData->categorySessions;
         startupData->coordinator = runtime;
         startupData->categorySessions.clear();
         startupData->report      = PrivacyStartupReport();
-    }
-
-    if (previousCategorySessions)
-    {
-        previousCategorySessions->shutdown();
     }
 
     if (previousRuntime && (previousRuntime != runtime))
     {
         previousRuntime->reset();
     }
+
+    return true;
 }
 
 PrivacyStartupReport PrivacyStartupRecovery::report()

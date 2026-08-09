@@ -22,6 +22,7 @@
 #include <QCloseEvent>
 #include <QMessageBox>
 #include <QHBoxLayout>
+#include <QSet>
 
 // KDE includes
 
@@ -68,12 +69,17 @@ public:
     DItemsList*          imagesList             = nullptr;
     FCExportWidget*      exportWidget           = nullptr;
     FCThread*            thread                 = nullptr;
+    DInfoInterface*      iface                  = nullptr;
+    QSharedPointer<DItemAccessHandle> preparedAccess;
+    QSet<QUrl>           placeholderUrls;
+    int                  copiedPlaceholderCount = 0;
 };
 
 FCExportWindow::FCExportWindow(DInfoInterface* const iface, QWidget* const /*parent*/)
     : WSToolDialog(nullptr, QLatin1String("FileCopy Export Dialog")),
       d           (new Private)
 {
+    d->iface              = iface;
     QWidget* const page = new QWidget(this);
 
     // setup image list
@@ -205,7 +211,8 @@ void FCExportWindow::slotCopy()
     saveSettings();
 
     int loopCheck      = 0;
-    QString targetPath = d->exportWidget->getSettings().destUrl.toLocalFile();
+    const FCContainer settings = d->exportWidget->getSettings();
+    QString targetPath = settings.destUrl.toLocalFile();
 
     while (!QFile::exists(targetPath))
     {
@@ -242,6 +249,78 @@ void FCExportWindow::slotCopy()
         return;
     }
 
+    DItemAccessRequest accessRequest;
+    accessRequest.consumerIdentity =
+        QLatin1String("digikam-generic-file-copy-export");
+    accessRequest.logicalUrls = d->imagesList->imageUrls();
+    accessRequest.purpose     = DItemAccessPurpose::Export;
+    accessRequest.mutation    = DItemAccessMutation::MayCreateOutputs;
+    accessRequest.requestedSource =
+        (settings.behavior == FCContainer::CopyFile)
+        ? DItemAccessSource::InternalOriginal
+        : DItemAccessSource::PublicRepresentation;
+    accessRequest.consumerScope =
+        (settings.behavior == FCContainer::CopyFile)
+        ? DItemAccessConsumerScope::SameProcess
+        : DItemAccessConsumerScope::DetachedProcess;
+    accessRequest.allowPlaceholderFallback = true;
+    accessRequest.allowPartialSelection     = true;
+
+    const QSharedPointer<DItemAccessHandle> prepared =
+        d->iface ? d->iface->prepareItemAccess(accessRequest)
+                 : QSharedPointer<DItemAccessHandle>();
+
+    if (!prepared)
+    {
+        QMessageBox::warning(
+            this, i18nc("@title:window", "Items Could Not Be Prepared"),
+            i18n("digiKam could not safely prepare the selected items for "
+                 "copying. No files were copied."));
+        return;
+    }
+
+    if (!prepared->isValid() || prepared->isCanceled())
+    {
+        return;
+    }
+
+    if (!prepared->excludedLogicalUrls().isEmpty() &&
+        (QMessageBox::question(
+             this, i18nc("@title:window", "Items Will Be Skipped"),
+             i18np("One selected item could not be prepared safely and will "
+                   "be skipped. Continue copying the remaining items?",
+                   "%1 selected items could not be prepared safely and will "
+                   "be skipped. Continue copying the remaining items?",
+                   prepared->excludedLogicalUrls().size())) != QMessageBox::Yes))
+    {
+        return;
+    }
+
+    if (settings.behavior != FCContainer::CopyFile)
+    {
+        int protectedPlaceholderCount = 0;
+
+        for (const DItemAccessEntry& entry : prepared->entries())
+        {
+            protectedPlaceholderCount += entry.placeholder ? 1 : 0;
+        }
+
+        if (protectedPlaceholderCount > 0)
+        {
+            QMessageBox::warning(
+                this,
+                i18nc("@title:window", "Protected Items Cannot Be Linked"),
+                i18np("One protected item would be linked to a mutable public "
+                      "placeholder. Choose <b>Copy files</b> to export a "
+                      "verified placeholder snapshot instead.",
+                      "%1 protected items would be linked to mutable public "
+                      "placeholders. Choose <b>Copy files</b> to export "
+                      "verified placeholder snapshots instead.",
+                      protectedPlaceholderCount));
+            return;
+        }
+    }
+
     // start copying and react on signals
 
     startButton()->setEnabled(false);
@@ -263,8 +342,19 @@ void FCExportWindow::slotCopy()
                 this, SLOT(slotCopyingDone(QUrl,QUrl)));
     }
 
-    d->thread->createCopyJobs(d->imagesList->imageUrls(),
-                              d->exportWidget->getSettings());
+    d->preparedAccess = prepared;
+    d->placeholderUrls.clear();
+    d->copiedPlaceholderCount = 0;
+
+    for (const DItemAccessEntry& entry : prepared->entries())
+    {
+        if (entry.placeholder)
+        {
+            d->placeholderUrls.insert(entry.logicalUrl);
+        }
+    }
+
+    d->thread->createCopyJobs(prepared->entries(), settings, prepared);
 
     d->thread->start();
 }
@@ -299,10 +389,16 @@ void FCExportWindow::slotCopyingDone(const QUrl& from, const QUrl& to)
     d->imagesList->blockSignals(true);
     d->imagesList->removeItemByUrl(from);
     d->imagesList->blockSignals(false);
+
+    if (d->placeholderUrls.contains(from))
+    {
+        ++d->copiedPlaceholderCount;
+    }
 }
 
 void FCExportWindow::slotCopyingFinished()
 {
+    d->preparedAccess.clear();
     updateUploadButton();
     d->exportWidget->setEnabled(true);
     setRejectButtonMode(QDialogButtonBox::Close);
@@ -314,6 +410,17 @@ void FCExportWindow::slotCopyingFinished()
                                       "and are still in the list. "
                                       "You can retry to copy these items now."));
     }
+    else if (d->copiedPlaceholderCount > 0)
+    {
+        QMessageBox::information(
+            this, i18nc("@title:window", "Placeholders Copied"),
+            i18np("One protected item was copied as its public placeholder.",
+                  "%1 protected items were copied as their public "
+                  "placeholders.", d->copiedPlaceholderCount));
+    }
+
+    d->placeholderUrls.clear();
+    d->copiedPlaceholderCount = 0;
 }
 
 void FCExportWindow::slotCancelCopy()
