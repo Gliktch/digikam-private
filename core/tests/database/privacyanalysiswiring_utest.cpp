@@ -57,6 +57,7 @@ private Q_SLOTS:
     void testCompatibilityActionsUseTransactionOwner();
     void testProtectedMutationsCannotBypassDioGate();
     void testProtectedPublicWritesRemainGated();
+    void testEditorSavesCannotOverwriteProtectedItems();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -287,6 +288,27 @@ void PrivacyAnalysisWiringTest::testProtectedPublicWritesRemainGated()
     QCOMPARE(occurrences(focusPoints,
                          QStringLiteral("PrivacyActionGate::mayMutatePublicItem(")), 1);
     QVERIFY(!metadataPlugin.contains(QStringLiteral("privacyactionpolicy.h")));
+}
+
+void PrivacyAnalysisWiringTest::testEditorSavesCannotOverwriteProtectedItems()
+{
+    const QString editorWindow = source(QStringLiteral(
+        "core/utilities/imageeditor/editor/editorwindow.cpp"));
+    const QString imageWindow = source(QStringLiteral(
+        "core/utilities/imageeditor/main/imagewindow.cpp"));
+
+    QVERIFY2(!editorWindow.isEmpty(), "Unable to read editor-window source");
+    QVERIFY2(!imageWindow.isEmpty(), "Unable to read image-window source");
+    QVERIFY(occurrences(editorWindow,
+                        QStringLiteral("!mayCommitPublicFile(")) >= 4);
+    QVERIFY(editorWindow.contains(QStringLiteral(
+        "VersionFileOperation::SaveAndDelete")));
+    QVERIFY(editorWindow.contains(QStringLiteral(
+        "QFile::remove(m_savingContext.saveTempFileName)")));
+    QCOMPARE(occurrences(imageWindow,
+                         QStringLiteral("PrivacyActionGate::mayMutatePublicItem(")), 1);
+    QVERIFY(imageWindow.contains(QStringLiteral("PrivacyActionKind::InternalEdit")));
+    QVERIFY(imageWindow.contains(QStringLiteral("Cannot Save Protected Item")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)

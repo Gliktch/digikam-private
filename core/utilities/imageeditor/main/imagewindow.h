@@ -93,6 +93,7 @@ private:
     bool saveNewVersionInFormat(const QString& format)                  override;
 
     QUrl saveDestinationUrl()                                           override;
+    bool mayCommitPublicFile(const QUrl& url)                            override;
     bool hasOriginalToRestore()                                         override;
     DImageHistory resolvedImageHistory(const DImageHistory& history)    override;
 

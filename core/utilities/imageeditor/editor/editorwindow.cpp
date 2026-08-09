@@ -2107,6 +2107,11 @@ bool EditorWindow::startingSaveAs(const QUrl& url)
         return false;
     }
 
+    if (!mayCommitPublicFile(newURL))
+    {
+        return false;
+    }
+
     // Check for overwrite ----------------------------------------------------------
 
     QFileInfo fi(newURL.toLocalFile());
@@ -2254,6 +2259,19 @@ bool EditorWindow::startingSaveVersion(const QUrl& url, bool fork, bool saveas, 
         return false;
     }
 
+    if (!mayCommitPublicFile(newURL))
+    {
+        return false;
+    }
+
+    if (
+        (m_savingContext.versionFileOperation.tasks & VersionFileOperation::SaveAndDelete) &&
+        !mayCommitPublicFile(url)
+       )
+    {
+        return false;
+    }
+
     QFileInfo fi(newURL.toLocalFile());
     m_savingContext.destinationExisted = fi.exists();
 
@@ -2378,6 +2396,24 @@ bool EditorWindow::moveLocalFile(const QString& org, const QString& dst)
 void EditorWindow::moveFile()
 {
     // Move local file.
+
+    if (!mayCommitPublicFile(m_savingContext.destinationURL))
+    {
+        QFile::remove(m_savingContext.saveTempFileName);
+        movingSaveFileFinished(false);
+        return;
+    }
+
+    if (
+        (m_savingContext.executedOperation == SavingContext::SavingStateVersion) &&
+        (m_savingContext.versionFileOperation.tasks & VersionFileOperation::SaveAndDelete) &&
+        !mayCommitPublicFile(m_savingContext.srcURL)
+       )
+    {
+        QFile::remove(m_savingContext.saveTempFileName);
+        movingSaveFileFinished(false);
+        return;
+    }
 
     if (m_savingContext.executedOperation == SavingContext::SavingStateVersion)
     {
@@ -2587,6 +2623,13 @@ void EditorWindow::setToolInfoMessage(const QString& txt)
 VersionManager* EditorWindow::versionManager() const
 {
     return &d->defaultVersionManager;
+}
+
+bool EditorWindow::mayCommitPublicFile(const QUrl& url)
+{
+    Q_UNUSED(url);
+
+    return true;
 }
 
 void EditorWindow::setupSelectToolsAction()

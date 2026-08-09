@@ -243,6 +243,12 @@ protected:
     virtual VersionManager* versionManager()        const;
 
     /**
+     * Last-chance policy hook for subclasses whose public save destinations
+     * may represent managed items. The base editor has no database context.
+     */
+    virtual bool mayCommitPublicFile(const QUrl& url);
+
+    /**
      * Hook method that subclasses must implement to return the destination url
      * of the image to save. This may also be a remote url.
      *

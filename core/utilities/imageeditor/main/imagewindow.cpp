@@ -15,6 +15,10 @@
 
 #include "imagewindow_p.h"
 
+// Local includes
+
+#include "privacyactionpolicy.h"
+
 namespace Digikam
 {
 
@@ -804,8 +808,36 @@ VersionManager* ImageWindow::versionManager() const
     return &d->versionManager;
 }
 
+bool ImageWindow::mayCommitPublicFile(const QUrl& url)
+{
+    const ItemInfo info = ItemInfo::fromUrl(url);
+
+    if (info.isNull() ||
+        PrivacyActionGate::mayMutatePublicItem(
+            info.id(), info.filePath(), PrivacyActionKind::InternalEdit))
+    {
+        return true;
+    }
+
+    QMessageBox::warning(
+        this,
+        i18nc("@title:window", "Cannot Save Protected Item"),
+        i18nc("@info",
+              "The file \"%1\" is protected, or its privacy state could not "
+              "be verified. Unprotect the item before overwriting or removing "
+              "its public file.",
+              url.fileName()));
+
+    return false;
+}
+
 bool ImageWindow::save()
 {
+    if (!mayCommitPublicFile(d->currentUrl()))
+    {
+        return false;
+    }
+
     prepareImageToSave();
     startingSave(d->currentUrl());
 
