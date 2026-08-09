@@ -14,6 +14,10 @@
 
 #include "digikamapp_p.h"
 
+// Local includes
+
+#include "privacycategorysettingsdialog.h"
+
 namespace Digikam
 {
 
@@ -30,6 +34,12 @@ bool DigikamApp::setupICC()
 void DigikamApp::slotSetup()
 {
     setup();
+}
+
+void DigikamApp::slotPrivacyCategories()
+{
+    PrivacyCategorySettingsDialog dialog(this);
+    dialog.exec();
 }
 
 void DigikamApp::slotSetupChanged()

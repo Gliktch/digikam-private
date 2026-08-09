@@ -138,6 +138,15 @@ void DigikamApp::setupActions()
 {
     KActionCollection* const ac = actionCollection();
 
+    QAction* const privacyCategoriesAction = new QAction(
+        QIcon::fromTheme(QLatin1String("object-locked")),
+        i18nc("@action: setup", "Privacy Categories..."), this);
+    privacyCategoriesAction->setWhatsThis(
+        i18nc("@info: setup", "Create, unlock, and lock private-media categories."));
+    connect(privacyCategoriesAction, &QAction::triggered,
+            this, &DigikamApp::slotPrivacyCategories);
+    ac->addAction(QLatin1String("privacy_categories"), privacyCategoriesAction);
+
     d->solidCameraActionGroup   = new QActionGroup(this);
     connect(d->solidCameraActionGroup, SIGNAL(triggered(QAction*)),
             this, SLOT(slotOpenSolidCamera(QAction*)));

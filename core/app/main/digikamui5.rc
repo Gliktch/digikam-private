@@ -167,6 +167,7 @@
      <Action name="options_configure_toolbars" />
      <Action name="options_configure_notifications" />
      <Action name="database_migration" />
+     <Action name="privacy_categories" />
      <Action name="options_configure" />
   </Menu>
 
