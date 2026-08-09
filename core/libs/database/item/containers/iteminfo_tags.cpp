@@ -17,12 +17,33 @@
 
 #include "iteminfo_p.h"
 
+// Local includes
+
+#include "privacyruntime.h"
+
 namespace Digikam
 {
 
+namespace
+{
+
+bool privacyMayAccessManualTags(qlonglong imageId)
+{
+    const QSharedPointer<const PrivacyManualTagVisibilityProvider> provider =
+        PrivacyStartupRecovery::manualTagVisibilityProvider();
+
+    // The provider is installed during normal application database startup.
+    // Preserve the upstream behaviour for isolated database users and tests
+    // which do not initialize the privacy runtime.
+    return (!provider || provider->mayAccessManualTags(imageId));
+}
+
+} // namespace
+
 void ItemInfo::setTag(int tagID)
 {
-    if (!m_data || (tagID <= 0))
+    if (!m_data || (tagID <= 0) ||
+        !privacyMayAccessManualTags(m_data->id))
     {
         return;
     }
@@ -33,7 +54,7 @@ void ItemInfo::setTag(int tagID)
 
 void ItemInfo::removeTag(int tagID)
 {
-    if (!m_data)
+    if (!m_data || !privacyMayAccessManualTags(m_data->id))
     {
         return;
     }
@@ -45,7 +66,7 @@ void ItemInfo::removeTag(int tagID)
 
 void ItemInfo::removeAllTags()
 {
-    if (!m_data)
+    if (!m_data || !privacyMayAccessManualTags(m_data->id))
     {
         return;
     }
@@ -55,7 +76,7 @@ void ItemInfo::removeAllTags()
 
 void ItemInfo::addTagPaths(const QStringList& tagPaths)
 {
-    if (!m_data)
+    if (!m_data || !privacyMayAccessManualTags(m_data->id))
     {
         return;
     }
@@ -67,6 +88,11 @@ void ItemInfo::addTagPaths(const QStringList& tagPaths)
 QList<int> ItemInfo::tagIds() const
 {
     if (!m_data)
+    {
+        return QList<int>();
+    }
+
+    if (!privacyMayAccessManualTags(m_data->id))
     {
         return QList<int>();
     }

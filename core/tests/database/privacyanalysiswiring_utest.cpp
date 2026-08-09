@@ -52,6 +52,7 @@ private Q_SLOTS:
 
     void testBqmCannotBypassGate();
     void testAutomatedFacePipelinesRemainGated();
+    void testManualTagsCannotBypassVisibility();
 };
 
 void PrivacyAnalysisWiringTest::testBqmCannotBypassGate()
@@ -90,6 +91,25 @@ void PrivacyAnalysisWiringTest::testAutomatedFacePipelinesRemainGated()
     QVERIFY(occurrences(detect, QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 6);
     QVERIFY(occurrences(recognize, QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 4);
     QVERIFY(occurrences(retrain, QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 2);
+}
+
+void PrivacyAnalysisWiringTest::testManualTagsCannotBypassVisibility()
+{
+    const QString itemTags = source(QStringLiteral(
+        "core/libs/database/item/containers/iteminfo_tags.cpp"));
+
+    QVERIFY2(!itemTags.isEmpty(), "Unable to read ItemInfo tag source");
+    QVERIFY(itemTags.contains(QStringLiteral(
+        "PrivacyStartupRecovery::manualTagVisibilityProvider()")));
+    QVERIFY(occurrences(itemTags,
+                        QStringLiteral("privacyMayAccessManualTags(m_data->id)")) >= 5);
+
+    const int visibilityCheck = itemTags.indexOf(QStringLiteral(
+        "if (!privacyMayAccessManualTags(m_data->id))"));
+    const int cacheRead = itemTags.indexOf(QStringLiteral("RETURN_IF_CACHED(tagIds)"));
+
+    QVERIFY(visibilityCheck >= 0);
+    QVERIFY(cacheRead > visibilityCheck);
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)
