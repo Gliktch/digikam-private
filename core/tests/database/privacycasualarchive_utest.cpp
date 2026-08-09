@@ -10,6 +10,7 @@
 
 // Qt includes
 
+#include <QBuffer>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -30,6 +31,7 @@
 // Local includes
 
 #include "privacycasualarchive.h"
+#include "privacycasualoriginalreader.h"
 
 using namespace Digikam;
 
@@ -39,6 +41,7 @@ namespace
 const QString CategoryUuid  = QLatin1String("11111111-1111-4111-8111-111111111111");
 const QString ContainerUuid = QLatin1String("22222222-2222-4222-8222-222222222222");
 const QString ItemUuid      = QLatin1String("33333333-3333-4333-8333-333333333333");
+const QString RootUuid      = QLatin1String("44444444-4444-4444-8444-444444444444");
 
 bool writeBytes(const QString& path, const QByteArray& bytes)
 {
@@ -99,6 +102,88 @@ PrivacyCasualArchiveRequest makeRequest(
     request.members          = members;
 
     return request;
+}
+
+PrivacyRepositorySnapshot makeOriginalSnapshot(
+    const QString& rootPath,
+    const QString& publicRelativePath,
+    const PrivacyCasualArchiveMember& member,
+    qlonglong archiveSize,
+    const QByteArray& archiveHash,
+    const QByteArray& originalHash)
+{
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    PrivacyCategory category;
+    category.uuid = CategoryUuid;
+    category.name = QLatin1String("Synthetic");
+    category.backend = PrivacyBackend::Casual;
+    category.presentationMode = PrivacyPresentationMode::Generic;
+    category.unlockedThumbnailMode = PrivacyUnlockedThumbnailMode::FocusedClear;
+    category.tagVisibilityMode = PrivacyTagVisibilityMode::UnlockedOnly;
+    category.lifecycleState = PrivacyCategoryLifecycleState::Active;
+    category.currentCredentialGeneration = 1;
+    category.createdAt = now;
+
+    PrivacyStorageRoot root;
+    root.uuid = RootUuid;
+    root.kind = PrivacyStorageRootKind::AlbumRoot;
+    root.albumRootId = 1;
+    root.configuredPath = rootPath;
+    root.identityVersion = 1;
+    root.identityData = QByteArray("synthetic-root");
+    root.createdAt = now;
+
+    PrivacyItem item;
+    item.imageId = 42;
+    item.uuid = ItemUuid;
+    item.categoryUuid = CategoryUuid;
+    item.originalHash = QString::fromLatin1(originalHash.toHex());
+    item.originalSize = member.expectedSize;
+    item.expectedProxyHash = QString(64, QLatin1Char('a'));
+    item.expectedProxySize = 16;
+    item.generation = 3;
+
+    PrivacyContainer container;
+    container.uuid = ContainerUuid;
+    container.itemUuid = ItemUuid;
+    container.kind = PrivacyContainerKind::CasualArchive;
+    container.rootUuid = RootUuid;
+    container.objectRelativePath = publicRelativePath +
+                                   QLatin1String(".digikam-private.zip");
+    container.protectedSize = archiveSize;
+    container.protectedHashAlgorithm = QLatin1String("sha256");
+    container.protectedHash = QString::fromLatin1(archiveHash.toHex());
+    container.formatVersion = 1;
+    container.credentialGeneration = 1;
+    container.state = PrivacyContainerState::Verified;
+    container.createdAt = now;
+    container.updatedAt = now;
+
+    PrivacyAsset asset;
+    asset.itemUuid = ItemUuid;
+    asset.role = PrivacyAsset::PrimaryMediaRole;
+    asset.ordinal = 0;
+    asset.originalName = member.originalName;
+    asset.publicRootUuid = RootUuid;
+    asset.publicRelativePath = publicRelativePath;
+    asset.containerUuid = ContainerUuid;
+    asset.protectedRelativePath = member.protectedRelativePath;
+    asset.hashAlgorithm = QLatin1String("sha256");
+    asset.originalHash = item.originalHash;
+    asset.originalSize = member.expectedSize;
+    asset.proxyHashAlgorithm = QLatin1String("sha256");
+    asset.proxyHash = item.expectedProxyHash;
+    asset.proxySize = item.expectedProxySize;
+    asset.proxyPresentationVersion = item.presentationVersion;
+    asset.proxyGeneration = item.generation;
+
+    PrivacyRepositorySnapshot snapshot;
+    snapshot.categories << category;
+    snapshot.storageRoots << root;
+    snapshot.items << item;
+    snapshot.containers << container;
+    snapshot.assets << asset;
+    return snapshot;
 }
 
 bool readEncryptedMember(zip_t* archive, const QString& name,
@@ -247,6 +332,7 @@ private Q_SLOTS:
     void testPublicationConflictAndReplacement();
     void testRejectsUnsafeInputsAndCancellation();
     void testTamperedStageCannotPublishOrDiscard();
+    void testPreparedOriginalReader();
 };
 
 void PrivacyCasualArchiveTest::testCapabilitiesAndArchivePolicy()
@@ -338,6 +424,73 @@ void PrivacyCasualArchiveTest::testCapabilitiesAndArchivePolicy()
     QVERIFY(QFileInfo::exists(finalPath));
     QCOMPARE(fileHash(finalPath), stagedHash);
     QVERIFY(inspectArchive(finalPath, password, expected));
+}
+
+void PrivacyCasualArchiveTest::testPreparedOriginalReader()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QByteArray payload("verified-private-original\0bytes", 31);
+    const QByteArray originalHash = QCryptographicHash::hash(
+        payload, QCryptographicHash::Sha256);
+    const QString sourcePath = directory.filePath(QLatin1String("source.jpg"));
+    const QString publicRelativePath = QLatin1String("album/source.jpg");
+    QVERIFY(QDir().mkpath(directory.filePath(QLatin1String("album"))));
+    QVERIFY(writeBytes(sourcePath, payload));
+
+    PrivacyCasualArchiveMember member = makeMember(
+        sourcePath, QLatin1String("source.jpg"), PrivacyAsset::PrimaryMediaRole, 0);
+    member.expectedSize = payload.size();
+    member.expectedSha256 = originalHash;
+    const QString archivePath = directory.filePath(
+        publicRelativePath + QLatin1String(".digikam-private.zip"));
+    const PrivacyPassword password = PrivacyPassword::fromUnicode(
+        QLatin1String("reader-passphrase"));
+    PrivacyCasualArchiveEngine engine;
+    PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
+    auto stage = engine.stageArchive(makeRequest(archivePath, { member }),
+                                     password, {}, &error);
+    QVERIFY2(stage.isValid(), qPrintable(QString::number(static_cast<int>(error))));
+    const qlonglong archiveSize = stage.archiveSize();
+    const QByteArray archiveHash = stage.archiveSha256();
+    QVERIFY(engine.publishNew(&stage, &error));
+
+    const PrivacyRepositorySnapshot snapshot = makeOriginalSnapshot(
+        directory.path(), publicRelativePath, member,
+        archiveSize, archiveHash, originalHash);
+    const QString logicalPath = directory.filePath(publicRelativePath);
+    PrivacyCasualOriginalReader reader;
+    PrivacyCasualOriginalSource prepared;
+    QVERIFY(reader.prepare(snapshot, 42, logicalPath, &prepared));
+    QVERIFY(prepared.isValid());
+    QCOMPARE(prepared.itemUuid, ItemUuid);
+    QCOMPARE(prepared.itemGeneration, 3);
+    QCOMPARE(prepared.restore.archivePath, archivePath);
+
+    QByteArray restored;
+    QBuffer destination(&restored);
+    QVERIFY(destination.open(QIODevice::WriteOnly));
+    QVERIFY(reader.restore(prepared, password, &destination, &error));
+    QCOMPARE(restored, payload);
+
+    PrivacyCasualOriginalSource rejected;
+    QVERIFY(!reader.prepare(snapshot, 42,
+                            directory.filePath(QLatin1String("other.jpg")),
+                            &rejected));
+    PrivacyRepositorySnapshot busy = snapshot;
+    PrivacyTransaction active;
+    active.uuid = QLatin1String("55555555-5555-4555-8555-555555555555");
+    active.categoryUuid = CategoryUuid;
+    active.itemUuid = ItemUuid;
+    active.type = PrivacyTransactionType::ExternalCheckout;
+    active.state = PrivacyTransactionState::Created;
+    active.generation = 0;
+    active.payloadFormatVersion = 1;
+    active.createdAt = QDateTime::currentDateTimeUtc();
+    active.updatedAt = active.createdAt;
+    busy.transactions << active;
+    QVERIFY(!reader.prepare(busy, 42, logicalPath, &rejected));
 }
 
 void PrivacyCasualArchiveTest::testResumeVerifiedStageFromJournalFacts()
