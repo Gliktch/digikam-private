@@ -98,6 +98,15 @@ rm -fr ./usr/plugins/ktexteditor
 rm -fr ./usr/plugins/kf5/parts
 rm -fr ./usr/plugins/konsolepart.so
 
+# These optional plug-ins are built outside digiKam's source tree.  Do not
+# accidentally bundle binaries left by an older build against a different
+# digiKam ABI.  Rebuilding and restoring them is deferred until after v1.
+rm -f ./usr/plugins/digikam/bqm/Bqm_Gmic_Plugin.so
+rm -f ./usr/plugins/digikam/editor/Editor_GmicQt_Plugin.so
+rm -f ./usr/plugins/digikam/generic/Generic_GmicQt_Plugin.so
+rm -f ./usr/plugins/digikam/generic/Generic_ImageMosaicWall_Plugin.so
+rm -f ./usr/plugins/digikam/generic/Generic_PicFlowView_Plugin.so
+
 # See bug #476290
 
 rm -fr ./usr/plugins/imageformats/libqjp2.so
