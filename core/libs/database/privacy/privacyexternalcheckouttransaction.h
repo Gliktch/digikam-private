@@ -60,9 +60,23 @@ public:
     qlonglong imageId = -1;
     QString categoryUuid;
     QString transactionUuid;
+    PrivacyStorageRoot publicRoot;
+    PrivacyJournalRootExpectation publicRootExpectation;
+    QString storeUuid;
+    PrivacyStorageRoot storeRoot;
+    PrivacyJournalRootExpectation storeRootExpectation;
+    QString storePlaintextRoot;
+    QList<PrivacyExternalCheckoutAssetSource> sources;
+};
+
+class DIGIKAM_DATABASE_EXPORT PrivacyExternalCheckoutStoreAccess
+{
+public:
+
+    QString storeUuid;
     PrivacyStorageRoot root;
     PrivacyJournalRootExpectation rootExpectation;
-    QList<PrivacyExternalCheckoutAssetSource> sources;
+    QString plaintextRoot;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyExternalCheckoutAsset
@@ -146,12 +160,10 @@ public:
     PrivacyExternalCheckoutResult resumeAuthenticatedCreate(
         const PrivacyExternalCheckoutRequest& request);
     PrivacyExternalCheckoutResult authorizeLaunch(
-        const PrivacyStorageRoot& root,
-        const PrivacyJournalRootExpectation& rootExpectation,
+        const PrivacyExternalCheckoutStoreAccess& storeAccess,
         const QString& transactionUuid);
     PrivacyExternalCheckoutResult reconcile(
-        const PrivacyStorageRoot& root,
-        const PrivacyJournalRootExpectation& rootExpectation,
+        const PrivacyExternalCheckoutStoreAccess& storeAccess,
         const QString& transactionUuid);
     PrivacyExternalCheckoutResult recover(
         const PrivacyStorageRoot& root,

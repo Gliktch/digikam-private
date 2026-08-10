@@ -303,24 +303,63 @@ const PrivacyStorageRoot* rootForUuid(const PrivacyRepositorySnapshot& snapshot,
     return (it == snapshot.storageRoots.cend()) ? nullptr : &*it;
 }
 
+const PrivacyStore* checkoutStoreForCategory(
+    const PrivacyRepositorySnapshot& snapshot, const QString& categoryUuid)
+{
+    QString storeUuid;
+
+    for (const PrivacyStoreBinding& binding : snapshot.storeBindings)
+    {
+        if ((binding.categoryUuid != categoryUuid) ||
+            (binding.role != PrivacyStoreRole::CredentialAuthority))
+        {
+            continue;
+        }
+
+        if (!storeUuid.isEmpty())
+        {
+            return nullptr;
+        }
+
+        storeUuid = binding.storeUuid;
+    }
+
+    const auto it = std::find_if(
+        snapshot.stores.cbegin(), snapshot.stores.cend(),
+        [&storeUuid](const PrivacyStore& store)
+        {
+            return (store.uuid == storeUuid);
+        });
+
+    return (storeUuid.isEmpty() || (it == snapshot.stores.cend()))
+         ? nullptr : &*it;
+}
+
 bool rootExpectation(const PrivacyStorageRoot& root,
                      PrivacyJournalRootExpectation* const expectation)
 {
-    if (!expectation || !root.isValid() ||
-        (root.kind != PrivacyStorageRootKind::AlbumRoot))
+    if (!expectation || !root.isValid())
     {
         return false;
     }
 
-    const CollectionLocation location = CollectionManager::instance()
-                                            ->locationForAlbumRootId(
-                                                root.albumRootId);
-    const QString currentPath = QDir::cleanPath(location.albumRootPath());
+    QString currentPath = root.configuredPath;
 
-    if (location.isNull() || !location.isAvailable() ||
-        (currentPath != root.configuredPath) ||
-        !PrivacyRootIdentityCodec::matchesAlbumRootV1(
-            root.identityData, root.albumRootId, location.identifier))
+    if (root.kind == PrivacyStorageRootKind::AlbumRoot)
+    {
+        const CollectionLocation location = CollectionManager::instance()
+            ->locationForAlbumRootId(root.albumRootId);
+        currentPath = QDir::cleanPath(location.albumRootPath());
+
+        if (location.isNull() || !location.isAvailable() ||
+            (currentPath != root.configuredPath) ||
+            !PrivacyRootIdentityCodec::matchesAlbumRootV1(
+                root.identityData, root.albumRootId, location.identifier))
+        {
+            return false;
+        }
+    }
+    else if (root.kind != PrivacyStorageRootKind::ManagedStoreRoot)
     {
         return false;
     }
@@ -1587,7 +1626,14 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
     const PrivacyStorageRoot* const root = container
         ? rootForUuid(snapshot, container->rootUuid)
         : nullptr;
-    PrivacyJournalRootExpectation expectation;
+    const PrivacyStore* const checkoutStore = category
+        ? checkoutStoreForCategory(snapshot, category->uuid)
+        : nullptr;
+    const PrivacyStorageRoot* const checkoutStoreRoot = checkoutStore
+        ? rootForUuid(snapshot, checkoutStore->rootUuid)
+        : nullptr;
+    PrivacyJournalRootExpectation publicRootExpectation;
+    PrivacyJournalRootExpectation storeRootExpectation;
 
     if (!category || !container || assets.isEmpty() ||
         (category->backend != PrivacyBackend::Casual) ||
@@ -1595,9 +1641,15 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
          PrivacyCategoryLifecycleState::Active) ||
         (container->kind != PrivacyContainerKind::CasualArchive) ||
         (container->state != PrivacyContainerState::Verified) || !root ||
+        !checkoutStore || !checkoutStoreRoot ||
+        (checkoutStore->lifecycleState != PrivacyStoreLifecycleState::Active) ||
+        (checkoutStoreRoot->kind != PrivacyStorageRootKind::ManagedStoreRoot) ||
         (runtime->rootState(root->uuid) !=
          PrivacyRootRuntimeState::VerifiedAvailable) ||
-        !rootExpectation(*root, &expectation))
+        (runtime->rootState(checkoutStoreRoot->uuid) !=
+         PrivacyRootRuntimeState::VerifiedAvailable) ||
+        !rootExpectation(*root, &publicRootExpectation) ||
+        !rootExpectation(*checkoutStoreRoot, &storeRootExpectation))
     {
         return checkoutFailure(
             PrivacyExternalCheckoutStatus::ItemUnavailable,
@@ -1645,25 +1697,33 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
     const qlonglong archiveSize = container->protectedSize;
     const QByteArray archiveHash = QByteArray::fromHex(
         container->protectedHash.toLatin1());
-    const PrivacyStorageRoot checkoutRoot = *root;
+    const PrivacyStorageRoot publicRoot = *root;
+    const QString checkoutStoreUuid = checkoutStore->uuid;
+    const PrivacyStorageRoot managedStoreRoot = *checkoutStoreRoot;
     const QList<PrivacyAsset> checkoutAssets = assets;
     const QString resumeTransactionUuid = activeTransaction
                                         ? activeTransaction->uuid : QString();
     const PrivacyCategoryOperationStatus operationStatus =
-        sessions->runWithUnlockedSecret(
+        sessions->runWithUnlockedStore(
             categoryUuid,
             [this, &result, imageId, itemUuid, categoryUuid, containerUuid,
-             archivePath, archiveSize, archiveHash, checkoutRoot, expectation,
+             archivePath, archiveSize, archiveHash, publicRoot,
+             publicRootExpectation, checkoutStoreUuid, managedStoreRoot,
+             storeRootExpectation,
              checkoutAssets, resumeTransactionUuid](
-                const PrivacyPassword& password)
+                const PrivacyPassword& password, const QString& plaintextRoot)
             {
                 PrivacyExternalCheckoutRequest request;
                 request.imageId = imageId;
                 request.categoryUuid = categoryUuid;
                 request.transactionUuid = resumeTransactionUuid.isEmpty()
                                         ? newUuid() : resumeTransactionUuid;
-                request.root = checkoutRoot;
-                request.rootExpectation = expectation;
+                request.publicRoot = publicRoot;
+                request.publicRootExpectation = publicRootExpectation;
+                request.storeUuid = checkoutStoreUuid;
+                request.storeRoot = managedStoreRoot;
+                request.storeRootExpectation = storeRootExpectation;
+                request.storePlaintextRoot = plaintextRoot;
 
                 for (const PrivacyAsset& asset : checkoutAssets)
                 {
@@ -1771,13 +1831,18 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
                 }
 
                 const QString transactionUuid = result.transactionUuid;
+                PrivacyExternalCheckoutStoreAccess storeAccess;
+                storeAccess.storeUuid = checkoutStoreUuid;
+                storeAccess.root = managedStoreRoot;
+                storeAccess.rootExpectation = storeRootExpectation;
+                storeAccess.plaintextRoot = plaintextRoot;
                 result = d->checkoutEngine.authorizeLaunch(
-                    checkoutRoot, expectation, transactionUuid);
+                    storeAccess, transactionUuid);
 
                 if (!result.succeeded())
                 {
                     (void)d->checkoutEngine.reconcile(
-                        checkoutRoot, expectation, transactionUuid);
+                        storeAccess, transactionUuid);
                 }
             });
 
@@ -1808,8 +1873,9 @@ PrivacyThreadImageIOStillItemTransactionOwner::finishExternalCheckout(
     }
 
     QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+    QSharedPointer<PrivacyCategorySessionOwner> sessions;
 
-    if (!currentActionComposition(&d->runtime, &runtime))
+    if (!currentActionComposition(&d->runtime, &runtime, &sessions))
     {
         return checkoutFailure(
             PrivacyExternalCheckoutStatus::ItemUnavailable,
@@ -1867,11 +1933,15 @@ PrivacyThreadImageIOStillItemTransactionOwner::finishExternalCheckout(
     const PrivacyStorageRoot* const root = journal
         ? rootForUuid(snapshot, journal->rootUuid)
         : nullptr;
+    const PrivacyStore* const store = transaction
+        ? checkoutStoreForCategory(snapshot, transaction->categoryUuid)
+        : nullptr;
     PrivacyJournalRootExpectation expectation;
 
     if (!transaction || !journal ||
         (transaction->type != PrivacyTransactionType::ExternalCheckout) ||
-        !root ||
+        !store || !root || (store->rootUuid != root->uuid) ||
+        (root->kind != PrivacyStorageRootKind::ManagedStoreRoot) ||
         (runtime->rootState(root->uuid) !=
          PrivacyRootRuntimeState::VerifiedAvailable) ||
         !rootExpectation(*root, &expectation))
@@ -1883,8 +1953,41 @@ PrivacyThreadImageIOStillItemTransactionOwner::finishExternalCheckout(
             transaction ? transaction->itemUuid : QString());
     }
 
-    QMutexLocker locker(&d->transactionMutex);
-    return d->checkoutEngine.reconcile(*root, expectation, transactionUuid);
+    PrivacyExternalCheckoutResult result = checkoutFailure(
+        PrivacyExternalCheckoutStatus::AuthenticationRequired,
+        QStringLiteral("Unlock the category to finish external access"),
+        transactionUuid, transaction->itemUuid);
+    const QString categoryUuid = transaction->categoryUuid;
+    const QString storeUuid = store->uuid;
+    const PrivacyStorageRoot storeRoot = *root;
+    const PrivacyCategoryOperationStatus operation =
+        sessions->runWithUnlockedStore(
+            categoryUuid,
+            [this, &result, storeUuid, storeRoot, expectation,
+             transactionUuid](const PrivacyPassword&, const QString& plaintextRoot)
+            {
+                PrivacyExternalCheckoutStoreAccess access;
+                access.storeUuid = storeUuid;
+                access.root = storeRoot;
+                access.rootExpectation = expectation;
+                access.plaintextRoot = plaintextRoot;
+                QMutexLocker locker(&d->transactionMutex);
+                result = d->checkoutEngine.reconcile(access, transactionUuid);
+            });
+
+    if (operation == PrivacyCategoryOperationStatus::CategoryLocked)
+    {
+        result.status = PrivacyExternalCheckoutStatus::AuthenticationRequired;
+    }
+    else if (operation != PrivacyCategoryOperationStatus::Completed)
+    {
+        result = checkoutFailure(
+            PrivacyExternalCheckoutStatus::ItemUnavailable,
+            QStringLiteral("Another category operation is already active"),
+            transactionUuid, transaction->itemUuid);
+    }
+
+    return result;
 }
 
 PrivacyStillItemTransactionResult
@@ -2486,6 +2589,7 @@ bool PrivacyThreadImageIOStillItemTransactionOwner::prepareForShutdown() const
 
         if (!result.succeeded() &&
             (result.status != PrivacyExternalCheckoutStatus::ChangesPending) &&
+            (result.status != PrivacyExternalCheckoutStatus::AuthenticationRequired) &&
             (result.status != PrivacyExternalCheckoutStatus::RootUnavailable))
         {
             return false;
@@ -2702,7 +2806,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::recoverRoot(
 {
     if (transaction.type == PrivacyTransactionType::ExternalCheckout)
     {
-        if ((root.kind != PrivacyStorageRootKind::AlbumRoot) ||
+        if ((root.kind != PrivacyStorageRootKind::ManagedStoreRoot) ||
             (journals.size() != 1) ||
             (journals.constFirst().transactionUuid != transaction.uuid) ||
             (journals.constFirst().rootUuid != root.uuid))

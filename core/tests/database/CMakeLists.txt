@@ -275,6 +275,22 @@ ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyderivativestore_utest.cpp
 
 #------------------------------------------------------------------------
 
+ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacycheckoutstore_utest.cpp
+
+              NAME_PREFIX
+
+              "digikam-"
+
+              LINK_LIBRARIES
+
+              digikamcore
+              digikamdatabase
+
+              ${COMMON_TEST_LINK}
+)
+
+#------------------------------------------------------------------------
+
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyvideoproxygenerator_utest.cpp
 
               NAME_PREFIX
