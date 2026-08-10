@@ -298,11 +298,15 @@ void SearchesJob::runSearches()
 
             if (ok)
             {
-                lister.listSearch(&receiver, info.query, 0, referenceImageId);
+                lister.listSearch(
+                    &receiver, info.query, 0, referenceImageId,
+                    info.type == DatabaseSearch::DuplicatesSearch);
             }
             else
             {
-                lister.listSearch(&receiver, info.query, 0, -1);
+                lister.listSearch(
+                    &receiver, info.query, 0, -1,
+                    info.type == DatabaseSearch::DuplicatesSearch);
             }
         }
 

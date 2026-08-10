@@ -52,6 +52,7 @@ private Q_SLOTS:
 
     void testBqmCannotBypassGate();
     void testAutomatedFacePipelinesRemainGated();
+    void testStoredDuplicateResultsRemainGated();
     void testManualTagsCannotBypassVisibility();
     void testTagQueriesAndPeopleListingsConsumeVisibility();
     void testCompatibilityActionsUseTransactionOwner();
@@ -99,6 +100,45 @@ void PrivacyAnalysisWiringTest::testAutomatedFacePipelinesRemainGated()
     QVERIFY(occurrences(detect, QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 6);
     QVERIFY(occurrences(recognize, QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 4);
     QVERIFY(occurrences(retrain, QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 2);
+}
+
+void PrivacyAnalysisWiringTest::testStoredDuplicateResultsRemainGated()
+{
+    const QString haar = source(QStringLiteral(
+        "core/libs/database/haar/haariface.cpp"));
+    const QString haarPrivate = source(QStringLiteral(
+        "core/libs/database/haar/haariface_p.cpp"));
+    const QString searchLister = source(QStringLiteral(
+        "core/libs/database/item/lister/itemlister_salbum.cpp"));
+    const QString searchJob = source(QStringLiteral(
+        "core/libs/database/dbjobs/dbjob.cpp"));
+    const QString dbInfo = source(QStringLiteral(
+        "core/libs/database/utils/ifaces/dbinfoiface.cpp"));
+    const QString duplicateItem = source(QStringLiteral(
+        "core/utilities/fuzzysearch/findduplicatesalbumitem.cpp"));
+
+    QVERIFY2(!haar.isEmpty(), "Unable to read Haar interface source");
+    QVERIFY2(!haarPrivate.isEmpty(), "Unable to read Haar private source");
+    QVERIFY2(!searchLister.isEmpty(), "Unable to read search lister source");
+    QVERIFY2(!searchJob.isEmpty(), "Unable to read search job source");
+    QVERIFY2(!dbInfo.isEmpty(), "Unable to read DBInfoIface source");
+    QVERIFY2(!duplicateItem.isEmpty(), "Unable to read duplicate item source");
+    QVERIFY(occurrences(haar,
+                        QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 5);
+    QVERIFY(haar.contains(QStringLiteral(
+        "PrivacyAnalysisGate::filter(it->second)")));
+    QVERIFY(haarPrivate.contains(QStringLiteral(
+        "PrivacyAnalysisGate::mayAnalyze(imageid)")));
+    QVERIFY(searchLister.contains(QStringLiteral(
+        "analysisResultsOnly &&")));
+    QVERIFY(occurrences(searchLister,
+                        QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 2);
+    QVERIFY(occurrences(searchJob,
+                        QStringLiteral("DatabaseSearch::DuplicatesSearch")) >= 2);
+    QVERIFY(dbInfo.contains(QStringLiteral(
+        "!PrivacyAnalysisGate::mayAnalyze(imageId)")));
+    QVERIFY(occurrences(duplicateItem,
+                        QStringLiteral("PrivacyAnalysisGate::mayAnalyze")) >= 4);
 }
 
 void PrivacyAnalysisWiringTest::testManualTagsCannotBypassVisibility()

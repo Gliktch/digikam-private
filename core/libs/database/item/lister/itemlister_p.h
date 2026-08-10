@@ -53,6 +53,7 @@
 #include "dbjobinfo.h"
 #include "similaritydbaccess.h"
 #include "similaritydb.h"
+#include "privacyanalysisgate.h"
 
 namespace Digikam
 {

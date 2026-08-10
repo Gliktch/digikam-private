@@ -196,6 +196,14 @@ QPair<double, QMap<qlonglong, double> > HaarIface::bestMatchesForImageWithThresh
                                                                                     searchResultRestriction,
                                                                                     SketchType type)
 {
+    const ItemInfo cataloguedInfo = ItemInfo::fromLocalFile(imagePath);
+
+    if (!cataloguedInfo.isNull() &&
+        !PrivacyAnalysisGate::mayAnalyze(cataloguedInfo.id()))
+    {
+        return {};
+    }
+
     DImg image(imagePath);
 
     if (image.isNull())
@@ -233,6 +241,11 @@ QPair<double, QMap<qlonglong, double> > HaarIface::bestMatchesForImageWithThresh
                                                                                     searchResultRestriction,
                                                                                     SketchType type)
 {
+    if (!PrivacyAnalysisGate::mayAnalyze(imageId))
+    {
+        return {};
+    }
+
     Haar::SignatureData sig;
 
     if (d->hasSignatureCache())
@@ -406,6 +419,12 @@ QPair<double, QMap<qlonglong, double> > HaarIface::bestMatchesWithThreshold(qlon
         score = it.value();
         id    = it.key();
 
+        if (!PrivacyAnalysisGate::mayAnalyze(id) ||
+            ((imageid > 0) && !PrivacyAnalysisGate::mayAnalyze(imageid)))
+        {
+            continue;
+        }
+
         // If the score of the picture is at most the required (maximum) score and
 
         if (score <= requiredScore)
@@ -524,7 +543,8 @@ QMap<qlonglong, double> HaarIface::searchDatabase(const Haar::SignatureData* con
 
         const qlonglong& imageId = it.key();
 
-        if (fulfillsRestrictions(imageId, d->albumCache()->value(imageId), originalImageId,
+        if (PrivacyAnalysisGate::mayAnalyze(imageId) &&
+            fulfillsRestrictions(imageId, d->albumCache()->value(imageId), originalImageId,
                                  originalAlbumId, targetAlbums, searchResultRestriction))
         {
             const Haar::SignatureData& data = it.value();
@@ -632,10 +652,19 @@ QMap<QString, QString> HaarIface::writeSAlbumQueries(const DuplicatesResultsMap&
 
     for (auto it = searchResults.constBegin() ; it != searchResults.constEnd() ; ++it)
     {
+        const PrivacyAnalysisSelectionResult filtered =
+            PrivacyAnalysisGate::filter(it->second);
+
+        if (!filtered.allowedImageIds.contains(it.key()) ||
+            (filtered.allowedImageIds.size() < 2))
+        {
+            continue;
+        }
+
         SearchXmlWriter writer;
         writer.writeGroup();
         writer.writeField(QLatin1String("imageid"), SearchXml::OneOf);
-        writer.writeValue(it->second);
+        writer.writeValue(filtered.allowedImageIds);
         writer.finishField();
 
         // Add the average similarity as field

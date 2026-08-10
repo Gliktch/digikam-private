@@ -18,6 +18,10 @@
 
 #include "haariface_p.h"
 
+// Local includes
+
+#include "privacyanalysisgate.h"
+
 namespace Digikam
 {
 
@@ -144,7 +148,8 @@ void HaarIface::Private::rebuildSignatureCache(const QSet<qlonglong>& imageIds)
     {
         imageid = query.value(0).toLongLong();
 
-        if (itemAlbumHash.contains(imageid))
+        if (itemAlbumHash.contains(imageid) &&
+            PrivacyAnalysisGate::mayAnalyze(imageid))
         {
             // Pair storage of <albumroootid, albumid>
 

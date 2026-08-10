@@ -31,6 +31,7 @@
 #include "itemsortcollator.h"
 #include "dio.h"
 #include "actionthreadbase.h"
+#include "privacyanalysisgate.h"
 
 namespace Digikam
 {
@@ -78,6 +79,13 @@ FindDuplicatesAlbumItem::FindDuplicatesAlbumItem(QTreeWidget* const parent, SAlb
     if (d->album)
     {
         qlonglong refImage = d->album->title().toLongLong();
+
+        if (!PrivacyAnalysisGate::mayAnalyze(refImage))
+        {
+            setHidden(true);
+            return;
+        }
+
         d->refImgInfo      = ItemInfo(refImage);
         setText(Column::REFERENCE_IMAGE, d->refImgInfo.name());
         setText(Column::REFERENCE_DATE,  d->refImgInfo.dateTime().toString(Qt::ISODate));
@@ -133,7 +141,8 @@ QList<ItemInfo> FindDuplicatesAlbumItem::duplicatedItems()
 
     for (const qlonglong& imageId : std::as_const(list))
     {
-        if (imageId == refImage)
+        if ((imageId == refImage) ||
+            !PrivacyAnalysisGate::mayAnalyze(imageId))
         {
             continue;
         }
@@ -211,7 +220,9 @@ QUrl FindDuplicatesAlbumItem::refUrl() const
 {
     QMutexLocker locker(&d->mutex);
 
-    return d->refImgInfo.fileUrl();
+    return PrivacyAnalysisGate::mayAnalyze(d->refImgInfo.id())
+         ? d->refImgInfo.fileUrl()
+         : QUrl();
 }
 
 bool FindDuplicatesAlbumItem::operator<(const QTreeWidgetItem& other) const
@@ -250,6 +261,14 @@ void FindDuplicatesAlbumItem::calculateInfosMultithreaded(const QList<qlonglong>
         }
 
         qlonglong refImage = d->album->title().toLongLong();
+
+        if (!PrivacyAnalysisGate::mayAnalyze(refImage))
+        {
+            d->itemCount = 0;
+            Q_EMIT signalSetItemHidden(true);
+            return;
+        }
+
         SearchXmlReader reader(d->album->query());
         reader.readToFirstField();
 
@@ -272,7 +291,8 @@ void FindDuplicatesAlbumItem::calculateInfosMultithreaded(const QList<qlonglong>
 
             // If image is not deleted in this moment and was also not removed before.
 
-            if (!deletedImages.contains(imageId) && !info.isRemoved())
+            if (!deletedImages.contains(imageId) && !info.isRemoved() &&
+                PrivacyAnalysisGate::mayAnalyze(imageId))
             {
                 filteredList << imageId;
 

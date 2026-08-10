@@ -64,6 +64,7 @@
 #include "setup.h"
 #include "applicationsettings.h"
 #include "privacyactionpolicy.h"
+#include "privacyanalysisgate.h"
 #include "privacyitemaccessbroker_p.h"
 
 #ifdef HAVE_GEOLOCATION
@@ -188,6 +189,11 @@ public:
 
             for (int imageId : std::as_const(list))
             {
+                if (!PrivacyAnalysisGate::mayAnalyze(imageId))
+                {
+                    continue;
+                }
+
                 ItemInfo imageInfo(imageId);
 
                 if (imageInfo.isVisible())

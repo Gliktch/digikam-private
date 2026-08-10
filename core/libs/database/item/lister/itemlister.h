@@ -138,11 +138,14 @@ public:
      * @param xml SearchXml describing the query
      * @param limit the limit the count of the result set. If limit = 0, then no limit is set.
      * @param referenceImageId the id of a reference image in the search query.
+     * @param analysisResultsOnly exclude every item not currently admitted by
+     *        the process-wide privacy analysis gate.
      */
     void listSearch(ItemListerReceiver* const receiver,
                     const QString& xml,
                     int limit = 0,
-                    qlonglong referenceImageId = -1);
+                    qlonglong referenceImageId = -1,
+                    bool analysisResultsOnly = false);
 
     /**
      * Execute the search specified by search XML describing a Haar search

@@ -23,7 +23,8 @@ namespace Digikam
 void ItemLister::listSearch(ItemListerReceiver* const receiver,
                             const QString& xml,
                             int limit,
-                            qlonglong referenceImageId)
+                            qlonglong referenceImageId,
+                            bool analysisResultsOnly)
 {
     if (xml.isEmpty())
     {
@@ -144,6 +145,12 @@ void ItemLister::listSearch(ItemListerReceiver* const receiver,
         }
 
         if (d->listOnlyAvailableImages && !albumRoots.contains(record.albumRootID))
+        {
+            continue;
+        }
+
+        if (analysisResultsOnly &&
+            !PrivacyAnalysisGate::mayAnalyze(record.imageID))
         {
             continue;
         }
@@ -326,6 +333,11 @@ void ItemLister::listFromHaarSearch(ItemListerReceiver* const receiver,
         {
             similarity = it.value();
             imageId    = it.key();
+
+            if (!PrivacyAnalysisGate::mayAnalyze(imageId))
+            {
+                continue;
+            }
 
             query.bindValue(0, imageId);
             executionSuccess = access.backend()->exec(query);

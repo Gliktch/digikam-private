@@ -45,6 +45,7 @@ private Q_SLOTS:
     void testPreferFolderWhole();
     void testReferenceFolderNotSelected();
     void testReferenceFolderPartlySelected();
+    void testProtectedStoredDuplicateResultIsDropped();
 
 private:
 

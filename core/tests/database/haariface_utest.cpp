@@ -41,11 +41,36 @@
 #include "facedbaccess.h"
 #include "similaritydbaccess.h"
 #include "similaritydb.h"
+#include "coredb.h"
 #include "coredbaccess.h"
 #include "thumbsdbaccess.h"
 #include "scancontroller.h"
+#include "privacyanalysisgate.h"
 
 using namespace Digikam;
+
+namespace
+{
+
+class TestAnalysisProvider final : public PrivacyAnalysisGateProvider
+{
+public:
+
+    PrivacyAnalysisDisposition analysisDisposition(qlonglong imageId) const override
+    {
+        return excluded.contains(imageId)
+             ? PrivacyAnalysisDisposition::ProtectedExcluded
+             : PrivacyAnalysisDisposition::Allowed;
+    }
+
+public:
+
+    QSet<qlonglong> excluded;
+};
+
+QSharedPointer<TestAnalysisProvider> analysisProvider;
+
+} // namespace
 
 typedef QString ImagePath;
 
@@ -144,6 +169,9 @@ HaarIfaceTest::HaarIfaceTest(QObject* const parent)
 
 void HaarIfaceTest::initTestCase()
 {
+    analysisProvider.reset(new TestAnalysisProvider);
+    PrivacyAnalysisGate::setProvider(analysisProvider);
+
     auto dir        = QDir(filesPath);
     startSqlite(dir);
 
@@ -172,6 +200,8 @@ void HaarIfaceTest::initTestCase()
 void HaarIfaceTest::cleanupTestCase()
 {
     stopSql();
+    PrivacyAnalysisGate::resetProvider();
+    analysisProvider.clear();
 }
 
 void HaarIfaceTest::startSqlite(const QDir& dbDir)
@@ -640,6 +670,45 @@ void HaarIfaceTest::testReferenceFolderPartlySelected()
         QCOMPARE(PATHFROMFILEINFO(duplicates.at(0)),
                  QStringLiteral("Collection/potentialDuplicates/4.png"));
     }
+}
+
+void HaarIfaceTest::testProtectedStoredDuplicateResultIsDropped()
+{
+    const QList<qlonglong> itemIds = CoreDbAccess().db()->getAllItems();
+    QVERIFY(itemIds.size() >= 2);
+
+    const qlonglong referenceId = itemIds.at(0);
+    const qlonglong candidateId = itemIds.at(1);
+    HaarIface::DuplicatesResultsMap results;
+    results.insert(referenceId,
+                   qMakePair(0.95, QList<qlonglong>({ referenceId,
+                                                     candidateId })));
+
+    const auto duplicateSearchCount = []()
+    {
+        int count = 0;
+
+        for (const SearchInfo& info : CoreDbAccess().db()->scanSearches())
+        {
+            count += (info.type == DatabaseSearch::DuplicatesSearch) ? 1 : 0;
+        }
+
+        return count;
+    };
+
+    analysisProvider->excluded = { candidateId };
+    HaarIface::rebuildDuplicatesAlbums(results, false);
+    QCOMPARE(duplicateSearchCount(), 0);
+
+    analysisProvider->excluded.clear();
+    HaarIface::rebuildDuplicatesAlbums(results, false);
+    QCOMPARE(duplicateSearchCount(), 1);
+
+    analysisProvider->excluded = { referenceId };
+    HaarIface::rebuildDuplicatesAlbums(results, false);
+    QCOMPARE(duplicateSearchCount(), 0);
+
+    analysisProvider->excluded.clear();
 }
 
 HaarIfaceTest::~HaarIfaceTest()
