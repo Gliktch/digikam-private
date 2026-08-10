@@ -211,6 +211,9 @@ else()
     message(STATUS "Translations will be compiled.................. NO")
 endif()
 
+install(FILES docs/PRIVATE-RECOVERY.md
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/digikam-private)
+
 if(BUILD_TESTING)
     message(STATUS "Tests code will be compiled.................... YES")
 else()

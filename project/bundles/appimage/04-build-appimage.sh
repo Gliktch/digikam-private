@@ -321,6 +321,7 @@ cp $(ldconfig -p | grep /${LIBSUFFIX}/libfreetype.so.6 | cut -d ">" -f 2 | xargs
 echo -e "---------- Copy target binaries\n"
 
 cp /usr/bin/digikam                 ./usr/bin
+cp /usr/bin/digikam-private-guard   ./usr/bin
 cp /usr/bin/showfoto                ./usr/bin
 cp /usr/bin/ffmpeg                  ./usr/bin
 cp /usr/bin/ffprobe                 ./usr/bin
@@ -330,6 +331,9 @@ cp /usr/bin/gocryptfs-xray          ./usr/bin
 mkdir -p ./usr/share/licenses/digikam-private
 cp /usr/share/licenses/digikam-private/gocryptfs-*       ./usr/share/licenses/digikam-private
 cp /usr/share/licenses/digikam-private/libzip-LICENSE    ./usr/share/licenses/digikam-private
+
+mkdir -p ./usr/share/doc/digikam-private
+cp /usr/share/doc/digikam-private/PRIVATE-RECOVERY.md    ./usr/share/doc/digikam-private
 
 if [[ $DK_QTVERSION == 5 ]] ; then
 
@@ -709,7 +713,10 @@ fi
 
 chmod a+x ./$APPIMGBIN
 
-ARCH=x86_64 ./$APPIMGBIN --comp xz $APP_IMG_DIR/ $ORIG_WD/bundle/$APPIMAGE
+appstreamcli validate --no-net \
+    $APP_IMG_DIR/usr/share/metainfo/org.kde.digikam.appdata.xml
+ARCH=x86_64 ./$APPIMGBIN --no-appstream --comp xz \
+    $APP_IMG_DIR/ $ORIG_WD/bundle/$APPIMAGE
 chmod a+rwx $ORIG_WD/bundle/$APPIMAGE
 
 #################################################################################################
@@ -724,7 +731,8 @@ sha256sum "$ORIG_WD/bundle/$APPIMAGE" | { read first rest ; echo $first ; }  >> 
 
 # Checksums to post on Phabricator at release time.
 
-sha256sum "$ORIG_WD/bundle/$APPIMAGE" > $ORIG_WD/bundle/sha256_release.sum
+(cd "$ORIG_WD/bundle" && sha256sum "$APPIMAGE") > \
+    $ORIG_WD/bundle/sha256_release.sum
 
 if [[ $DK_SIGN = 1 ]] ; then
 
