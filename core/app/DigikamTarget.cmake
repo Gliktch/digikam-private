@@ -78,6 +78,7 @@ if(ENABLE_DBUS)
 
     target_link_libraries(digikam
                           PUBLIC
+                          Qt${QT_VERSION_MAJOR}::Concurrent
                           Qt${QT_VERSION_MAJOR}::DBus
     )
 

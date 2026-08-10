@@ -44,6 +44,12 @@ enum class PrivacyExternalCheckoutStatus
     RecoveryRequired      = 11
 };
 
+enum class PrivacyExternalCheckoutDecision
+{
+    PreserveForLater = 1,
+    ConfirmedDiscard = 2
+};
+
 class DIGIKAM_DATABASE_EXPORT PrivacyExternalCheckoutAssetSource
 {
 public:
@@ -155,6 +161,10 @@ public:
         PrivacyExternalCheckoutPersistence& persistence);
     ~PrivacyExternalCheckoutTransactionEngine();
 
+    /// True when an active checkout still owns, or may own, a plaintext path
+    /// in the mounted category store. Invalid active payloads fail closed.
+    static bool holdsPlaintextLease(const PrivacyTransaction& transaction);
+
     PrivacyExternalCheckoutResult create(
         const PrivacyExternalCheckoutRequest& request);
     PrivacyExternalCheckoutResult resumeAuthenticatedCreate(
@@ -165,6 +175,10 @@ public:
     PrivacyExternalCheckoutResult reconcile(
         const PrivacyExternalCheckoutStoreAccess& storeAccess,
         const QString& transactionUuid);
+    PrivacyExternalCheckoutResult resolveChanges(
+        const PrivacyExternalCheckoutStoreAccess& storeAccess,
+        const QString& transactionUuid,
+        PrivacyExternalCheckoutDecision decision);
     PrivacyExternalCheckoutResult recover(
         const PrivacyStorageRoot& root,
         const PrivacyJournalRootExpectation& rootExpectation,

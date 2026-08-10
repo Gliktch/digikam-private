@@ -1900,6 +1900,24 @@ bool PrivacyRuntimeCoordinator::prepareForShutdown() const
     return !recovery || recovery->prepareForShutdown();
 }
 
+bool PrivacyRuntimeCoordinator::lockForDesktopTransition() const
+{
+    QSharedPointer<const PrivacyTransactionRecovery> recovery;
+
+    {
+        QReadLocker locker(&d->lock);
+
+        if (!d->initialized)
+        {
+            return true;
+        }
+
+        recovery = d->recovery;
+    }
+
+    return !recovery || recovery->lockForDesktopTransition();
+}
+
 PrivacyStartupReport PrivacyRuntimeCoordinator::report() const
 {
     QReadLocker locker(&d->lock);

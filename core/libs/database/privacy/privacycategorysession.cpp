@@ -28,6 +28,7 @@
 // Local includes
 
 #include "privacyrepository.h"
+#include "privacyexternalcheckouttransaction.h"
 
 namespace Digikam
 {
@@ -1630,6 +1631,30 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::lockCategory(
         QMutexLocker locker(&d->lock);
         d->finishOperation(categoryUuid, operationToken);
     };
+
+    // The Lock operation barrier is authoritative for this category: no new
+    // checkout can begin until finishOperation(). Re-read durable state now so
+    // manual lock, Lock All, and desktop transitions cannot unmount a store
+    // beneath an external application.
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->repository.loadSnapshot(&snapshot) ||
+        std::any_of(snapshot.transactions.cbegin(),
+                    snapshot.transactions.cend(),
+                    [&categoryUuid](const PrivacyTransaction& transaction)
+                    {
+                        return (transaction.categoryUuid == categoryUuid) &&
+                               (PrivacyExternalCheckoutTransactionEngine::
+                                    holdsPlaintextLease(transaction) ||
+                                (transaction.isActive() &&
+                                 (transaction.type ==
+                                  PrivacyTransactionType::CompatibilityUnlock)));
+                    }))
+    {
+        finishOperation();
+        result.status = PrivacyCategorySessionStatus::TransactionBlocked;
+        return result;
+    }
 
     if (!d->runtime.setCategoryUnlocked(categoryUuid, false))
     {

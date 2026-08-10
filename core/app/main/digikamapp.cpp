@@ -532,8 +532,10 @@ bool DigikamApp::queryClose()
             QMessageBox::warning(
                 this, i18nc("@title:window", "Private Media Still in Use"),
                 i18n("digiKam cannot close while private media is still being "
-                     "prepared, copied, or safely relocked. Finish or cancel "
-                     "the active private operation, then close digiKam again."));
+                     "prepared, copied, or safely relocked. Return to any "
+                     "external application, then choose Finish External Access, "
+                     "or finish/cancel the other active private operation before "
+                     "closing digiKam again."));
             ret = false;
         }
     }

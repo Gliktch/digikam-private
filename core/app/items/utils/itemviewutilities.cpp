@@ -74,6 +74,9 @@ namespace Digikam
 namespace
 {
 
+constexpr qlonglong LargePrivateOperationBytes =
+    500LL * 1024LL * 1024LL;
+
 void wipeSecret(QString& value)
 {
     value.detach();
@@ -118,6 +121,179 @@ bool acknowledgeExternalApplicationRisk(QWidget* const parent)
     }
 
     return true;
+}
+
+bool acknowledgeLargeExternalCheckout(qlonglong bytes, QWidget* const parent)
+{
+    if (bytes < LargePrivateOperationBytes)
+    {
+        return true;
+    }
+
+    const QString size = QString::number(
+        static_cast<double>(bytes) / (1024.0 * 1024.0), 'f', 1);
+    return (QMessageBox::warning(
+                parent,
+                i18nc("@title:window", "Large Private Checkout"),
+                i18nc("@info",
+                      "This checkout will decrypt about %1 MiB. It may take "
+                      "several minutes; keep the collection and category-store "
+                      "storage connected until preparation finishes. Continue?",
+                      size),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel) == QMessageBox::Yes);
+}
+
+void finishExternalCheckout(
+    const QSharedPointer<PrivacyThreadImageIOStillItemTransactionOwner>& owner,
+    const QString& transactionUuid, QWidget* const parent,
+    PrivacyExternalCheckoutDecision decision =
+        static_cast<PrivacyExternalCheckoutDecision>(0))
+{
+    if (owner.isNull() || transactionUuid.isEmpty())
+    {
+        return;
+    }
+
+    auto* const progress = new QProgressDialog(
+        i18nc("@info:progress", "Checking private external changes..."),
+        QString(), 0, 0, parent);
+    progress->setWindowTitle(
+        i18nc("@title:window", "Private External Access"));
+    progress->setCancelButton(nullptr);
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->show();
+    const QPointer<QProgressDialog> guardedProgress(progress);
+    const QPointer<QWidget> guardedParent(parent);
+    auto* const watcher = new QFutureWatcher<PrivacyExternalCheckoutResult>(
+        parent ? static_cast<QObject*>(parent) : static_cast<QObject*>(qApp));
+    QObject::connect(
+        watcher, &QFutureWatcher<PrivacyExternalCheckoutResult>::finished,
+        watcher,
+        [watcher, owner, transactionUuid, decision, guardedProgress,
+         guardedParent]()
+        {
+            const PrivacyExternalCheckoutResult result = watcher->result();
+            watcher->deleteLater();
+
+            if (guardedProgress)
+            {
+                guardedProgress->deleteLater();
+            }
+
+            if (result.status ==
+                PrivacyExternalCheckoutStatus::CompletedUnchanged)
+            {
+                QMessageBox::information(
+                    guardedParent,
+                    i18nc("@title:window", "Private External Access Finished"),
+                    i18nc("@info", "The private checkout has been closed."));
+                return;
+            }
+
+            if ((decision ==
+                 PrivacyExternalCheckoutDecision::PreserveForLater) &&
+                (result.status == PrivacyExternalCheckoutStatus::ChangesPending))
+            {
+                QMessageBox::information(
+                    guardedParent,
+                    i18nc("@title:window", "Private Changes Preserved"),
+                    i18nc("@info",
+                          "The changed files remain encrypted in the category "
+                          "store for later reconciliation."));
+                return;
+            }
+
+            if (result.status == PrivacyExternalCheckoutStatus::ChangesPending)
+            {
+                QMessageBox choice(
+                    QMessageBox::Warning,
+                    i18nc("@title:window", "Private External Changes"),
+                    i18nc("@info",
+                          "The external copy changed or contains new files. "
+                          "Preserve the complete result for later, or discard "
+                          "it after confirmation?"),
+                    QMessageBox::NoButton, guardedParent);
+                QPushButton* const preserve = choice.addButton(
+                    i18nc("@action:button", "Preserve for Later"),
+                    QMessageBox::AcceptRole);
+                QPushButton* const discard = choice.addButton(
+                    i18nc("@action:button", "Discard Changes"),
+                    QMessageBox::DestructiveRole);
+                choice.addButton(QMessageBox::Cancel);
+                choice.exec();
+
+                if (choice.clickedButton() == preserve)
+                {
+                    finishExternalCheckout(
+                        owner, transactionUuid, guardedParent,
+                        PrivacyExternalCheckoutDecision::PreserveForLater);
+                }
+                else if ((choice.clickedButton() == discard) &&
+                         (QMessageBox::warning(
+                              guardedParent,
+                              i18nc("@title:window", "Discard Private Changes"),
+                              i18nc("@info",
+                                    "Permanently discard every changed and new "
+                                    "file in this checkout?"),
+                              QMessageBox::Discard | QMessageBox::Cancel,
+                              QMessageBox::Cancel) == QMessageBox::Discard))
+                {
+                    finishExternalCheckout(
+                        owner, transactionUuid, guardedParent,
+                        PrivacyExternalCheckoutDecision::ConfirmedDiscard);
+                }
+
+                return;
+            }
+
+            QMessageBox message(
+                QMessageBox::Warning,
+                i18nc("@title:window", "Private External Access Pending"),
+                (result.status ==
+                 PrivacyExternalCheckoutStatus::AuthenticationRequired)
+                    ? i18nc("@info",
+                            "Unlock the category before finishing this private "
+                            "checkout. Its files remain encrypted at rest.")
+                    : i18nc("@info",
+                            "The private checkout could not be finished. Its "
+                            "files have been left in place for recovery."),
+                QMessageBox::Ok, guardedParent);
+            message.setDetailedText(result.detail);
+            message.exec();
+        });
+    watcher->setFuture(QtConcurrent::run(
+        [owner, transactionUuid, decision]()
+        {
+            return owner->finishExternalCheckout(transactionUuid, decision);
+        }));
+}
+
+void promptForExternalCheckoutFinish(
+    const QSharedPointer<PrivacyThreadImageIOStillItemTransactionOwner>& owner,
+    const QString& transactionUuid, QWidget* const parent)
+{
+    QMessageBox prompt(
+        QMessageBox::Information,
+        i18nc("@title:window", "Private External Access"),
+        i18nc("@info",
+              "Use the external application normally. Return here and choose "
+              "Finish when it has finished reading or saving the file. Closing "
+              "this prompt leaves the encrypted checkout available for later "
+              "recovery."),
+        QMessageBox::NoButton, parent);
+    QPushButton* const finish = prompt.addButton(
+        i18nc("@action:button", "Finish External Access"),
+        QMessageBox::AcceptRole);
+    prompt.addButton(i18nc("@action:button", "Leave Open"),
+                     QMessageBox::RejectRole);
+    prompt.exec();
+
+    if (prompt.clickedButton() == finish)
+    {
+        finishExternalCheckout(owner, transactionUuid, parent);
+    }
 }
 
 } // namespace
@@ -488,6 +664,12 @@ void ItemViewUtilities::openInfosWithDefaultApplication(const QList<ItemInfo>& i
                 owner->actionContextForImage(info.id());
             QString password;
 
+            if (!acknowledgeLargeExternalCheckout(
+                    context.materializationSize, m_widget))
+            {
+                return;
+            }
+
             if (!owner->categoryIsUnlocked(context.protectedCategory.uuid))
             {
                 QMessageBox choice(
@@ -576,6 +758,32 @@ void ItemViewUtilities::openInfosWithDefaultApplication(const QList<ItemInfo>& i
                         guardedProgress->deleteLater();
                     }
 
+                    if (result.status ==
+                        PrivacyExternalCheckoutStatus::ChangesPending)
+                    {
+                        finishExternalCheckout(
+                            owner, result.transactionUuid, guardedParent);
+                        return;
+                    }
+
+                    if ((result.status ==
+                         PrivacyExternalCheckoutStatus::RecoveryRequired) &&
+                        !result.transactionUuid.isEmpty() &&
+                        (QMessageBox::question(
+                             guardedParent,
+                             i18nc("@title:window",
+                                   "Private Checkout Already Open"),
+                             i18nc("@info",
+                                   "A writable checkout for this item already "
+                                   "exists. Check and finish it now?"),
+                             QMessageBox::Yes | QMessageBox::Cancel,
+                             QMessageBox::Yes) == QMessageBox::Yes))
+                    {
+                        finishExternalCheckout(
+                            owner, result.transactionUuid, guardedParent);
+                        return;
+                    }
+
                     if (!result.succeeded())
                     {
                         QMessageBox message(
@@ -620,6 +828,8 @@ void ItemViewUtilities::openInfosWithDefaultApplication(const QList<ItemInfo>& i
 
                     DFileOperations::openFilesWithDefaultApplication(
                         QList<QUrl>() << primary);
+                    promptForExternalCheckoutFinish(
+                        owner, result.transactionUuid, guardedParent);
                 });
             watcher->setFuture(QtConcurrent::run(
                 [owner, info, secret]()

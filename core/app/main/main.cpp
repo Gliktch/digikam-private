@@ -34,6 +34,16 @@
 #include <QCommandLineParser>
 #include <QCommandLineOption>
 
+#ifdef HAVE_DBUS
+#   include <QFutureWatcher>
+#   include <QSharedPointer>
+#   include <QtConcurrentRun>
+#   include <QDBusConnection>
+#   include <QDBusInterface>
+#   include <QDBusReply>
+#   include <QDBusUnixFileDescriptor>
+#endif
+
 // KDE includes
 
 #include <klocalizedstring.h>
@@ -129,6 +139,177 @@ namespace
 const char PrivacyConfigGroup[] = "Privacy";
 const char SuppressProxySizeSummaryKey[] =
     "SuppressProxySizeOnlyStartupSummary";
+
+#ifdef HAVE_DBUS
+
+class PrivacyDesktopLockMonitor final : public QObject
+{
+    Q_OBJECT
+
+public:
+
+    explicit PrivacyDesktopLockMonitor(
+        const QSharedPointer<PrivacyRuntimeCoordinator>& runtime,
+        QObject* const parent)
+        : QObject(parent),
+          m_runtime(runtime)
+    {
+        const bool freedesktopScreenSaver =
+            QDBusConnection::sessionBus().connect(
+            QStringLiteral("org.freedesktop.ScreenSaver"),
+            QStringLiteral("/org/freedesktop/ScreenSaver"),
+            QStringLiteral("org.freedesktop.ScreenSaver"),
+            QStringLiteral("ActiveChanged"), this,
+            SLOT(screenSaverActiveChanged(bool)));
+        const bool xfceScreenSaver = QDBusConnection::sessionBus().connect(
+            QStringLiteral("org.xfce.ScreenSaver"),
+            QStringLiteral("/org/xfce/ScreenSaver"),
+            QStringLiteral("org.xfce.ScreenSaver"),
+            QStringLiteral("ActiveChanged"), this,
+            SLOT(screenSaverActiveChanged(bool)));
+        const bool loginSleep = QDBusConnection::systemBus().connect(
+            QStringLiteral("org.freedesktop.login1"),
+            QStringLiteral("/org/freedesktop/login1"),
+            QStringLiteral("org.freedesktop.login1.Manager"),
+            QStringLiteral("PrepareForSleep"), this,
+            SLOT(prepareForSleep(bool)));
+
+        if (!freedesktopScreenSaver && !xfceScreenSaver)
+        {
+            qCWarning(DIGIKAM_GENERAL_LOG)
+                << "Private category automatic screen-lock handling could not "
+                   "connect to a supported screen saver service";
+        }
+
+        if (!loginSleep)
+        {
+            qCWarning(DIGIKAM_GENERAL_LOG)
+                << "Private category automatic suspend handling could not "
+                   "connect to login1";
+        }
+
+        acquireSleepInhibitor();
+    }
+
+private Q_SLOTS:
+
+    void screenSaverActiveChanged(bool active)
+    {
+        if (active)
+        {
+            lockOrdinarySessions(false);
+        }
+    }
+
+    void prepareForSleep(bool sleeping)
+    {
+        if (sleeping)
+        {
+            lockOrdinarySessions(true);
+        }
+        else
+        {
+            acquireSleepInhibitor();
+        }
+    }
+
+private:
+
+    void acquireSleepInhibitor()
+    {
+        if (m_sleepInhibitor.isValid())
+        {
+            return;
+        }
+
+        QDBusInterface login(
+            QStringLiteral("org.freedesktop.login1"),
+            QStringLiteral("/org/freedesktop/login1"),
+            QStringLiteral("org.freedesktop.login1.Manager"),
+            QDBusConnection::systemBus());
+        const QDBusReply<QDBusUnixFileDescriptor> reply = login.call(
+            QStringLiteral("Inhibit"), QStringLiteral("sleep"),
+            QStringLiteral("digiKam Private"),
+            QStringLiteral("Lock private categories before sleep"),
+            QStringLiteral("delay"));
+
+        if (reply.isValid())
+        {
+            m_sleepInhibitor = reply.value();
+        }
+        else
+        {
+            qCWarning(DIGIKAM_GENERAL_LOG)
+                << "Private category suspend delay inhibitor is unavailable";
+        }
+    }
+
+    void lockOrdinarySessions(bool releaseSleepInhibitor)
+    {
+        m_releaseSleepInhibitor = m_releaseSleepInhibitor ||
+                                  releaseSleepInhibitor;
+
+        if (m_locking)
+        {
+            return;
+        }
+
+        if (m_runtime.isNull())
+        {
+            qCWarning(DIGIKAM_GENERAL_LOG)
+                << "Private category desktop relock runtime is unavailable";
+
+            if (m_releaseSleepInhibitor)
+            {
+                m_sleepInhibitor = QDBusUnixFileDescriptor();
+                m_releaseSleepInhibitor = false;
+            }
+
+            return;
+        }
+
+        m_locking = true;
+        auto* const watcher =
+            new QFutureWatcher<bool>(this);
+        connect(watcher,
+                &QFutureWatcher<bool>::finished,
+                this,
+                [this, watcher]()
+                {
+                    const bool succeeded = watcher->result();
+                    watcher->deleteLater();
+                    m_locking = false;
+
+                    if (!succeeded)
+                    {
+                        qCWarning(DIGIKAM_GENERAL_LOG)
+                            << "One or more private categories remained open "
+                               "after a desktop lock/suspend request";
+                    }
+
+                    if (m_releaseSleepInhibitor)
+                    {
+                        m_sleepInhibitor = QDBusUnixFileDescriptor();
+                        m_releaseSleepInhibitor = false;
+                    }
+                });
+        const QSharedPointer<PrivacyRuntimeCoordinator> runtime = m_runtime;
+        watcher->setFuture(QtConcurrent::run(
+            [runtime]()
+            {
+                return runtime->lockForDesktopTransition();
+            }));
+    }
+
+private:
+
+    QSharedPointer<PrivacyRuntimeCoordinator> m_runtime;
+    QDBusUnixFileDescriptor m_sleepInhibitor;
+    bool m_locking = false;
+    bool m_releaseSleepInhibitor = false;
+};
+
+#endif // HAVE_DBUS
 
 QString privacyRootLabel(const PrivacyRootIntegritySummary& root)
 {
@@ -697,6 +878,13 @@ MAIN_EXPORT int MAIN_FN(int argc, char** argv)
 
     DigikamApp* const digikam = new DigikamApp();
 
+#ifdef HAVE_DBUS
+
+    new PrivacyDesktopLockMonitor(
+        PrivacyStartupRecovery::coordinator(), digikam);
+
+#endif
+
     // If application storage place in home directory to save customized XML settings files do not exist, create it,
     // else QFile will not able to create new files as well.
 
@@ -791,3 +979,7 @@ MAIN_EXPORT int MAIN_FN(int argc, char** argv)
 
     return ret;
 }
+
+#ifdef HAVE_DBUS
+#   include "main.moc"
+#endif

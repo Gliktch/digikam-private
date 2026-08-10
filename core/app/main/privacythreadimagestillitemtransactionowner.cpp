@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <limits>
 #include <utility>
 
 // POSIX includes
@@ -37,6 +38,7 @@
 #include <QMutexLocker>
 #include <QProcess>
 #include <QRecursiveMutex>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryFile>
 #include <QThread>
@@ -73,6 +75,17 @@ public:
 };
 
 Q_GLOBAL_STATIC(StillItemOwnerData, ownerData)
+
+void addMaterializationSize(qlonglong size, qlonglong* const total)
+{
+    if (!total || (size <= 0))
+    {
+        return;
+    }
+
+    const qlonglong maximum = std::numeric_limits<qlonglong>::max();
+    *total = (*total > (maximum - size)) ? maximum : (*total + size);
+}
 
 class ScopeExit final
 {
@@ -725,6 +738,8 @@ PrivacyThreadImageIOStillItemTransactionOwner::actionContextForImage(
             }
 
             ++assetCount;
+            addMaterializationSize(asset.originalSize,
+                                   &result.materializationSize);
 
             if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
                 (asset.ordinal == 0))
@@ -790,7 +805,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::actionContextForImage(
             (category->backend == PrivacyBackend::Casual) &&
             (category->lifecycleState ==
              PrivacyCategoryLifecycleState::Active) && primary &&
-            (assetCount == 1))
+            (assetCount > 0))
         {
             result.protectedCategory = *category;
             result.availability =
@@ -875,6 +890,25 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityContextForCategory(
     for (const PrivacyItem& item : std::as_const(snapshot.items))
     {
         result.protectedItemCount += (item.categoryUuid == categoryUuid) ? 1 : 0;
+    }
+
+    QSet<QString> categoryItemUuids;
+
+    for (const PrivacyItem& item : std::as_const(snapshot.items))
+    {
+        if (item.categoryUuid == categoryUuid)
+        {
+            categoryItemUuids.insert(item.uuid);
+        }
+    }
+
+    for (const PrivacyAsset& asset : std::as_const(snapshot.assets))
+    {
+        if (categoryItemUuids.contains(asset.itemUuid))
+        {
+            addMaterializationSize(asset.originalSize,
+                                   &result.materializationSize);
+        }
     }
 
     for (const PrivacyTransaction& transaction :
@@ -1658,9 +1692,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
     }
 
     if (activeTransaction &&
-        ((activeTransaction->type !=
-          PrivacyTransactionType::ExternalCheckout) ||
-         (activeTransaction->state != PrivacyTransactionState::Created) ||
+        ((activeTransaction->type != PrivacyTransactionType::ExternalCheckout) ||
          (activeTransaction->itemUuid != item->uuid)))
     {
         return checkoutFailure(
@@ -1703,6 +1735,9 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
     const QList<PrivacyAsset> checkoutAssets = assets;
     const QString resumeTransactionUuid = activeTransaction
                                         ? activeTransaction->uuid : QString();
+    const PrivacyTransactionState resumeTransactionState = activeTransaction
+        ? activeTransaction->state
+        : static_cast<PrivacyTransactionState>(0);
     const PrivacyCategoryOperationStatus operationStatus =
         sessions->runWithUnlockedStore(
             categoryUuid,
@@ -1710,7 +1745,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
              archivePath, archiveSize, archiveHash, publicRoot,
              publicRootExpectation, checkoutStoreUuid, managedStoreRoot,
              storeRootExpectation,
-             checkoutAssets, resumeTransactionUuid](
+             checkoutAssets, resumeTransactionUuid, resumeTransactionState](
                 const PrivacyPassword& password, const QString& plaintextRoot)
             {
                 PrivacyExternalCheckoutRequest request;
@@ -1813,10 +1848,55 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
                     request.sources << source;
                 }
 
+                PrivacyExternalCheckoutStoreAccess storeAccess;
+                storeAccess.storeUuid = checkoutStoreUuid;
+                storeAccess.root = managedStoreRoot;
+                storeAccess.rootExpectation = storeRootExpectation;
+                storeAccess.plaintextRoot = plaintextRoot;
                 QMutexLocker locker(&d->transactionMutex);
-                result = resumeTransactionUuid.isEmpty()
-                       ? d->checkoutEngine.create(request)
-                       : d->checkoutEngine.resumeAuthenticatedCreate(request);
+
+                if (resumeTransactionUuid.isEmpty())
+                {
+                    result = d->checkoutEngine.create(request);
+                }
+                else if (resumeTransactionState ==
+                         PrivacyTransactionState::Created)
+                {
+                    result = d->checkoutEngine.resumeAuthenticatedCreate(request);
+                }
+                else if (resumeTransactionState ==
+                         PrivacyTransactionState::Prepared)
+                {
+                    result = d->checkoutEngine.authorizeLaunch(
+                        storeAccess, resumeTransactionUuid);
+                    return;
+                }
+                else if ((resumeTransactionState ==
+                          PrivacyTransactionState::NeedsReconciliation) ||
+                         (resumeTransactionState ==
+                          PrivacyTransactionState::Relocking))
+                {
+                    result = d->checkoutEngine.reconcile(
+                        storeAccess, resumeTransactionUuid);
+
+                    if (result.status !=
+                        PrivacyExternalCheckoutStatus::CompletedUnchanged)
+                    {
+                        return;
+                    }
+
+                    request.transactionUuid = newUuid();
+                    result = d->checkoutEngine.create(request);
+                }
+                else
+                {
+                    result = checkoutFailure(
+                        PrivacyExternalCheckoutStatus::RecoveryRequired,
+                        QStringLiteral(
+                            "A writable checkout is already open; finish it before opening another copy"),
+                        resumeTransactionUuid, itemUuid);
+                    return;
+                }
 
                 if (result.status ==
                     PrivacyExternalCheckoutStatus::CompletedUnchanged)
@@ -1831,11 +1911,6 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
                 }
 
                 const QString transactionUuid = result.transactionUuid;
-                PrivacyExternalCheckoutStoreAccess storeAccess;
-                storeAccess.storeUuid = checkoutStoreUuid;
-                storeAccess.root = managedStoreRoot;
-                storeAccess.rootExpectation = storeRootExpectation;
-                storeAccess.plaintextRoot = plaintextRoot;
                 result = d->checkoutEngine.authorizeLaunch(
                     storeAccess, transactionUuid);
 
@@ -1863,7 +1938,8 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
 
 PrivacyExternalCheckoutResult
 PrivacyThreadImageIOStillItemTransactionOwner::finishExternalCheckout(
-    const QString& transactionUuid) const
+    const QString& transactionUuid,
+    PrivacyExternalCheckoutDecision decision) const
 {
     if (transactionUuid.isEmpty())
     {
@@ -1964,7 +2040,8 @@ PrivacyThreadImageIOStillItemTransactionOwner::finishExternalCheckout(
         sessions->runWithUnlockedStore(
             categoryUuid,
             [this, &result, storeUuid, storeRoot, expectation,
-             transactionUuid](const PrivacyPassword&, const QString& plaintextRoot)
+             transactionUuid, decision](const PrivacyPassword&,
+                                        const QString& plaintextRoot)
             {
                 PrivacyExternalCheckoutStoreAccess access;
                 access.storeUuid = storeUuid;
@@ -1972,7 +2049,13 @@ PrivacyThreadImageIOStillItemTransactionOwner::finishExternalCheckout(
                 access.rootExpectation = expectation;
                 access.plaintextRoot = plaintextRoot;
                 QMutexLocker locker(&d->transactionMutex);
-                result = d->checkoutEngine.reconcile(access, transactionUuid);
+                result = ((decision ==
+                           PrivacyExternalCheckoutDecision::PreserveForLater) ||
+                          (decision ==
+                           PrivacyExternalCheckoutDecision::ConfirmedDiscard))
+                       ? d->checkoutEngine.resolveChanges(
+                             access, transactionUuid, decision)
+                       : d->checkoutEngine.reconcile(access, transactionUuid);
             });
 
     if (operation == PrivacyCategoryOperationStatus::CategoryLocked)
@@ -2561,6 +2644,56 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelockAll(
     return aggregate;
 }
 
+bool
+PrivacyThreadImageIOStillItemTransactionOwner::lockForDesktopTransition() const
+{
+    QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+    QSharedPointer<PrivacyCategorySessionOwner> sessions;
+
+    if (!currentActionComposition(&d->runtime, &runtime, &sessions))
+    {
+        return false;
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->persistence.loadSnapshot(&snapshot))
+    {
+        // Without the active transaction inventory, locking every category
+        // could tear down a store that still backs an external checkout.
+        return false;
+    }
+
+    QSet<QString> exposedCategories;
+
+    for (const PrivacyTransaction& transaction :
+         std::as_const(snapshot.transactions))
+    {
+        if (transaction.isActive() &&
+            (PrivacyExternalCheckoutTransactionEngine::holdsPlaintextLease(
+                 transaction) ||
+             (transaction.type ==
+              PrivacyTransactionType::CompatibilityUnlock)))
+        {
+            exposedCategories.insert(transaction.categoryUuid);
+        }
+    }
+
+    bool succeeded = true;
+
+    for (const PrivacyCategory& category : std::as_const(snapshot.categories))
+    {
+        if (!exposedCategories.contains(category.uuid) &&
+            sessions->ownsSecret(category.uuid))
+        {
+            succeeded = sessions->lockCategory(category.uuid).succeeded() &&
+                        succeeded;
+        }
+    }
+
+    return succeeded;
+}
+
 bool PrivacyThreadImageIOStillItemTransactionOwner::prepareForShutdown() const
 {
     if (!compatibilityRelockAll().succeeded())
@@ -2578,22 +2711,16 @@ bool PrivacyThreadImageIOStillItemTransactionOwner::prepareForShutdown() const
     for (const PrivacyTransaction& transaction :
          std::as_const(snapshot.transactions))
     {
-        if (!transaction.isActive() ||
-            (transaction.type != PrivacyTransactionType::ExternalCheckout))
+        if (!PrivacyExternalCheckoutTransactionEngine::holdsPlaintextLease(
+                transaction))
         {
             continue;
         }
 
-        const PrivacyExternalCheckoutResult result =
-            finishExternalCheckout(transaction.uuid);
-
-        if (!result.succeeded() &&
-            (result.status != PrivacyExternalCheckoutStatus::ChangesPending) &&
-            (result.status != PrivacyExternalCheckoutStatus::AuthenticationRequired) &&
-            (result.status != PrivacyExternalCheckoutStatus::RootUnavailable))
-        {
-            return false;
-        }
+        // Explicit Finish/Preserve/Discard owns checkout teardown. Deleting an
+        // apparently unchanged path here could lose a later save through an
+        // external application's already-open file descriptor.
+        return false;
     }
 
     return true;

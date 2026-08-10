@@ -18,6 +18,10 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+// C++ includes
+
+#include <functional>
+
 // Unix includes
 
 #include <sys/stat.h>
@@ -114,6 +118,12 @@ public:
                 }
 
                 existing = transaction;
+
+                if (afterTransactionUpdate)
+                {
+                    afterTransactionUpdate(transaction);
+                }
+
                 return true;
             }
         }
@@ -148,6 +158,7 @@ public:
     PrivacyRepositorySnapshot snapshot;
     PrivacyTransaction begunTransaction;
     PrivacyTransactionState failState = static_cast<PrivacyTransactionState>(0);
+    std::function<void(const PrivacyTransaction&)> afterTransactionUpdate;
 };
 
 struct Fixture
@@ -389,6 +400,10 @@ private Q_SLOTS:
 
     void testCreateAuthorizeAndUnchangedCleanup();
     void testChangedAndUnexpectedContentArePreserved();
+    void testPreserveForLaterAndConfirmedDiscard();
+    void testPreserveMovePublicationFailureRepairs();
+    void testConfirmedDiscardFromCheckout();
+    void testConfirmedDiscardRejectsLateOutput();
     void testCreatedAndExposedRestartRecovery();
     void testAuthenticatedResumeRecreatesMissingCheckout();
     void testRelockingRestartCompletesMissingCleanup();
@@ -457,6 +472,143 @@ void PrivacyExternalCheckoutTransactionTest::testChangedAndUnexpectedContentAreP
                  PrivacyTransactionState::NeedsReconciliation);
         QCOMPARE(readFile(fixture.proxyPath), ProxyBytes);
     }
+}
+
+void PrivacyExternalCheckoutTransactionTest::
+    testPreserveForLaterAndConfirmedDiscard()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    PrivacyExternalCheckoutTransactionEngine engine(fixture.persistence);
+    const PrivacyExternalCheckoutResult created = engine.create(fixture.request);
+    QVERIFY2(created.succeeded(), qPrintable(created.detail));
+    QVERIFY(engine.authorizeLaunch(fixture.storeAccess,
+                                   TransactionUuid).succeeded());
+    const QString checkout = created.assets.constFirst().checkoutUrl.toLocalFile();
+    QVERIFY(writeFile(checkout, QByteArrayLiteral("edited for preservation")));
+    QCOMPARE(engine.reconcile(fixture.storeAccess, TransactionUuid).status,
+             PrivacyExternalCheckoutStatus::ChangesPending);
+
+    const PrivacyExternalCheckoutResult preserved = engine.resolveChanges(
+        fixture.storeAccess, TransactionUuid,
+        PrivacyExternalCheckoutDecision::PreserveForLater);
+    QVERIFY2(preserved.status == PrivacyExternalCheckoutStatus::ChangesPending,
+             qPrintable(preserved.detail));
+    const QString recovery =
+        preserved.assets.constFirst().checkoutUrl.toLocalFile();
+    QVERIFY(!QFileInfo::exists(checkout));
+    QCOMPARE(readFile(recovery), QByteArrayLiteral("edited for preservation"));
+    QVERIFY(!PrivacyExternalCheckoutTransactionEngine::holdsPlaintextLease(
+        fixture.persistence.snapshot.transactions.constFirst()));
+
+    const PrivacyExternalCheckoutResult preservedAgain = engine.resolveChanges(
+        fixture.storeAccess, TransactionUuid,
+        PrivacyExternalCheckoutDecision::PreserveForLater);
+    QVERIFY2(preservedAgain.status == PrivacyExternalCheckoutStatus::ChangesPending,
+             qPrintable(preservedAgain.detail));
+    QCOMPARE(preservedAgain.assets.constFirst().checkoutUrl.toLocalFile(),
+             recovery);
+
+    const PrivacyExternalCheckoutResult discarded = engine.resolveChanges(
+        fixture.storeAccess, TransactionUuid,
+        PrivacyExternalCheckoutDecision::ConfirmedDiscard);
+    QVERIFY2(discarded.status ==
+             PrivacyExternalCheckoutStatus::CompletedUnchanged,
+             qPrintable(discarded.detail));
+    QVERIFY(!QFileInfo::exists(recovery));
+}
+
+void PrivacyExternalCheckoutTransactionTest::
+    testPreserveMovePublicationFailureRepairs()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    PrivacyExternalCheckoutTransactionEngine engine(fixture.persistence);
+    const PrivacyExternalCheckoutResult created = engine.create(fixture.request);
+    QVERIFY2(created.succeeded(), qPrintable(created.detail));
+    QVERIFY(engine.authorizeLaunch(fixture.storeAccess,
+                                   TransactionUuid).succeeded());
+    const QString checkout = created.assets.constFirst().checkoutUrl.toLocalFile();
+    QVERIFY(writeFile(checkout, QByteArrayLiteral("edited before interrupted preserve")));
+    QCOMPARE(engine.reconcile(fixture.storeAccess, TransactionUuid).status,
+             PrivacyExternalCheckoutStatus::ChangesPending);
+    fixture.persistence.failState =
+        PrivacyTransactionState::NeedsReconciliation;
+    QCOMPARE(engine.resolveChanges(
+                 fixture.storeAccess, TransactionUuid,
+                 PrivacyExternalCheckoutDecision::PreserveForLater).status,
+             PrivacyExternalCheckoutStatus::PersistenceFailure);
+    QVERIFY(!QFileInfo::exists(checkout));
+
+    fixture.persistence.failState = static_cast<PrivacyTransactionState>(0);
+    const PrivacyExternalCheckoutResult repaired = engine.reconcile(
+        fixture.storeAccess, TransactionUuid);
+    QVERIFY2(repaired.status == PrivacyExternalCheckoutStatus::ChangesPending,
+             qPrintable(repaired.detail));
+    QCOMPARE(readFile(repaired.assets.constFirst().checkoutUrl.toLocalFile()),
+             QByteArrayLiteral("edited before interrupted preserve"));
+    QVERIFY(repaired.assets.constFirst().checkoutUrl.toLocalFile().contains(
+        QLatin1String("/recovery/")));
+    QVERIFY(!PrivacyExternalCheckoutTransactionEngine::holdsPlaintextLease(
+        fixture.persistence.snapshot.transactions.constFirst()));
+}
+
+void PrivacyExternalCheckoutTransactionTest::testConfirmedDiscardFromCheckout()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    PrivacyExternalCheckoutTransactionEngine engine(fixture.persistence);
+    const PrivacyExternalCheckoutResult created = engine.create(fixture.request);
+    QVERIFY2(created.succeeded(), qPrintable(created.detail));
+    QVERIFY(engine.authorizeLaunch(fixture.storeAccess,
+                                   TransactionUuid).succeeded());
+    const QString checkout = created.assets.constFirst().checkoutUrl.toLocalFile();
+    QVERIFY(writeFile(checkout, QByteArrayLiteral("edited then discarded")));
+    QCOMPARE(engine.reconcile(fixture.storeAccess, TransactionUuid).status,
+             PrivacyExternalCheckoutStatus::ChangesPending);
+    const PrivacyExternalCheckoutResult discarded = engine.resolveChanges(
+        fixture.storeAccess, TransactionUuid,
+        PrivacyExternalCheckoutDecision::ConfirmedDiscard);
+    QVERIFY2(discarded.status ==
+             PrivacyExternalCheckoutStatus::CompletedUnchanged,
+             qPrintable(discarded.detail));
+    QVERIFY(!QFileInfo::exists(checkout));
+}
+
+void PrivacyExternalCheckoutTransactionTest::testConfirmedDiscardRejectsLateOutput()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    PrivacyExternalCheckoutTransactionEngine engine(fixture.persistence);
+    const PrivacyExternalCheckoutResult created = engine.create(fixture.request);
+    QVERIFY2(created.succeeded(), qPrintable(created.detail));
+    QVERIFY(engine.authorizeLaunch(fixture.storeAccess,
+                                   TransactionUuid).succeeded());
+    const QString checkout = created.assets.constFirst().checkoutUrl.toLocalFile();
+    const QString lateOutput = QFileInfo(checkout).dir().filePath(
+        QStringLiteral("late-output.txt"));
+    QVERIFY(writeFile(checkout, QByteArrayLiteral("edited before discard")));
+    QCOMPARE(engine.reconcile(fixture.storeAccess, TransactionUuid).status,
+             PrivacyExternalCheckoutStatus::ChangesPending);
+    fixture.persistence.afterTransactionUpdate =
+        [&lateOutput](const PrivacyTransaction& transaction)
+        {
+            if (transaction.state == PrivacyTransactionState::Relocking)
+            {
+                QVERIFY(writeFile(lateOutput,
+                                  QByteArrayLiteral("arrived after confirmation")));
+            }
+        };
+
+    const PrivacyExternalCheckoutResult refused = engine.resolveChanges(
+        fixture.storeAccess, TransactionUuid,
+        PrivacyExternalCheckoutDecision::ConfirmedDiscard);
+    QVERIFY2(refused.status == PrivacyExternalCheckoutStatus::ChangesPending,
+             qPrintable(refused.detail));
+    QCOMPARE(readFile(lateOutput),
+             QByteArrayLiteral("arrived after confirmation"));
+    QCOMPARE(fixture.persistence.snapshot.transactions.constFirst().state,
+             PrivacyTransactionState::NeedsReconciliation);
 }
 
 void PrivacyExternalCheckoutTransactionTest::testCreatedAndExposedRestartRecovery()

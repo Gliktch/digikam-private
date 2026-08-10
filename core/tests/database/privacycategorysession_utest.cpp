@@ -644,6 +644,7 @@ private Q_SLOTS:
     void testLockAllWaitsForInflightCreation();
     void testLockCancelsInflightUnlock();
     void testLockAllCancelsInflightUnlock();
+    void testLockRejectsActiveExternalCheckout();
     void testItemOperationBorrowsSecretAndSerializesLock();
     void testFreshAuthenticationWhileLockedDoesNotCreateSession();
     void testFreshAuthenticationAllowsOnlyNamedItemTransaction();
@@ -1088,6 +1089,52 @@ void PrivacyCategorySessionTest::testLockAllCancelsInflightUnlock()
     QCOMPARE(unlockResult.status, PrivacyCategorySessionStatus::Canceled);
     QVERIFY(lockResults.isEmpty());
     QVERIFY(!coordinator.ownsSecret(CategoryUuid));
+}
+
+void PrivacyCategorySessionTest::testLockRejectsActiveExternalCheckout()
+{
+    FakeRepository repository;
+    repository.snapshot = makeActiveSnapshot();
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime);
+    QCOMPARE(coordinator.unlockCategory(CategoryUuid,
+                                        QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Unlocked);
+
+    PrivacyTransaction checkout;
+    checkout.uuid = TransactionUuid;
+    checkout.categoryUuid = CategoryUuid;
+    checkout.itemUuid =
+        QLatin1String("60000000-0000-0000-0000-000000000001");
+    checkout.type = PrivacyTransactionType::ExternalCheckout;
+    checkout.state = PrivacyTransactionState::Exposed;
+    checkout.generation = 2;
+    checkout.fromCredentialGeneration = 1;
+    checkout.toCredentialGeneration = 1;
+    checkout.payloadFormatVersion = 1;
+    checkout.payloadData = QByteArray("synthetic invalid checkout payload");
+    checkout.createdAt = QDateTime::currentDateTimeUtc();
+    checkout.updatedAt = checkout.createdAt;
+    QVERIFY(checkout.isValid());
+    repository.snapshot.transactions << checkout;
+
+    QCOMPARE(coordinator.lockCategory(CategoryUuid).status,
+             PrivacyCategorySessionStatus::TransactionBlocked);
+    const QList<PrivacyCategorySessionResult> lockAll =
+        coordinator.lockAllCategories();
+    QCOMPARE(lockAll.size(), 1);
+    QCOMPARE(lockAll.constFirst().status,
+             PrivacyCategorySessionStatus::TransactionBlocked);
+    QVERIFY(coordinator.ownsSecret(CategoryUuid));
+    QCOMPARE(backend.lockCalls.load(), 0);
+
+    repository.snapshot.transactions.clear();
+    QCOMPARE(coordinator.lockCategory(CategoryUuid).status,
+             PrivacyCategorySessionStatus::Locked);
 }
 
 void PrivacyCategorySessionTest::testItemOperationBorrowsSecretAndSerializesLock()

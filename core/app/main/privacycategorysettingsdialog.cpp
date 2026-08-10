@@ -1257,14 +1257,13 @@ public:
 
         if (unlocking)
         {
-            const QMessageBox::StandardButton confirmed = QMessageBox::warning(
-                q, i18nc("@title:window", "Compatibility Unlock Category"),
-                i18ncp("@info",
-                       "Compatibility Unlock will place the original for %1 "
-                       "protected item back at its normal public filesystem path.",
-                       "Compatibility Unlock will place the originals for %1 "
-                       "protected items back at their normal public filesystem paths.",
-                       context.protectedItemCount) + QLatin1String("\n\n") +
+            QString warningText = i18ncp(
+                "@info",
+                "Compatibility Unlock will place the original for %1 protected "
+                "item back at its normal public filesystem path.",
+                "Compatibility Unlock will place the originals for %1 protected "
+                "items back at their normal public filesystem paths.",
+                context.protectedItemCount) + QLatin1String("\n\n") +
                 i18nc("@info",
                       "Other applications, plugins and synchronization tools can "
                       "then view, copy or modify those originals. Screen lock and "
@@ -1272,7 +1271,28 @@ public:
                       "may still be using the files. A power loss, or failure of both "
                       "digiKam and its guard, can leave originals exposed until the "
                       "next startup recovery. Externally changed content will be "
-                      "preserved for reconciliation rather than overwritten."),
+                      "preserved for reconciliation rather than overwritten.");
+
+            constexpr qlonglong warningThreshold =
+                500LL * 1024LL * 1024LL;
+
+            if (context.materializationSize >= warningThreshold)
+            {
+                warningText += QLatin1String("\n\n");
+                warningText += i18nc(
+                    "@info",
+                    "About %1 MiB will be decrypted. This may take several "
+                    "minutes; keep the collection and category-store storage "
+                    "connected until preparation finishes.",
+                    QString::number(
+                        static_cast<double>(context.materializationSize) /
+                            (1024.0 * 1024.0),
+                        'f', 1));
+            }
+
+            const QMessageBox::StandardButton confirmed = QMessageBox::warning(
+                q, i18nc("@title:window", "Compatibility Unlock Category"),
+                warningText,
                 QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
 
             if (confirmed != QMessageBox::Ok)

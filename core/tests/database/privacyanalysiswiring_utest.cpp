@@ -455,9 +455,11 @@ void PrivacyAnalysisWiringTest::testDefaultExternalOpenUsesWritableCheckout()
         "core/app/main/privacythreadimagestillitemtransactionowner.cpp"));
     const QString utilities = source(QStringLiteral(
         "core/app/items/utils/itemviewutilities.cpp"));
+    const QString main = source(QStringLiteral("core/app/main/main.cpp"));
 
     QVERIFY2(!owner.isEmpty(), "Unable to read checkout transaction owner");
     QVERIFY2(!utilities.isEmpty(), "Unable to read item-view utilities");
+    QVERIFY2(!main.isEmpty(), "Unable to read application startup source");
     QVERIFY(owner.contains(QStringLiteral(
         "PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(")));
     QVERIFY(owner.contains(QStringLiteral(
@@ -468,6 +470,8 @@ void PrivacyAnalysisWiringTest::testDefaultExternalOpenUsesWritableCheckout()
         "d->checkoutEngine.authorizeLaunch(")));
     QVERIFY(owner.contains(QStringLiteral(
         "d->checkoutEngine.reconcile(")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "d->checkoutEngine.resolveChanges(")));
     QVERIFY(owner.contains(QStringLiteral(
         "transaction.type == PrivacyTransactionType::ExternalCheckout")));
     QVERIFY(utilities.contains(QStringLiteral(
@@ -480,6 +484,18 @@ void PrivacyAnalysisWiringTest::testDefaultExternalOpenUsesWritableCheckout()
         "ExternalApplicationRiskAcknowledged")));
     QVERIFY(utilities.contains(QStringLiteral(
         "The external application may create recent-file records")));
+    QVERIFY(utilities.contains(QStringLiteral("Finish External Access")));
+    QVERIFY(utilities.contains(QStringLiteral("Preserve for Later")));
+    QVERIFY(utilities.contains(QStringLiteral("Discard Changes")));
+    QVERIFY(utilities.contains(QStringLiteral("Large Private Checkout")));
+    QVERIFY(owner.contains(QStringLiteral("lockForDesktopTransition()")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "PrivacyTransactionType::ExternalCheckout")));
+    QVERIFY(owner.contains(QStringLiteral(
+        "PrivacyTransactionType::CompatibilityUnlock")));
+    QVERIFY(main.contains(QStringLiteral("PrepareForSleep")));
+    QVERIFY(main.contains(QStringLiteral("ActiveChanged")));
+    QVERIFY(main.contains(QStringLiteral("lockForDesktopTransition()")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyAnalysisWiringTest)

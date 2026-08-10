@@ -60,6 +60,7 @@ public:
     PrivacyCategory protectedCategory;
     QList<PrivacyCategory> protectCategories;
     PrivacyRootRuntimeState publicRootState = PrivacyRootRuntimeState::Unknown;
+    qlonglong materializationSize = 0;
     QString recoveryTransactionUuid;
     PrivacyCompatibilityActionAvailability compatibilityAvailability =
         PrivacyCompatibilityActionAvailability::Unavailable;
@@ -74,6 +75,7 @@ public:
         PrivacyCompatibilityActionAvailability::Unavailable;
     int protectedItemCount = 0;
     int activeExposureCount = 0;
+    qlonglong materializationSize = 0;
 };
 
 class PrivacyThreadImageIOStillItemTransactionOwner final
@@ -114,7 +116,9 @@ public:
         const ItemInfo& info,
         const QString& passwordText);
     PrivacyExternalCheckoutResult finishExternalCheckout(
-        const QString& transactionUuid) const;
+        const QString& transactionUuid,
+        PrivacyExternalCheckoutDecision decision =
+            static_cast<PrivacyExternalCheckoutDecision>(0)) const;
     PrivacyCompatibilityBatchResult compatibilityUnlockCategory(
         const QString& categoryUuid,
         const QString& passwordText,
@@ -124,6 +128,7 @@ public:
         const CompatibilityProgress& progress = {}) const;
     PrivacyCompatibilityBatchResult compatibilityRelockAll(
         const CompatibilityProgress& progress = {}) const;
+    bool lockForDesktopTransition() const override;
     PrivacyStillItemTransactionResult resume(
         qlonglong imageId,
         const QString& transactionUuid,

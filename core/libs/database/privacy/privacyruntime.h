@@ -95,6 +95,13 @@ public:
         return true;
     }
 
+    /// Relocks ordinary category sessions for an OS lock/suspend transition.
+    /// Explicit plaintext-exposure leases remain owned by the implementation.
+    virtual bool lockForDesktopTransition() const
+    {
+        return true;
+    }
+
 private:
 
     Q_DISABLE_COPY(PrivacyTransactionRecovery)
@@ -228,6 +235,7 @@ public:
         const QSharedPointer<const PrivacyRootIntegrityInspector>& integrityInspector);
     void reset();
     bool prepareForShutdown() const;
+    bool lockForDesktopTransition() const;
 
     /// Snapshot of the most recent startup initialization. Root state/epoch
     /// accessors are authoritative after reconnect transitions.

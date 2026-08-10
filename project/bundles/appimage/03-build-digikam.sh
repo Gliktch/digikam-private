@@ -151,7 +151,7 @@ cmake -G "Unix Makefiles" .. \
       -DENABLE_INTERNALMYSQL=ON \
       -DENABLE_GEOLOCATION=ON \
       -DENABLE_MEDIAPLAYER=ON \
-      -DENABLE_DBUS=OFF \
+      -DENABLE_DBUS=ON \
       -DENABLE_APPSTYLES=ON \
       -DENABLE_QWEBENGINE=ON \
       -DENABLE_FACESENGINE_DNN=ON \
@@ -221,4 +221,3 @@ cmake --build . --config RelWithDebInfo --target ext_flowview   -- -j$CPU_CORES
 export PATH=$ORIG_PATH
 
 TerminateScript
-

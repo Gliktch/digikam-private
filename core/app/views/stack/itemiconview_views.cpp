@@ -22,6 +22,7 @@
 
 // C++ includes
 
+#include <limits>
 #include <utility>
 
 // Qt includes
@@ -50,6 +51,9 @@ namespace Digikam
 
 namespace
 {
+
+constexpr qlonglong LargePrivateOperationBytes =
+    500LL * 1024LL * 1024LL;
 
 class PrivacyProtectAcknowledgementState
 {
@@ -123,6 +127,28 @@ QString privacyActionFailureText(
             return fallback;
         }
     }
+}
+
+bool acknowledgeLargePrivateOperation(qlonglong bytes, QWidget* const parent)
+{
+    if (bytes < LargePrivateOperationBytes)
+    {
+        return true;
+    }
+
+    const QString size = QString::number(
+        static_cast<double>(bytes) / (1024.0 * 1024.0), 'f', 1);
+    return (QMessageBox::warning(
+                parent,
+                i18nc("@title:window", "Large Private Operation"),
+                i18nc("@info",
+                      "This operation will process about %1 MiB. It may take "
+                      "several minutes; keep the relevant collection and "
+                      "category-store storage connected until it finishes. "
+                      "Continue?",
+                      size),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel) == QMessageBox::Yes);
 }
 
 } // namespace
@@ -787,6 +813,12 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
     else if (choice && privacyOwner &&
              (choice == privacyCompatibilityUnlockAction))
     {
+        if (!acknowledgeLargePrivateOperation(
+                privacyActionContext.materializationSize, this))
+        {
+            return;
+        }
+
         const bool confirmed = (QMessageBox::warning(
             this,
             i18nc("@title:window", "Compatibility Unlock"),
@@ -922,6 +954,13 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
     }
     else if (choice && privacyOwner && (choice == privacyResumeAction))
     {
+        if (privacyResumeRequiresFreshAuthentication &&
+            !acknowledgeLargePrivateOperation(
+                privacyActionContext.materializationSize, this))
+        {
+            return;
+        }
+
         QString password;
         bool accepted = true;
         const bool passwordRequired =
@@ -991,6 +1030,12 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
     }
     else if (choice && privacyOwner && (choice == privacyUnprotectAction))
     {
+        if (!acknowledgeLargePrivateOperation(
+                privacyActionContext.materializationSize, this))
+        {
+            return;
+        }
+
         const bool confirmed = (QMessageBox::warning(
             this,
             i18nc("@title:window", "Remove Privacy Protection"),
@@ -1173,6 +1218,29 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
                                                     ? 0
                                                     : preflight.bridge.items.constFirst()
                                                           .inventory.requiredAssets.size();
+                                            qlonglong materializationSize = 0;
+
+                                            if (!preflight.bridge.items.isEmpty())
+                                            {
+                                                for (const auto& asset :
+                                                     preflight.bridge.items.constFirst()
+                                                         .inventory.requiredAssets)
+                                                {
+                                                    if (asset.evidence.byteSize > 0)
+                                                    {
+                                                        const qlonglong maximum =
+                                                            std::numeric_limits<
+                                                                qlonglong>::max();
+                                                        materializationSize =
+                                                            (materializationSize >
+                                                             (maximum - asset.evidence.byteSize))
+                                                            ? maximum
+                                                            : (materializationSize +
+                                                               asset.evidence.byteSize);
+                                                    }
+                                                }
+                                            }
+
                                             QString prompt;
 
                                             if (assetCount > 1)
@@ -1201,6 +1269,26 @@ void ItemIconView::slotShowContextMenuOnInfo(QContextMenuEvent* event, const Ite
                                                     prompt += QLatin1String("\n\n");
                                                     prompt += warning;
                                                 }
+                                            }
+
+                                            if (materializationSize >=
+                                                LargePrivateOperationBytes)
+                                            {
+                                                const QString size = QString::number(
+                                                    static_cast<double>(
+                                                        materializationSize) /
+                                                        (1024.0 * 1024.0),
+                                                    'f', 1);
+                                                prompt += prompt.isEmpty()
+                                                    ? QString()
+                                                    : QLatin1String("\n\n");
+                                                prompt += i18nc(
+                                                    "@info",
+                                                    "About %1 MiB will be encrypted. "
+                                                    "This may take several minutes; "
+                                                    "keep the collection and category-"
+                                                    "store storage connected.",
+                                                    size);
                                             }
 
                                             prompt += QLatin1String("\n\n");

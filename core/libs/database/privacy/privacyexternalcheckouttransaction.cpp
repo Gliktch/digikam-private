@@ -52,6 +52,7 @@ struct CheckoutPayloadContext
 {
     QString storeUuid;
     PrivacyJournalRootExpectation publicRootExpectation;
+    QByteArray approvedDiscardInventorySha256;
 };
 
 bool canonicalUuid(const QString& value)
@@ -177,7 +178,9 @@ QByteArray encodePayload(const PrivacyJournalRecord& record,
          !canonicalUuid(context.publicRootExpectation.markerUuid)) ||
         (context.publicRootExpectation.device == 0) ||
         (context.publicRootExpectation.inode == 0) ||
-        (context.publicRootExpectation.identitySha256.size() != 32))
+        (context.publicRootExpectation.identitySha256.size() != 32) ||
+        (!context.approvedDiscardInventorySha256.isEmpty() &&
+         (context.approvedDiscardInventorySha256.size() != 32)))
     {
         return {};
     }
@@ -229,8 +232,11 @@ QByteArray encodePayload(const PrivacyJournalRecord& record,
     publicRoot.insert(QStringLiteral("rootUuid"),
                       context.publicRootExpectation.rootUuid);
     QJsonObject object;
+    object.insert(QStringLiteral("approvedDiscardInventorySha256"),
+                  QString::fromLatin1(
+                      context.approvedDiscardInventorySha256.toHex()));
     object.insert(QStringLiteral("assets"), assets);
-    object.insert(QStringLiteral("formatVersion"), 1);
+    object.insert(QStringLiteral("formatVersion"), 2);
     object.insert(QStringLiteral("journal"),
                   QString::fromLatin1(journal.toBase64()));
     object.insert(QStringLiteral("publicRoot"), publicRoot);
@@ -259,9 +265,11 @@ bool decodePayload(const QByteArray& bytes, PrivacyJournalRecord* const record,
     const QJsonObject object = document.object();
 
     if (!exactKeys(object,
-                   { "assets", "formatVersion", "journal", "publicRoot",
-                     "storeUuid" }) ||
-        (object.value(QStringLiteral("formatVersion")).toInt(-1) != 1) ||
+                   { "approvedDiscardInventorySha256", "assets",
+                     "formatVersion", "journal", "publicRoot", "storeUuid" }) ||
+        (object.value(QStringLiteral("formatVersion")).toInt(-1) != 2) ||
+        !object.value(
+            QStringLiteral("approvedDiscardInventorySha256")).isString() ||
         !object.value(QStringLiteral("assets")).isArray() ||
         !object.value(QStringLiteral("journal")).isString() ||
         !object.value(QStringLiteral("publicRoot")).isObject() ||
@@ -337,8 +345,12 @@ bool decodePayload(const QByteArray& bytes, PrivacyJournalRecord* const record,
     const QJsonObject publicRoot =
         object.value(QStringLiteral("publicRoot")).toObject();
     CheckoutPayloadContext decodedContext;
+    const QString approvedDiscardHash = object.value(
+        QStringLiteral("approvedDiscardInventorySha256")).toString();
     decodedContext.storeUuid =
         object.value(QStringLiteral("storeUuid")).toString();
+    decodedContext.approvedDiscardInventorySha256 =
+        QByteArray::fromHex(approvedDiscardHash.toLatin1());
     decodedContext.publicRootExpectation.rootUuid =
         publicRoot.value(QStringLiteral("rootUuid")).toString();
     decodedContext.publicRootExpectation.markerUuid =
@@ -353,6 +365,13 @@ bool decodePayload(const QByteArray& bytes, PrivacyJournalRecord* const record,
         !canonicalUuid(decodedContext.publicRootExpectation.rootUuid) ||
         (!decodedContext.publicRootExpectation.markerUuid.isEmpty() &&
          !canonicalUuid(decodedContext.publicRootExpectation.markerUuid)) ||
+        (approvedDiscardHash.isEmpty()
+             ? !decodedContext.approvedDiscardInventorySha256.isEmpty()
+             : ((approvedDiscardHash.size() != 64) ||
+                (decodedContext.approvedDiscardInventorySha256.size() != 32) ||
+                (QString::fromLatin1(
+                     decodedContext.approvedDiscardInventorySha256.toHex()) !=
+                 approvedDiscardHash))) ||
         (decodedContext.publicRootExpectation.identitySha256.size() != 32) ||
         !parseUnsigned(publicRoot.value(QStringLiteral("device")),
                        &decodedContext.publicRootExpectation.device) ||
@@ -484,6 +503,69 @@ bool validStoreAccess(const PrivacyExternalCheckoutStoreAccess& access)
             (access.rootExpectation.inode != 0) &&
             (access.rootExpectation.identitySha256.size() == 32) &&
             QDir::isAbsolutePath(access.plaintextRoot));
+}
+
+bool checkoutLocation(const QList<LogicalAsset>& assets,
+                      const QString& transactionUuid,
+                      PrivacyCheckoutStoreLocation* const location)
+{
+    if (!location || assets.isEmpty())
+    {
+        return false;
+    }
+
+    bool checkout = true;
+    bool recovery = true;
+
+    for (const LogicalAsset& asset : assets)
+    {
+        const QString fileName = QFileInfo(asset.checkoutRelativePath).fileName();
+        checkout = checkout &&
+            (asset.checkoutRelativePath ==
+             PrivacyCheckoutStore::workFileRelativePath(
+                 transactionUuid, fileName,
+                 PrivacyCheckoutStoreLocation::Checkout));
+        recovery = recovery &&
+            (asset.checkoutRelativePath ==
+             PrivacyCheckoutStore::workFileRelativePath(
+                 transactionUuid, fileName,
+                 PrivacyCheckoutStoreLocation::Recovery));
+    }
+
+    if (checkout == recovery)
+    {
+        return false;
+    }
+
+    *location = checkout ? PrivacyCheckoutStoreLocation::Checkout
+                         : PrivacyCheckoutStoreLocation::Recovery;
+    return true;
+}
+
+bool rewriteCheckoutLocation(QList<LogicalAsset>* const assets,
+                             const QString& transactionUuid,
+                             PrivacyCheckoutStoreLocation location)
+{
+    if (!assets)
+    {
+        return false;
+    }
+
+    for (LogicalAsset& asset : *assets)
+    {
+        const QString path = PrivacyCheckoutStore::workFileRelativePath(
+            transactionUuid, QFileInfo(asset.checkoutRelativePath).fileName(),
+            location);
+
+        if (path.isEmpty())
+        {
+            return false;
+        }
+
+        asset.checkoutRelativePath = path;
+    }
+
+    return true;
 }
 
 QString fallbackCheckoutName(const PrivacyAsset& asset)
@@ -749,6 +831,26 @@ PrivacyExternalCheckoutTransactionEngine::
 
 PrivacyExternalCheckoutTransactionEngine::~PrivacyExternalCheckoutTransactionEngine()
 {
+}
+
+bool PrivacyExternalCheckoutTransactionEngine::holdsPlaintextLease(
+    const PrivacyTransaction& transaction)
+{
+    if (!transaction.isActive() ||
+        (transaction.type != PrivacyTransactionType::ExternalCheckout))
+    {
+        return false;
+    }
+
+    PrivacyJournalRecord record;
+    QList<LogicalAsset> logicalAssets;
+    CheckoutPayloadContext payloadContext;
+    PrivacyCheckoutStoreLocation location;
+
+    return !decodePayload(transaction.payloadData, &record, &logicalAssets,
+                          &payloadContext) ||
+           !checkoutLocation(logicalAssets, transaction.uuid, &location) ||
+           (location == PrivacyCheckoutStoreLocation::Checkout);
 }
 
 PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::create(
@@ -1610,16 +1712,69 @@ PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::reconcil
                        QStringLiteral("checkout state cannot be reconciled directly"));
     }
 
+    PrivacyCheckoutStoreLocation checkoutStoreLocation;
+
+    if (!checkoutLocation(logicalAssets, transactionUuid,
+                          &checkoutStoreLocation))
+    {
+        return failure(PrivacyExternalCheckoutStatus::RecoveryRequired,
+                       transactionUuid, transaction->itemUuid,
+                       QStringLiteral("checkout storage location is invalid"));
+    }
+
     QString detail;
     PrivacyCheckoutStoreError storeError = PrivacyCheckoutStoreError::None;
     std::unique_ptr<PrivacyCheckoutStore> store = PrivacyCheckoutStore::open(
         storeAccess.plaintextRoot, &storeError, &detail);
     PrivacyCheckoutInventory inventory;
     bool inventoryAvailable = store && store->reopenTransaction(
-        transactionUuid, PrivacyCheckoutStoreLocation::Checkout, nullptr,
+        transactionUuid, checkoutStoreLocation, nullptr,
         &storeError, &detail) && store->inventory(
-            transactionUuid, PrivacyCheckoutStoreLocation::Checkout,
+            transactionUuid, checkoutStoreLocation,
             &inventory, &storeError, &detail);
+
+    // Preserve-for-later moves the encrypted directory before publishing its
+    // new relative paths. If publication was interrupted, authenticated
+    // reconciliation repairs that narrow gap instead of stranding the result.
+    if (!inventoryAvailable && store &&
+        (transaction->state == PrivacyTransactionState::NeedsReconciliation) &&
+        (checkoutStoreLocation == PrivacyCheckoutStoreLocation::Checkout) &&
+        (storeError == PrivacyCheckoutStoreError::Missing) &&
+        store->reopenTransaction(
+            transactionUuid, PrivacyCheckoutStoreLocation::Recovery, nullptr,
+            &storeError, &detail) &&
+        store->inventory(
+            transactionUuid, PrivacyCheckoutStoreLocation::Recovery,
+            &inventory, &storeError, &detail))
+    {
+        if (!rewriteCheckoutLocation(
+                &logicalAssets, transactionUuid,
+                PrivacyCheckoutStoreLocation::Recovery))
+        {
+            return failure(PrivacyExternalCheckoutStatus::RecoveryRequired,
+                           transactionUuid, transaction->itemUuid,
+                           QStringLiteral("preserved checkout paths could not be repaired"));
+        }
+
+        PrivacyTransaction repaired = *transaction;
+        repaired.generation = transaction->generation + 1;
+        repaired.payloadData = encodePayload(record, logicalAssets,
+                                             payloadContext);
+        repaired.updatedAt = QDateTime::currentDateTimeUtc();
+
+        if (repaired.payloadData.isEmpty() ||
+            !d->persistence.compareAndUpdateTransaction(
+                repaired, transaction->state, transaction->generation))
+        {
+            return failure(
+                PrivacyExternalCheckoutStatus::PersistenceFailure,
+                transactionUuid, transaction->itemUuid,
+                QStringLiteral("preserved checkout is safe but its catalogue path still needs recovery"));
+        }
+
+        checkoutStoreLocation = PrivacyCheckoutStoreLocation::Recovery;
+        inventoryAvailable = true;
+    }
 
     if (!inventoryAvailable &&
         !((transaction->state == PrivacyTransactionState::Relocking) &&
@@ -1669,10 +1824,7 @@ PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::reconcil
 
         if (entry == entries.constEnd())
         {
-            if (transaction->state != PrivacyTransactionState::Relocking)
-            {
-                changed = true;
-            }
+            changed = true;
         }
         else if ((entry->kind != PrivacyCheckoutEntryKind::RegularFile) ||
                  (entry->size != journalIt->original.size) ||
@@ -1689,6 +1841,22 @@ PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::reconcil
         {
             changed = true;
         }
+    }
+
+    const bool cleanupAlreadyRemoved =
+        (transaction->state == PrivacyTransactionState::Relocking) &&
+        !inventoryAvailable &&
+        (storeError == PrivacyCheckoutStoreError::Missing);
+    const bool approvedDiscardInventory =
+        (transaction->state == PrivacyTransactionState::Relocking) &&
+        inventoryAvailable &&
+        !payloadContext.approvedDiscardInventorySha256.isEmpty() &&
+        (inventory.sha256 ==
+         payloadContext.approvedDiscardInventorySha256);
+
+    if (cleanupAlreadyRemoved || approvedDiscardInventory)
+    {
+        changed = false;
     }
 
     if (changed)
@@ -1715,6 +1883,7 @@ PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::reconcil
             PrivacyTransaction next = *transaction;
             next.state = PrivacyTransactionState::NeedsReconciliation;
             next.generation = transaction->generation + 1;
+            payloadContext.approvedDiscardInventorySha256.clear();
             next.payloadData = encodePayload(pending, logicalAssets,
                                              payloadContext);
             next.updatedAt = QDateTime::currentDateTimeUtc();
@@ -1831,6 +2000,207 @@ PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::reconcil
     return d->assetsResult(
         PrivacyExternalCheckoutStatus::CompletedUnchanged, *publicRoot, complete,
         logicalAssets);
+}
+
+PrivacyExternalCheckoutResult
+PrivacyExternalCheckoutTransactionEngine::resolveChanges(
+    const PrivacyExternalCheckoutStoreAccess& storeAccess,
+    const QString& transactionUuid,
+    PrivacyExternalCheckoutDecision decision)
+{
+    if (!validStoreAccess(storeAccess) || !canonicalUuid(transactionUuid) ||
+        ((decision != PrivacyExternalCheckoutDecision::PreserveForLater) &&
+         (decision != PrivacyExternalCheckoutDecision::ConfirmedDiscard)))
+    {
+        return failure(PrivacyExternalCheckoutStatus::InvalidRequest,
+                       transactionUuid, {},
+                       QStringLiteral("checkout decision request is invalid"));
+    }
+
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!d->load(&snapshot))
+    {
+        return failure(PrivacyExternalCheckoutStatus::PersistenceFailure,
+                       transactionUuid, {},
+                       QStringLiteral("cannot load checkout decision state"));
+    }
+
+    const PrivacyTransaction* const transaction = transactionFor(
+        snapshot, transactionUuid);
+    const PrivacyTransactionJournal* const databaseJournal = databaseJournalFor(
+        snapshot, transactionUuid, storeAccess.root.uuid);
+    PrivacyJournalRecord record;
+    QList<LogicalAsset> logicalAssets;
+    CheckoutPayloadContext payloadContext;
+
+    if (!transaction || !databaseJournal ||
+        (transaction->type != PrivacyTransactionType::ExternalCheckout) ||
+        ((transaction->state != PrivacyTransactionState::NeedsReconciliation) &&
+         (transaction->state != PrivacyTransactionState::Relocking)) ||
+        !decodePayload(transaction->payloadData, &record, &logicalAssets,
+                       &payloadContext) ||
+        (record.stage != PrivacyJournalStage::ReconciliationRequired) ||
+        (databaseJournal->stage != static_cast<int>(record.stage)) ||
+        (record.rootUuid != storeAccess.root.uuid) ||
+        (record.rootDevice != storeAccess.rootExpectation.device) ||
+        (record.rootInode != storeAccess.rootExpectation.inode) ||
+        (record.rootIdentitySha256 !=
+         storeAccess.rootExpectation.identitySha256) ||
+        (payloadContext.storeUuid != storeAccess.storeUuid))
+    {
+        return failure(PrivacyExternalCheckoutStatus::RecoveryRequired,
+                       transactionUuid,
+                       transaction ? transaction->itemUuid : QString(),
+                       QStringLiteral("checkout decision evidence is incomplete"));
+    }
+
+    if (decision == PrivacyExternalCheckoutDecision::ConfirmedDiscard)
+    {
+        if (transaction->state == PrivacyTransactionState::NeedsReconciliation)
+        {
+            PrivacyCheckoutStoreLocation location;
+            QString detail;
+            PrivacyCheckoutStoreError storeError =
+                PrivacyCheckoutStoreError::None;
+            std::unique_ptr<PrivacyCheckoutStore> store =
+                PrivacyCheckoutStore::open(storeAccess.plaintextRoot,
+                                           &storeError, &detail);
+            PrivacyCheckoutInventory approvedInventory;
+
+            if (!checkoutLocation(logicalAssets, transactionUuid, &location) ||
+                !store ||
+                !store->reopenTransaction(transactionUuid, location, nullptr,
+                                          &storeError, &detail) ||
+                !store->inventory(transactionUuid, location,
+                                  &approvedInventory, &storeError, &detail))
+            {
+                return failure(
+                    PrivacyExternalCheckoutStatus::CheckoutFailure,
+                    transactionUuid, transaction->itemUuid,
+                    detail.isEmpty()
+                        ? QStringLiteral("checkout discard inventory is unavailable")
+                        : detail);
+            }
+
+            payloadContext.approvedDiscardInventorySha256 =
+                approvedInventory.sha256;
+            PrivacyTransaction relocking = *transaction;
+            relocking.state = PrivacyTransactionState::Relocking;
+            relocking.generation = transaction->generation + 1;
+            relocking.payloadData = encodePayload(record, logicalAssets,
+                                                  payloadContext);
+            relocking.updatedAt = QDateTime::currentDateTimeUtc();
+
+            if (relocking.payloadData.isEmpty() ||
+                !d->persistence.compareAndUpdateTransaction(
+                    relocking, transaction->state, transaction->generation))
+            {
+                return failure(
+                    PrivacyExternalCheckoutStatus::PersistenceFailure,
+                    transactionUuid, transaction->itemUuid,
+                    QStringLiteral("confirmed checkout discard was not recorded"));
+            }
+        }
+
+        return reconcile(storeAccess, transactionUuid);
+    }
+
+    if (transaction->state == PrivacyTransactionState::Relocking)
+    {
+        return failure(PrivacyExternalCheckoutStatus::RecoveryRequired,
+                       transactionUuid, transaction->itemUuid,
+                       QStringLiteral("confirmed checkout cleanup is already active"));
+    }
+
+    const PrivacyStorageRoot* const publicRoot = storageRootFor(
+        snapshot, payloadContext.publicRootExpectation.rootUuid);
+    PrivacyCheckoutStoreLocation location;
+
+    if (!publicRoot ||
+        !checkoutLocation(logicalAssets, transactionUuid, &location))
+    {
+        return failure(PrivacyExternalCheckoutStatus::RecoveryRequired,
+                       transactionUuid, transaction->itemUuid,
+                       QStringLiteral("preserved checkout mapping is invalid"));
+    }
+
+    QString detail;
+    PrivacyCheckoutStoreError storeError = PrivacyCheckoutStoreError::None;
+    std::unique_ptr<PrivacyCheckoutStore> store = PrivacyCheckoutStore::open(
+        storeAccess.plaintextRoot, &storeError, &detail);
+    PrivacyCheckoutInventory inventory;
+
+    if (!store)
+    {
+        return failure(PrivacyExternalCheckoutStatus::RootUnavailable,
+                       transactionUuid, transaction->itemUuid, detail);
+    }
+
+    bool recoveredMove = false;
+
+    if (!store->reopenTransaction(transactionUuid, location, nullptr,
+                                  &storeError, &detail))
+    {
+        if ((location != PrivacyCheckoutStoreLocation::Checkout) ||
+            (storeError != PrivacyCheckoutStoreError::Missing) ||
+            !store->reopenTransaction(
+                transactionUuid, PrivacyCheckoutStoreLocation::Recovery,
+                nullptr, &storeError, &detail))
+        {
+            return failure(PrivacyExternalCheckoutStatus::CheckoutFailure,
+                           transactionUuid, transaction->itemUuid, detail);
+        }
+
+        location = PrivacyCheckoutStoreLocation::Recovery;
+        recoveredMove = true;
+    }
+
+    if (location == PrivacyCheckoutStoreLocation::Checkout)
+    {
+        if (!store->moveToRecovery(transactionUuid, nullptr, &storeError,
+                                   &detail))
+        {
+            return failure(PrivacyExternalCheckoutStatus::CheckoutFailure,
+                           transactionUuid, transaction->itemUuid, detail);
+        }
+
+        location = PrivacyCheckoutStoreLocation::Recovery;
+        recoveredMove = true;
+    }
+
+    if ((recoveredMove &&
+         !rewriteCheckoutLocation(&logicalAssets, transactionUuid, location)) ||
+        !store->inventory(transactionUuid, location, &inventory, &storeError,
+                          &detail))
+    {
+        return failure(PrivacyExternalCheckoutStatus::CheckoutFailure,
+                       transactionUuid, transaction->itemUuid, detail);
+    }
+
+    if (recoveredMove)
+    {
+        PrivacyTransaction preserved = *transaction;
+        preserved.generation = transaction->generation + 1;
+        preserved.payloadData = encodePayload(record, logicalAssets,
+                                              payloadContext);
+        preserved.updatedAt = QDateTime::currentDateTimeUtc();
+
+        if (preserved.payloadData.isEmpty() ||
+            !d->persistence.compareAndUpdateTransaction(
+                preserved, transaction->state, transaction->generation))
+        {
+            return failure(
+                PrivacyExternalCheckoutStatus::PersistenceFailure,
+                transactionUuid, transaction->itemUuid,
+                QStringLiteral("checkout is encrypted in recovery storage but its catalogue path needs recovery"));
+        }
+    }
+
+    return d->assetsResult(
+        PrivacyExternalCheckoutStatus::ChangesPending, *publicRoot, record,
+        logicalAssets, store.get(), &inventory,
+        QStringLiteral("external changes are preserved for later reconciliation"));
 }
 
 PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::recover(
