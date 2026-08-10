@@ -177,7 +177,6 @@ optional_packages=("ruby"                               # For i18n extraction
                    "libsm-dev"
                    "freeglut3-dev"
                    "libinput-dev"
-                   "libfdk-aac-dev"
                    "libx264-dev"
                    "libx265-dev"
                    "libxvidcore-dev"

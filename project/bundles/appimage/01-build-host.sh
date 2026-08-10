@@ -94,6 +94,11 @@ cmake --build . --config RelWithDebInfo --target ext_libaom          -- -j$CPU_C
 cmake --build . --config RelWithDebInfo --target ext_libavif         -- -j$CPU_CORES
 cmake --build . --config RelWithDebInfo --target ext_ffmpeg          -- -j$CPU_CORES
 
+if /usr/bin/ffmpeg -version | grep -Eq -- '--enable-(nonfree|libfdk-aac)' ; then
+    echo "ERROR: bundled FFmpeg is not redistributable"
+    exit 1
+fi
+
 #################################################################################################
 
 cd $BUILDING_DIR
