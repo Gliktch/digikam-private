@@ -1,3 +1,16 @@
+# digiKam Private
+
+This repository is an unreleased privacy-focused digiKam fork. It replaces
+protected collection files with safe display proxies while retaining
+recoverable encrypted originals. See [backup and recovery](docs/PRIVATE-RECOVERY.md)
+before testing it with valuable media.
+
+The fork is based on digiKam's 9.2 development branch. It is not an official
+digiKam release and should be tested with disposable or fully backed-up
+collections until v1 validation is complete.
+
+---
+
 # <img src="core/data/pics/digikam/logo-digikam.webp" width="48"/> DigiKam - Professional Photo Management with the Power of Open Source
 
 | CI Job        | Status                                                                                                                                                                                                  |

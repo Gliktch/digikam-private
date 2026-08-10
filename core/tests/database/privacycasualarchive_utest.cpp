@@ -19,7 +19,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QSet>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimeZone>
@@ -328,6 +330,7 @@ class PrivacyCasualArchiveTest : public QObject
 private Q_SLOTS:
 
     void testCapabilitiesAndArchivePolicy();
+    void testStandardToolRecovery();
     void testResumeVerifiedStageFromJournalFacts();
     void testPublicationConflictAndReplacement();
     void testRejectsUnsafeInputsAndCancellation();
@@ -424,6 +427,54 @@ void PrivacyCasualArchiveTest::testCapabilitiesAndArchivePolicy()
     QVERIFY(QFileInfo::exists(finalPath));
     QCOMPARE(fileHash(finalPath), stagedHash);
     QVERIFY(inspectArchive(finalPath, password, expected));
+}
+
+void PrivacyCasualArchiveTest::testStandardToolRecovery()
+{
+    const QString unzip = QStandardPaths::findExecutable(QLatin1String("unzip"));
+
+    if (unzip.isEmpty())
+    {
+        QSKIP("Info-ZIP unzip is unavailable");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QByteArray payload("independent recovery payload\0bytes", 34);
+    const QString sourcePath = directory.filePath(QLatin1String("source.bin"));
+    const QString archivePath = directory.filePath(
+        QLatin1String("holiday.jpg.digikam-private.zip"));
+    const QString restorePath = directory.filePath(QLatin1String("restored"));
+    const PrivacyPassword password = PrivacyPassword::fromUnicode(
+        QLatin1String("external-recovery-passphrase"));
+    const PrivacyCasualArchiveMember member = makeMember(
+        sourcePath, QLatin1String("holiday.jpg"), PrivacyAsset::PrimaryMediaRole, 0);
+    PrivacyCasualArchiveEngine engine;
+    PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
+
+    QVERIFY(writeBytes(sourcePath, payload));
+    auto stage = engine.stageArchive(makeRequest(archivePath, { member }),
+                                     password, {}, &error);
+    QVERIFY2(stage.isValid(), qPrintable(QString::number(static_cast<int>(error))));
+    QVERIFY(engine.publishNew(&stage, &error));
+    QVERIFY(QDir().mkpath(restorePath));
+
+    QProcess process;
+    process.setProgram(unzip);
+    process.setArguments({ QLatin1String("-qq"), QLatin1String("-P"),
+                           QLatin1String("external-recovery-passphrase"),
+                           archivePath, QLatin1String("-d"), restorePath });
+    process.start();
+    QVERIFY(process.waitForFinished(30000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(process.exitCode(), 0);
+
+    QFile restored(QDir(restorePath).filePath(member.protectedRelativePath));
+    QVERIFY(restored.open(QIODevice::ReadOnly));
+    QCOMPARE(restored.readAll(), payload);
+    QVERIFY(QFileInfo::exists(QDir(restorePath).filePath(
+        PrivacyCasualArchiveEngine::manifestMemberName())));
 }
 
 void PrivacyCasualArchiveTest::testPreparedOriginalReader()
