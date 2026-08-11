@@ -12,8 +12,12 @@
 
 // Qt includes
 
+#include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QMap>
 #include <QSet>
 #include <QStringList>
 #include <QUuid>
@@ -21,10 +25,12 @@
 // C++ includes
 
 #include <algorithm>
+#include <memory>
 
 // Local includes
 
 #include "privacycasualarchive.h"
+#include "privacystrongrecoverymanifest.h"
 
 namespace Digikam
 {
@@ -76,6 +82,48 @@ bool isSafePublicRelativePath(const QString& path)
     return true;
 }
 
+bool isSafeContainerRelativePath(const QString& path)
+{
+    return isSafePublicRelativePath(path);
+}
+
+bool hashFile(const QString& path, QByteArray* const digest,
+              qlonglong* const size)
+{
+    QFile file(path);
+
+    if (!digest || !size || !file.open(QIODevice::ReadOnly))
+    {
+        return false;
+    }
+
+    QCryptographicHash hasher(QCryptographicHash::Sha256);
+    QByteArray buffer(1024 * 1024, Qt::Uninitialized);
+    qlonglong total = 0;
+
+    while (true)
+    {
+        const qint64 count = file.read(buffer.data(), buffer.size());
+
+        if (count < 0)
+        {
+            return false;
+        }
+
+        if (count == 0)
+        {
+            break;
+        }
+
+        hasher.addData(QByteArrayView(buffer.constData(), count));
+        total += count;
+    }
+
+    *digest = hasher.result();
+    *size = total;
+    return true;
+}
+
 PrivacyPortableImportAuthenticationResult failure(
     PrivacyPortableImportAuthenticationStatus status,
     const QString& detail)
@@ -90,12 +138,20 @@ PrivacyPortableImportAuthenticationResult failure(
 
 bool PrivacyPortableImportAssetFact::isValid() const
 {
+    const bool casualPath =
+        (protectedRelativePath ==
+         PrivacyCasualArchiveEngine::expectedMemberPath(
+             role, ordinal, originalName));
+    const bool strongPath =
+        protectedRelativePath.startsWith(QLatin1String("originals/")) &&
+        protectedRelativePath.endsWith(
+            QLatin1String("/") + QString::number(ordinal) +
+            QLatin1Char('-') + originalName);
+
     return ((role > 0) && (ordinal >= 0) &&
             isSafeOriginalName(originalName) &&
             isSafePublicRelativePath(publicRelativePath) &&
-            (protectedRelativePath ==
-             PrivacyCasualArchiveEngine::expectedMemberPath(
-                 role, ordinal, originalName)) &&
+            (casualPath || strongPath) &&
             (hashAlgorithm == QLatin1String("sha256")) &&
             (originalSha256.size() == 32) && (originalSize >= 0) &&
             (portableAttributes.size() <= 64 * 1024) &&
@@ -104,25 +160,248 @@ bool PrivacyPortableImportAssetFact::isValid() const
 
 bool PrivacyPortableImportItemFact::isValid() const
 {
+    const bool validKind =
+        ((containerKind == PrivacyContainerKind::CasualArchive) ||
+         (containerKind == PrivacyContainerKind::StrongObject));
+    const bool validSource =
+        ((containerKind == PrivacyContainerKind::CasualArchive) &&
+         QDir::isAbsolutePath(sourceAbsolutePath) &&
+         isSafeContainerRelativePath(containerRelativePath)) ||
+        ((containerKind == PrivacyContainerKind::StrongObject) &&
+         sourceAbsolutePath.isEmpty() &&
+         containerRelativePath.startsWith(QLatin1String("originals/")));
+
     return (isCanonicalUuid(itemUuid) &&
             isCanonicalUuid(containerUuid) &&
-            QDir::isAbsolutePath(archiveAbsolutePath) &&
-            !proxyRelativePath.isEmpty() &&
-            (archiveSize >= 0) && (archiveSha256.size() == 32) &&
+            validKind && validSource &&
+            isSafePublicRelativePath(proxyRelativePath) &&
+            (containerSize >= 0) && (containerSha256.size() == 32) &&
             !assets.isEmpty());
 }
 
 bool PrivacyPortableImportCandidate::isValid() const
 {
+    const bool validCredential =
+        hasCredential
+            ? (isCanonicalUuid(storeUuid) &&
+               QDir::isAbsolutePath(managedStoreRootPath) &&
+               isSafeContainerRelativePath(cipherRelativePath) &&
+               !credentialEnvelopeFormat.isEmpty() &&
+               !credentialEnvelopeBlob.isEmpty())
+            : (storeUuid.isEmpty() &&
+               managedStoreRootPath.isEmpty() &&
+               cipherRelativePath.isEmpty() &&
+               credentialEnvelopeFormat.isEmpty() &&
+               credentialEnvelopeBlob.isEmpty());
+
     return (isCanonicalUuid(recoverySetUuid) &&
-            (backend == PrivacyBackend::Casual) &&
-            isCanonicalUuid(categoryUuid) && !items.isEmpty());
+            ((backend == PrivacyBackend::Casual) ||
+             (backend == PrivacyBackend::Strong)) &&
+            isCanonicalUuid(categoryUuid) && validCredential &&
+            !items.isEmpty());
+}
+
+class Q_DECL_HIDDEN PrivacyGocryptfsPortableStoreInspector::Private
+{
+public:
+
+    struct ActiveInspection
+    {
+        QString workspaceRoot;
+        PrivacyGocryptfsStoreLayout layout;
+        std::unique_ptr<PrivacyGocryptfsMountLease> lease;
+    };
+
+    Private(PrivacyProcessRunner& runner,
+            const PrivacyMountStateProbe& mountProbe,
+            PrivacyGocryptfsToolPaths toolPaths,
+            QString workspaceRoot)
+        : m_runner(runner),
+          m_mountProbe(mountProbe),
+          m_toolPaths(std::move(toolPaths)),
+          m_workspaceRoot(std::move(workspaceRoot))
+    {
+    }
+
+    PrivacyProcessRunner&          m_runner;
+    const PrivacyMountStateProbe&  m_mountProbe;
+    PrivacyGocryptfsToolPaths      m_toolPaths;
+    QString                        m_workspaceRoot;
+    QMap<QString, std::shared_ptr<ActiveInspection>> m_active;
+};
+
+PrivacyGocryptfsPortableStoreInspector::PrivacyGocryptfsPortableStoreInspector(
+    PrivacyProcessRunner& runner,
+    const PrivacyMountStateProbe& mountProbe,
+    PrivacyGocryptfsToolPaths toolPaths,
+    QString workspaceRoot)
+    : d(new Private(runner, mountProbe, std::move(toolPaths),
+                    std::move(workspaceRoot)))
+{
+}
+
+PrivacyGocryptfsPortableStoreInspector::~PrivacyGocryptfsPortableStoreInspector()
+{
+    const QList<QString> keys = d->m_active.keys();
+
+    for (const QString& key : keys)
+    {
+        PrivacyPortableStoreInspection inspection;
+        inspection.valid = true;
+        inspection.plaintextRoot = key;
+        QString error;
+        release(inspection, &error);
+    }
+}
+
+bool PrivacyGocryptfsPortableStoreInspector::inspect(
+    const PrivacyPortableStrongStoreCandidate& store,
+    const PrivacyPassword& password,
+    PrivacyPortableStoreInspection* const inspection,
+    QString* const error)
+{
+    const auto fail = [error](const QString& detail)
+    {
+        if (error)
+        {
+            *error = detail;
+        }
+
+        return false;
+    };
+
+    if (!inspection || !store.isValid() || !password.isValid() ||
+        !QDir::isAbsolutePath(d->m_workspaceRoot))
+    {
+        return fail(QStringLiteral("invalid store inspection request"));
+    }
+
+    *inspection = PrivacyPortableStoreInspection();
+    const QString workspaceRoot = QDir(d->m_workspaceRoot).filePath(
+        QLatin1String("import-") +
+        QUuid::createUuid().toString(QUuid::WithoutBraces));
+
+    if (!QDir().mkpath(workspaceRoot) ||
+        !QFile::setPermissions(workspaceRoot,
+                               QFileDevice::ReadOwner |
+                               QFileDevice::WriteOwner |
+                               QFileDevice::ExeOwner))
+    {
+        return fail(QStringLiteral("the import inspection workspace could not be created"));
+    }
+
+    PrivacyGocryptfsStoreLayout layout;
+    layout.workspaceRoot = workspaceRoot;
+    layout.cipherDirectory = QFileInfo(store.configAbsolutePath).absolutePath();
+    layout.mountDirectory = QDir(workspaceRoot).filePath(QLatin1String("mount"));
+    layout.runtimeDirectory = QDir(workspaceRoot).filePath(QLatin1String("runtime"));
+    PrivacyGocryptfsStoreHarness harness(
+        d->m_runner, d->m_mountProbe, d->m_toolPaths, layout);
+    PrivacyGocryptfsError harnessError = PrivacyGocryptfsError::None;
+
+    if (!harness.checkCapabilities(&harnessError))
+    {
+        QDir(workspaceRoot).removeRecursively();
+        return fail(QStringLiteral("the bundled gocryptfs tooling is unavailable"));
+    }
+
+    std::unique_ptr<PrivacyGocryptfsMountLease> lease =
+        harness.mountStoreForInspection(password, &harnessError);
+
+    if (!lease)
+    {
+        QDir(workspaceRoot).removeRecursively();
+
+        if (harnessError == PrivacyGocryptfsError::InvalidPassword)
+        {
+            return fail(QStringLiteral("the store password is invalid"));
+        }
+
+        return fail(QStringLiteral("the copied store could not be mounted"));
+    }
+
+    QFile sentinelFile(harness.sentinelPath());
+
+    if (!sentinelFile.open(QIODevice::ReadOnly) ||
+        (sentinelFile.size() > 4096))
+    {
+        PrivacyGocryptfsError releaseError = PrivacyGocryptfsError::None;
+        harness.unmountStore(*lease, &releaseError);
+        QDir(workspaceRoot).removeRecursively();
+        return fail(QStringLiteral("the mounted store sentinel is missing"));
+    }
+
+    QString sentinelCategory;
+    QString sentinelStore;
+
+    if (!PrivacyGocryptfsSentinelCodec::decode(
+            sentinelFile.readAll(), &sentinelCategory, &sentinelStore))
+    {
+        PrivacyGocryptfsError releaseError = PrivacyGocryptfsError::None;
+        harness.unmountStore(*lease, &releaseError);
+        QDir(workspaceRoot).removeRecursively();
+        return fail(QStringLiteral("the mounted store sentinel is invalid"));
+    }
+
+    Private::ActiveInspection entry;
+    entry.workspaceRoot = workspaceRoot;
+    entry.layout = layout;
+    entry.lease = std::move(lease);
+    d->m_active.insert(
+        harness.mountDirectory(),
+        std::make_shared<Private::ActiveInspection>(std::move(entry)));
+
+    inspection->valid = true;
+    inspection->plaintextRoot = harness.mountDirectory();
+    inspection->sentinelCategoryUuid = sentinelCategory;
+    inspection->sentinelStoreUuid = sentinelStore;
+    return true;
+}
+
+bool PrivacyGocryptfsPortableStoreInspector::release(
+    const PrivacyPortableStoreInspection& inspection,
+    QString* const error)
+{
+    const auto fail = [error](const QString& detail)
+    {
+        if (error)
+        {
+            *error = detail;
+        }
+
+        return false;
+    };
+
+    if (!inspection.valid ||
+        !d->m_active.contains(inspection.plaintextRoot))
+    {
+        return fail(QStringLiteral("unknown store inspection"));
+    }
+
+    const std::shared_ptr<Private::ActiveInspection> entry =
+        d->m_active.take(inspection.plaintextRoot);
+    PrivacyGocryptfsStoreHarness harness(
+        d->m_runner, d->m_mountProbe, d->m_toolPaths, entry->layout);
+    PrivacyGocryptfsError harnessError = PrivacyGocryptfsError::None;
+    const bool unmounted =
+        harness.unmountStore(*entry->lease, &harnessError);
+    entry->lease.reset();
+
+    if (!unmounted)
+    {
+        return fail(QStringLiteral("the store could not be unmounted"));
+    }
+
+    QDir(entry->workspaceRoot).removeRecursively();
+    return true;
 }
 
 PrivacyPortableImportAuthenticationResult
 PrivacyPortableImportAuthenticator::authenticateCasual(
     const PrivacyPortableDiscoveryGroup& group,
+    const QList<PrivacyPortableStrongStoreCandidate>& storeCandidates,
     const PrivacyPassword& password,
+    PrivacyPortableStoreInspector& inspector,
     const CancellationCheck& isCancelled)
 {
     if (!password.isValid())
@@ -134,7 +413,7 @@ PrivacyPortableImportAuthenticator::authenticateCasual(
     if (group.backend != PrivacyBackend::Casual)
     {
         return failure(PrivacyPortableImportAuthenticationStatus::UnsupportedBackend,
-                       QStringLiteral("Strong portable import authentication is not available yet"));
+                       QStringLiteral("Casual authentication cannot verify a Strong group"));
     }
 
     if (group.casualArchives.isEmpty())
@@ -220,10 +499,12 @@ PrivacyPortableImportAuthenticator::authenticateCasual(
         PrivacyPortableImportItemFact item;
         item.itemUuid = manifest.itemUuid;
         item.containerUuid = manifest.containerUuid;
-        item.archiveAbsolutePath = archive.absolutePath;
+        item.containerKind = PrivacyContainerKind::CasualArchive;
+        item.containerRelativePath = archive.relativePath;
         item.proxyRelativePath = archive.proxyRelativePath;
-        item.archiveSize = identity.archiveSize;
-        item.archiveSha256 = identity.sha256;
+        item.sourceAbsolutePath = archive.absolutePath;
+        item.containerSize = identity.archiveSize;
+        item.containerSha256 = identity.sha256;
 
         for (const PrivacyCasualArchiveManifestMember& member :
              manifest.members)
@@ -274,6 +555,333 @@ PrivacyPortableImportAuthenticator::authenticateCasual(
         return failure(
             PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
             QStringLiteral("the authenticated import candidate is invalid"));
+    }
+
+    // Link a copied store: mount candidates with the same password and match
+    // the sentinel's category UUID (and cipher-directory store UUID).
+    QSet<QString> seenStoreUuids;
+    PrivacyPortableStrongStoreCandidate matchedStore;
+    bool storeMatched = false;
+
+    for (const PrivacyPortableStrongStoreCandidate& store :
+         storeCandidates)
+    {
+        if (!store.isValid() || seenStoreUuids.contains(store.storeUuid))
+        {
+            continue;
+        }
+
+        seenStoreUuids.insert(store.storeUuid);
+        PrivacyPortableStoreInspection inspection;
+        QString inspectError;
+
+        if (!inspector.inspect(store, password, &inspection, &inspectError))
+        {
+            continue;
+        }
+
+        const bool identityMatches =
+            (inspection.sentinelCategoryUuid == candidate.categoryUuid) &&
+            (inspection.sentinelStoreUuid == store.storeUuid);
+        QString releaseError;
+        inspector.release(inspection, &releaseError);
+
+        if (!identityMatches)
+        {
+            continue;
+        }
+
+        if (storeMatched &&
+            (matchedStore.configAbsolutePath != store.configAbsolutePath))
+        {
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                QStringLiteral("two different copied stores claim the same category"));
+        }
+
+        storeMatched = true;
+        matchedStore = store;
+    }
+
+    if (storeMatched)
+    {
+        QFile configFile(matchedStore.configAbsolutePath);
+
+        if (!configFile.open(QIODevice::ReadOnly) ||
+            (configFile.size() > 1024 * 1024))
+        {
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                QStringLiteral("the matched store configuration could not be read"));
+        }
+
+        candidate.hasCredential = true;
+        candidate.storeUuid = matchedStore.storeUuid;
+        candidate.managedStoreRootPath = matchedStore.rootPath;
+        candidate.cipherRelativePath = matchedStore.cipherRelativePath;
+        candidate.credentialEnvelopeFormat = QLatin1String("gocryptfs-config-v2");
+        candidate.credentialEnvelopeBlob = configFile.readAll();
+
+        if (!candidate.isValid())
+        {
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                QStringLiteral("the linked store candidate is invalid"));
+        }
+    }
+
+    PrivacyPortableImportAuthenticationResult result;
+    result.status = PrivacyPortableImportAuthenticationStatus::Authenticated;
+    result.candidate = candidate;
+    return result;
+}
+
+PrivacyPortableImportAuthenticationResult
+PrivacyPortableImportAuthenticator::authenticateStrong(
+    const PrivacyPortableDiscoveryGroup& group,
+    const PrivacyPassword& password,
+    PrivacyPortableStoreInspector& inspector,
+    const CancellationCheck& isCancelled)
+{
+    if (!password.isValid())
+    {
+        return failure(PrivacyPortableImportAuthenticationStatus::InvalidRequest,
+                       QStringLiteral("the category password is invalid"));
+    }
+
+    if (group.backend != PrivacyBackend::Strong)
+    {
+        return failure(PrivacyPortableImportAuthenticationStatus::UnsupportedBackend,
+                       QStringLiteral("Strong authentication requires a Strong discovery group"));
+    }
+
+    if (group.strongStores.isEmpty())
+    {
+        return failure(PrivacyPortableImportAuthenticationStatus::InvalidRequest,
+                       QStringLiteral("the discovery group has no Strong store"));
+    }
+
+    if (isCancelled && isCancelled())
+    {
+        return failure(PrivacyPortableImportAuthenticationStatus::Cancelled,
+                       QStringLiteral("import authentication was cancelled"));
+    }
+
+    const PrivacyPortableStrongStoreCandidate& store =
+        group.strongStores.constFirst();
+
+    for (const PrivacyPortableStrongStoreCandidate& other :
+         group.strongStores)
+    {
+        if (other.configAbsolutePath != store.configAbsolutePath)
+        {
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                QStringLiteral("one recovery identity has conflicting Strong stores"));
+        }
+    }
+
+    PrivacyPortableStoreInspection inspection;
+    QString inspectError;
+
+    if (!inspector.inspect(store, password, &inspection, &inspectError))
+    {
+        if (inspectError.contains(QLatin1String("password")))
+        {
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InvalidPassword,
+                inspectError);
+        }
+
+        return failure(
+            PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+            inspectError);
+    }
+
+    const auto releaseInspection = [&inspector, &inspection]()
+    {
+        QString releaseError;
+        inspector.release(inspection, &releaseError);
+    };
+
+    if ((inspection.sentinelStoreUuid != store.storeUuid) ||
+        inspection.sentinelCategoryUuid.isEmpty())
+    {
+        releaseInspection();
+        return failure(
+            PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+            QStringLiteral("the store sentinel does not match the discovered store"));
+    }
+
+    PrivacyStrongRecoveryManifest manifest;
+    PrivacyStrongRecoveryManifestError manifestError =
+        PrivacyStrongRecoveryManifestError::None;
+
+    if (!PrivacyStrongRecoveryManifestStore::load(
+            inspection.plaintextRoot, &manifest, &manifestError) ||
+        !manifest.isValid() ||
+        (manifest.storeUuid != store.storeUuid))
+    {
+        releaseInspection();
+        return failure(
+            PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+            QStringLiteral("the vault recovery manifest is invalid or mismatched"));
+    }
+
+    PrivacyPortableImportCandidate candidate;
+    candidate.recoverySetUuid = store.storeUuid;
+    candidate.backend = PrivacyBackend::Strong;
+    candidate.categoryUuid = manifest.categoryUuid;
+    candidate.categoryName = manifest.categoryName;
+    candidate.hasCredential = true;
+    candidate.storeUuid = store.storeUuid;
+    candidate.managedStoreRootPath = store.rootPath;
+    candidate.cipherRelativePath = store.cipherRelativePath;
+    candidate.credentialEnvelopeFormat = QLatin1String("gocryptfs-config-v2");
+    QFile configFile(store.configAbsolutePath);
+
+    if (!configFile.open(QIODevice::ReadOnly) ||
+        (configFile.size() > 1024 * 1024))
+    {
+        releaseInspection();
+        return failure(
+            PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+            QStringLiteral("the store configuration could not be read"));
+    }
+
+    candidate.credentialEnvelopeBlob = configFile.readAll();
+    QSet<QString> itemUuids;
+
+    for (const PrivacyStrongRecoveryItem& recoveryItem :
+         std::as_const(manifest.items))
+    {
+        if (isCancelled && isCancelled())
+        {
+            releaseInspection();
+            return failure(PrivacyPortableImportAuthenticationStatus::Cancelled,
+                           QStringLiteral("import authentication was cancelled"));
+        }
+
+        if (!recoveryItem.isValid() ||
+            itemUuids.contains(recoveryItem.itemUuid))
+        {
+            releaseInspection();
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                QStringLiteral("the vault manifest has invalid or duplicate items"));
+        }
+
+        itemUuids.insert(recoveryItem.itemUuid);
+        PrivacyPortableImportItemFact item;
+        item.itemUuid = recoveryItem.itemUuid;
+        item.containerUuid = recoveryItem.containerUuid;
+        item.containerKind = PrivacyContainerKind::StrongObject;
+
+        if (recoveryItem.members.isEmpty())
+        {
+            releaseInspection();
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                QStringLiteral("a vault item has no members"));
+        }
+
+        const QString containerRelativePath =
+            QFileInfo(recoveryItem.members.constFirst().vaultRelativePath)
+                .path();
+        item.containerRelativePath = containerRelativePath;
+        qlonglong totalSize = 0;
+        QByteArray combined;
+        const PrivacyStrongRecoveryMember* primary = nullptr;
+
+        for (const PrivacyStrongRecoveryMember& member :
+             recoveryItem.members)
+        {
+            if (!member.isValid() ||
+                (QFileInfo(member.vaultRelativePath).path() !=
+                 containerRelativePath))
+            {
+                releaseInspection();
+                return failure(
+                    PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                    QStringLiteral("a vault member path is invalid"));
+            }
+
+            const QString objectPath = QDir(inspection.plaintextRoot).filePath(
+                member.vaultRelativePath);
+            QByteArray digest;
+            qlonglong size = -1;
+
+            if (!hashFile(objectPath, &digest, &size) ||
+                (digest != QByteArray::fromHex(member.sha256Hex.toLatin1())) ||
+                (size != member.size))
+            {
+                releaseInspection();
+                return failure(
+                    PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                    QStringLiteral("a vault object does not match the manifest"));
+            }
+
+            combined += digest;
+            totalSize += size;
+            PrivacyPortableImportAssetFact asset;
+            asset.role = member.role;
+            asset.ordinal = member.ordinal;
+            asset.publicRelativePath = member.publicRelativePath;
+            asset.originalName = member.originalName;
+            asset.protectedRelativePath = member.vaultRelativePath;
+            asset.hashAlgorithm = QLatin1String("sha256");
+            asset.originalSha256 = digest;
+            asset.originalSize = size;
+            asset.creationTimeUtc = member.creationTimeUtc;
+            asset.modificationTimeUtc = member.modificationTimeUtc;
+            asset.portableAttributes = member.portableAttributes;
+            asset.unixMode = member.unixMode;
+            item.assets << asset;
+
+            if ((member.role == PrivacyAsset::PrimaryMediaRole) &&
+                (member.ordinal == 0))
+            {
+                primary = &member;
+            }
+        }
+
+        if (!primary)
+        {
+            releaseInspection();
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                QStringLiteral("a vault item has no primary member"));
+        }
+
+        item.proxyRelativePath = primary->publicRelativePath;
+        item.containerSize = totalSize;
+        item.containerSha256 =
+            QCryptographicHash::hash(combined, QCryptographicHash::Sha256);
+
+        if (!item.isValid())
+        {
+            releaseInspection();
+            return failure(
+                PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+                QStringLiteral("a vault item fact is invalid"));
+        }
+
+        candidate.items << item;
+    }
+
+    releaseInspection();
+    std::sort(candidate.items.begin(), candidate.items.end(),
+              [](const PrivacyPortableImportItemFact& left,
+                 const PrivacyPortableImportItemFact& right)
+              {
+                  return (left.itemUuid < right.itemUuid);
+              });
+
+    if (!candidate.isValid())
+    {
+        return failure(
+            PrivacyPortableImportAuthenticationStatus::InconsistentManifests,
+            QStringLiteral("the authenticated Strong import candidate is invalid"));
     }
 
     PrivacyPortableImportAuthenticationResult result;
