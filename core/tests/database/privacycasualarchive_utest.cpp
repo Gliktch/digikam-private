@@ -44,6 +44,7 @@ const QString CategoryUuid  = QLatin1String("11111111-1111-4111-8111-11111111111
 const QString ContainerUuid = QLatin1String("22222222-2222-4222-8222-222222222222");
 const QString ItemUuid      = QLatin1String("33333333-3333-4333-8333-333333333333");
 const QString RootUuid      = QLatin1String("44444444-4444-4444-8444-444444444444");
+const QString RecoverySetUuid = QLatin1String("55555555-5555-4555-8555-555555555555");
 
 bool writeBytes(const QString& path, const QByteArray& bytes)
 {
@@ -101,6 +102,7 @@ PrivacyCasualArchiveRequest makeRequest(
     request.categoryUuid     = CategoryUuid;
     request.containerUuid    = ContainerUuid;
     request.itemUuid         = ItemUuid;
+    request.recoverySetUuid  = RecoverySetUuid;
     request.members          = members;
 
     return request;
@@ -118,6 +120,7 @@ PrivacyRepositorySnapshot makeOriginalSnapshot(
     PrivacyCategory category;
     category.uuid = CategoryUuid;
     category.name = QLatin1String("Synthetic");
+    category.recoverySetUuid = RecoverySetUuid;
     category.backend = PrivacyBackend::Casual;
     category.presentationMode = PrivacyPresentationMode::Generic;
     category.unlockedThumbnailMode = PrivacyUnlockedThumbnailMode::FocusedClear;
@@ -330,6 +333,7 @@ class PrivacyCasualArchiveTest : public QObject
 private Q_SLOTS:
 
     void testCapabilitiesAndArchivePolicy();
+    void testPublicIdentityInspection();
     void testStandardToolRecovery();
     void testPasswordRewritePreservesExactMembers();
     void testResumeVerifiedStageFromJournalFacts();
@@ -428,6 +432,74 @@ void PrivacyCasualArchiveTest::testCapabilitiesAndArchivePolicy()
     QVERIFY(QFileInfo::exists(finalPath));
     QCOMPARE(fileHash(finalPath), stagedHash);
     QVERIFY(inspectArchive(finalPath, password, expected));
+}
+
+void PrivacyCasualArchiveTest::testPublicIdentityInspection()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString sourcePath = directory.filePath(QLatin1String("source.bin"));
+    const QByteArray sourceBytes("portable identity payload");
+    QVERIFY(writeBytes(sourcePath, sourceBytes));
+
+    const QString finalPath = directory.filePath(
+        QLatin1String("photo.jpg.digikam-private.zip"));
+    PrivacyCasualArchiveEngine engine;
+    const PrivacyPassword password =
+        PrivacyPassword::fromUnicode(QLatin1String("passphrase"));
+    PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
+    auto stage = engine.stageArchive(
+        makeRequest(finalPath,
+                    { makeMember(sourcePath, QLatin1String("photo.jpg"), 1, 0) }),
+        password, {}, &error);
+    QVERIFY(stage.isValid());
+    QVERIFY(engine.publishNew(&stage, &error));
+
+    const PrivacyCasualArchiveIdentity identity =
+        engine.inspectIdentity(finalPath, &error);
+    QVERIFY(identity.valid);
+    QCOMPARE(error, PrivacyCasualArchiveError::None);
+    QCOMPARE(identity.format, QLatin1String("digiKam Private casual-v1"));
+    QCOMPARE(identity.passwordEncoding, QLatin1String("utf8-nfc-v1"));
+    QCOMPARE(identity.recoverySetUuid, RecoverySetUuid);
+    QCOMPARE(identity.archiveSize, QFileInfo(finalPath).size());
+    QCOMPARE(identity.sha256, fileHash(finalPath));
+
+    const QString nonArchivePath = directory.filePath(
+        QLatin1String("ordinary.txt.digikam-private.zip"));
+    QVERIFY(writeBytes(nonArchivePath, QByteArray("not a zip archive")));
+    const PrivacyCasualArchiveIdentity rejected =
+        engine.inspectIdentity(nonArchivePath, &error);
+    QVERIFY(!rejected.valid);
+    QVERIFY(error != PrivacyCasualArchiveError::None);
+
+    const PrivacyCasualArchiveIdentity wrongSuffix =
+        engine.inspectIdentity(sourcePath, &error);
+    QVERIFY(!wrongSuffix.valid);
+    QCOMPARE(error, PrivacyCasualArchiveError::UnsafeDestination);
+
+    PrivacyCasualArchiveRestoreRequest restore;
+    restore.archivePath = finalPath;
+    restore.categoryUuid = CategoryUuid;
+    restore.containerUuid = ContainerUuid;
+    restore.itemUuid = ItemUuid;
+    restore.recoverySetUuid =
+        QLatin1String("99999999-9999-4999-8999-999999999999");
+    restore.protectedRelativePath =
+        QLatin1String("digikam-private/assets/1/0/photo.jpg");
+    restore.originalName = QLatin1String("photo.jpg");
+    restore.role = PrivacyAsset::PrimaryMediaRole;
+    restore.ordinal = 0;
+    restore.expectedArchiveSize = identity.archiveSize;
+    restore.expectedArchiveSha256 = identity.sha256;
+    restore.expectedMemberSize = sourceBytes.size();
+    restore.expectedMemberSha256 =
+        QCryptographicHash::hash(sourceBytes, QCryptographicHash::Sha256);
+    QBuffer buffer;
+    QVERIFY(buffer.open(QIODevice::WriteOnly));
+    QVERIFY(!engine.restoreMember(restore, password, &buffer, {}, &error));
+    QVERIFY(error != PrivacyCasualArchiveError::None);
 }
 
 void PrivacyCasualArchiveTest::testStandardToolRecovery()
@@ -616,7 +688,7 @@ void PrivacyCasualArchiveTest::testResumeVerifiedStageFromJournalFacts()
     QVERIFY(QFileInfo::exists(stagingPath));
     auto badHash = engine.resumeStagedArchive(
         stagingPath, finalPath, archiveSize, QByteArray(32, '\x11'),
-        password, {}, &error);
+        RecoverySetUuid, password, {}, &error);
     QVERIFY(!badHash.isValid());
     QCOMPARE(error, PrivacyCasualArchiveError::HashMismatch);
 
@@ -624,13 +696,13 @@ void PrivacyCasualArchiveTest::testResumeVerifiedStageFromJournalFacts()
         QLatin1String("wrong-passphrase"));
     auto wrongSecret = engine.resumeStagedArchive(
         stagingPath, finalPath, archiveSize, archiveHash,
-        wrongPassword, {}, &error);
+        RecoverySetUuid, wrongPassword, {}, &error);
     QVERIFY(!wrongSecret.isValid());
     QVERIFY(error != PrivacyCasualArchiveError::None);
 
     auto resumed = engine.resumeStagedArchive(
         stagingPath, finalPath, archiveSize, archiveHash,
-        password, {}, &error);
+        RecoverySetUuid, password, {}, &error);
     QVERIFY(resumed.isValid());
     QCOMPARE(error, PrivacyCasualArchiveError::None);
     QVERIFY(engine.publishNew(&resumed, &error));

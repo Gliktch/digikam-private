@@ -987,6 +987,8 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
     PrivacyCategory category;
     category.uuid = categoryUuid;
     category.name = name;
+    category.recoverySetUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
     category.backend = request.backend;
     category.presentationMode = request.presentationMode;
     category.unlockedThumbnailMode = request.unlockedThumbnailMode;

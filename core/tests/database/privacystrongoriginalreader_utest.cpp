@@ -18,6 +18,7 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUuid>
 
 // Local includes
 
@@ -87,6 +88,8 @@ bool buildFixture(const QString& publicRoot,
     PrivacyCategory category;
     category.uuid = CategoryUuid;
     category.name = QLatin1String("Synthetic Strong");
+    category.recoverySetUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
     category.backend = backend;
     category.presentationMode = PrivacyPresentationMode::Generic;
     category.lifecycleState = PrivacyCategoryLifecycleState::Active;

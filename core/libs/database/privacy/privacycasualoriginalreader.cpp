@@ -227,6 +227,7 @@ bool PrivacyCasualOriginalReader::prepareAsset(
     prepared.restore.categoryUuid = category->uuid;
     prepared.restore.containerUuid = container->uuid;
     prepared.restore.itemUuid = item->uuid;
+    prepared.restore.recoverySetUuid = category->recoverySetUuid;
     prepared.restore.protectedRelativePath = selected->protectedRelativePath;
     prepared.restore.originalName = selected->originalName;
     prepared.restore.role = selected->role;

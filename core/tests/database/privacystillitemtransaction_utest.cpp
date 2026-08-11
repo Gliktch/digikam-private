@@ -19,6 +19,7 @@
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QTest>
+#include <QUuid>
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -328,6 +329,8 @@ PrivacyCategory category()
     PrivacyCategory value;
     value.uuid = CategoryUuid;
     value.name = QLatin1String("Synthetic stills");
+    value.recoverySetUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
     value.backend = PrivacyBackend::Casual;
     value.presentationMode = PrivacyPresentationMode::Generic;
     value.lifecycleState = PrivacyCategoryLifecycleState::Active;

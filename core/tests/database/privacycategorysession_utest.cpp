@@ -21,6 +21,7 @@
 #include <QCryptographicHash>
 #include <QSemaphore>
 #include <QTest>
+#include <QUuid>
 
 // Local includes
 
@@ -63,6 +64,8 @@ PrivacyCategory makeCategory()
     PrivacyCategory category;
     category.uuid = CategoryUuid;
     category.name = QLatin1String("Synthetic category");
+    category.recoverySetUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
     category.backend = PrivacyBackend::Casual;
     category.presentationMode = PrivacyPresentationMode::Generic;
     category.lifecycleState = PrivacyCategoryLifecycleState::Active;

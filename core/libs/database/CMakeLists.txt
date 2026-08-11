@@ -128,6 +128,7 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacyderivativestore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacystrongobjectbackend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacystrongrecoverymanifest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacypublicrecoverylocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyvideoproxygenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyrepository.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyscangate.cpp

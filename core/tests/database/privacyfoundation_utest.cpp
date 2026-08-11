@@ -87,6 +87,8 @@ PrivacyCategory makeCategory(const QString& uuid, const QString& name)
     PrivacyCategory category;
     category.uuid      = uuid;
     category.name      = name;
+    category.recoverySetUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
     category.lifecycleState = PrivacyCategoryLifecycleState::Active;
     category.currentCredentialGeneration = 1;
     category.createdAt = QDateTime::currentDateTime();
@@ -261,10 +263,11 @@ bool executeSqliteSchemaScenario(const QDomElement& database,
 
         if (success &&
             !query.exec(QLatin1String("INSERT INTO PrivacyCategories "
-                                      "(uuid, name, backend, presentationMode, unlockedThumbnailMode, "
+                                      "(uuid, name, recoverySetUuid, backend, presentationMode, unlockedThumbnailMode, "
                                       "lifecycleState, currentCredentialGeneration, schemaVersion, createdAt) "
                                       "VALUES ('10000000-0000-0000-0000-000000000001', "
-                                      "'Category', 1, 2, 1, 2, 1, 1, '2026-08-08T00:00:00');")))
+                                      "'Category', 'a0000000-0000-0000-0000-000000000001', 1, 2, 1, 2, 1, 1, "
+                                      "'2026-08-08T00:00:00');")))
         {
             *errorMessage = query.lastError().text();
             success       = false;

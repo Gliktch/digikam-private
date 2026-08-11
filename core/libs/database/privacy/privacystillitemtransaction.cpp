@@ -1262,7 +1262,8 @@ protected:
 bool verifyArchiveMember(const PrivacyCasualArchiveEngine& archive,
                          const PrivacyJournalRecord& record,
                          const QString& archivePath,
-                         const PrivacyPassword& password)
+                         const PrivacyPassword& password,
+                         const QString& recoverySetUuid)
 {
     if (record.assets.isEmpty())
     {
@@ -1276,6 +1277,7 @@ bool verifyArchiveMember(const PrivacyCasualArchiveEngine& archive,
         restore.categoryUuid = record.categoryUuid;
         restore.containerUuid = asset.containerUuid;
         restore.itemUuid = asset.itemUuid;
+        restore.recoverySetUuid = recoverySetUuid;
         restore.protectedRelativePath = asset.protectedRelativePath;
         restore.originalName = QFileInfo(asset.publicRelativePath).fileName();
         restore.role = asset.role;
@@ -2565,6 +2567,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         archiveRequest.categoryUuid = request.categoryUuid;
         archiveRequest.containerUuid = containerUuid;
         archiveRequest.itemUuid = itemUuid;
+        archiveRequest.recoverySetUuid = categoryValue.recoverySetUuid;
 
         for (const PrivacyInventoryAsset& candidate : inventory.requiredAssets)
         {
@@ -2662,7 +2665,8 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                     d->archive.resumeStagedArchive(
                         archiveStagePath, archivePath,
                         existingArchiveStageFact.size,
-                        existingArchiveStageFact.sha256, password));
+                        existingArchiveStageFact.sha256,
+                        categoryValue.recoverySetUuid, password));
             }
             else
             {
@@ -2947,6 +2951,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                         archiveStagePath, archivePath,
                         prepared.assets.constFirst().container.size,
                         prepared.assets.constFirst().container.sha256,
+                        categoryValue.recoverySetUuid,
                         password);
                 published = archiveStage.isValid() &&
                             d->archive.publishNew(&archiveStage);
@@ -2964,7 +2969,8 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                       prepared.assets.constFirst().container) ||
             (!d->durableReplay &&
              !verifyArchiveMember(d->archive, prepared, archivePath,
-                                  password)))
+                                  password,
+                                  categoryValue.recoverySetUuid)))
         {
             return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
                         QStringLiteral(
@@ -3924,11 +3930,17 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                             itemUuid, strongDetail);
             }
         }
-        else if (!verifyArchiveMember(d->archive, created, archivePath,
-                                      password))
+        else
         {
-            return fail(PrivacyStillItemTransactionStatus::ArchiveFailure, itemUuid,
-                        QStringLiteral("archive/member/password verification failed"));
+            if (!verifyArchiveMember(d->archive, created, archivePath,
+                                     password,
+                                     category->recoverySetUuid))
+            {
+                return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                            itemUuid,
+                            QStringLiteral(
+                                "archive/member/password verification failed"));
+            }
         }
 
         PrivacyTransaction begin;
@@ -4133,6 +4145,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                 restore.categoryUuid = request.categoryUuid;
                 restore.containerUuid = container.uuid;
                 restore.itemUuid = itemUuid;
+                restore.recoverySetUuid = category->recoverySetUuid;
                 restore.protectedRelativePath = mappedIt->protectedRelativePath;
                 restore.originalName = mappedIt->originalName;
                 restore.role = mappedIt->role;
@@ -4785,7 +4798,8 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
 
     if (!foundPrimary ||
         (!strongBackend &&
-         !verifyArchiveMember(d->archive, created, archivePath, password)))
+         !verifyArchiveMember(d->archive, created, archivePath, password,
+                              category->recoverySetUuid)))
     {
         return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
                     QStringLiteral("archive/member/password verification failed"));
@@ -4955,6 +4969,7 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
                         restore.categoryUuid = request.categoryUuid;
                         restore.containerUuid = container->uuid;
                         restore.itemUuid = itemUuid;
+                        restore.recoverySetUuid = category->recoverySetUuid;
                         restore.protectedRelativePath =
                             assetIt->protectedRelativePath;
                         restore.originalName = assetIt->originalName;

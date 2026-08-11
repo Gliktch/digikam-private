@@ -17,6 +17,7 @@
 #include <QImage>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUuid>
 
 // C++ includes
 
@@ -386,6 +387,8 @@ PrivacyCategory makeCategory(const QString& uuid, const QString& name,
     PrivacyCategory category;
     category.uuid = uuid;
     category.name = name;
+    category.recoverySetUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
     category.backend = backend;
     category.presentationMode = PrivacyPresentationMode::Generic;
     category.unlockedThumbnailMode = PrivacyUnlockedThumbnailMode::FocusedClear;

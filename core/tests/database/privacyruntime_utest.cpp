@@ -18,6 +18,7 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUuid>
 
 // C++ includes
 
@@ -144,6 +145,8 @@ PrivacyCategory makeCategory()
     PrivacyCategory category;
     category.uuid                        = categoryUuid;
     category.name                        = QLatin1String("Synthetic category");
+    category.recoverySetUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
     category.lifecycleState              = PrivacyCategoryLifecycleState::Active;
     category.currentCredentialGeneration = 1;
     category.createdAt                   = QDateTime::currentDateTimeUtc();

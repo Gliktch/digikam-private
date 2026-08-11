@@ -87,7 +87,25 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveRequest
     QString                            categoryUuid;
     QString                            containerUuid;
     QString                            itemUuid;
+    /** Opaque non-semantic recovery-set identity persisted in the public
+     * archive comment so portable import can group archives without
+     * attempting passwords or exposing category identity. */
+    QString                            recoverySetUuid;
     QList<PrivacyCasualArchiveMember>  members;
+};
+
+/**
+ * Public, non-secret identity facts read from an existing Casual archive
+ * without decrypting any member. Used by portable filesystem discovery.
+ */
+struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveIdentity
+{
+    bool       valid = false;
+    QString    format;
+    QString    passwordEncoding;
+    QString    recoverySetUuid;
+    qlonglong  archiveSize = -1;
+    QByteArray sha256;
 };
 
 struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveRestoreRequest
@@ -96,6 +114,9 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveRestoreRequest
     QString    categoryUuid;
     QString    containerUuid;
     QString    itemUuid;
+    /** Expected opaque recovery-set identity from the public archive
+     * comment. The archive is rejected when it does not match. */
+    QString    recoverySetUuid;
     QString    protectedRelativePath;
     QString    originalName;
     int        role = 0;
@@ -136,6 +157,7 @@ private:
     qlonglong  m_archiveSize = -1;
     QByteArray m_archiveSha256;
     QByteArray m_expectedManifest;
+    QString    m_recoverySetUuid;
 };
 
 /**
@@ -154,6 +176,12 @@ public:
                                       const QString& originalName);
 
     bool checkCapabilities(PrivacyCasualArchiveError* error = nullptr) const;
+
+    /** Reads only the archive comment and file facts of an existing
+     * `*.digikam-private.zip` candidate. Never decrypts or opens members. */
+    PrivacyCasualArchiveIdentity inspectIdentity(
+        const QString& archivePath,
+        PrivacyCasualArchiveError* error = nullptr) const;
 
     PrivacyCasualArchiveStage stageArchive(
         const PrivacyCasualArchiveRequest& request,
@@ -183,6 +211,7 @@ public:
         const QString& finalArchivePath,
         qlonglong expectedArchiveSize,
         const QByteArray& expectedArchiveSha256,
+        const QString& expectedRecoverySetUuid,
         const PrivacyPassword& password,
         const CancellationCheck& isCancelled = {},
         PrivacyCasualArchiveError* error = nullptr) const;

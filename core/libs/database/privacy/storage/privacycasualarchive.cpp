@@ -72,9 +72,56 @@ constexpr qlonglong FixedManifestMtime          = 315532800; // 1980-01-01 UTC
 constexpr quint32 ManifestUnixMode              = 0100600;
 
 const QString ArchiveSuffix = QStringLiteral(".digikam-private.zip");
-const QString ArchiveComment =
+const QString ArchiveCommentPrefix =
     QStringLiteral("digiKam Private casual-v1; password=utf8-nfc-v1");
+const QString ArchiveCommentRecoveryMarker = QStringLiteral("; recovery=");
 const QString ManifestName = QStringLiteral("digikam-private/recovery-v1.json");
+
+bool isCanonicalUuid(const QString& value);
+
+bool encodeArchiveComment(const QString& recoverySetUuid, QByteArray* comment)
+{
+    if (!isCanonicalUuid(recoverySetUuid) || !comment)
+    {
+        return false;
+    }
+
+    *comment = (ArchiveCommentPrefix + ArchiveCommentRecoveryMarker +
+                recoverySetUuid).toUtf8();
+    return (comment->size() <= 65535);
+}
+
+bool decodeArchiveComment(const QByteArray& comment,
+                          QString* recoverySetUuid)
+{
+    if (!comment.startsWith(ArchiveCommentPrefix.toUtf8()))
+    {
+        return false;
+    }
+
+    const QString text = QString::fromUtf8(comment);
+    const int markerOffset = ArchiveCommentPrefix.size();
+
+    if (!text.mid(markerOffset).startsWith(ArchiveCommentRecoveryMarker))
+    {
+        return false;
+    }
+
+    const QString identity = text.mid(markerOffset +
+                                      ArchiveCommentRecoveryMarker.size());
+
+    if (!isCanonicalUuid(identity))
+    {
+        return false;
+    }
+
+    if (recoverySetUuid)
+    {
+        *recoverySetUuid = identity;
+    }
+
+    return true;
+}
 
 struct RewriteSource
 {
@@ -1265,6 +1312,7 @@ bool readManifestForResume(
 bool verifyArchive(const QString& archivePath, const QByteArray& expectedManifest,
                    const PrivacyPassword& password,
                    const PrivacyCasualArchiveEngine::CancellationCheck& isCancelled,
+                   const QString& expectedRecoverySetUuid,
                    PrivacyCasualArchiveError* const error)
 {
     QList<ExpectedMember> expectedMembers;
@@ -1300,9 +1348,13 @@ bool verifyArchive(const QString& archivePath, const QByteArray& expectedManifes
 
     int commentLength = 0;
     const char* const comment = zip_get_archive_comment(archive, &commentLength, 0);
+    QString commentRecoverySetUuid;
 
     if (!comment ||
-        (QByteArray(comment, commentLength) != ArchiveComment.toUtf8()) ||
+        !decodeArchiveComment(QByteArray(comment, commentLength),
+                              &commentRecoverySetUuid) ||
+        (!expectedRecoverySetUuid.isEmpty() &&
+         (commentRecoverySetUuid != expectedRecoverySetUuid)) ||
         (zip_get_num_entries(archive, 0) != (expectedMembers.size() + 1)))
     {
         discard();
@@ -1597,7 +1649,8 @@ PrivacyCasualArchiveStage::PrivacyCasualArchiveStage(
       m_finalArchivePath(std::move(other.m_finalArchivePath)),
       m_archiveSize(other.m_archiveSize),
       m_archiveSha256(std::move(other.m_archiveSha256)),
-      m_expectedManifest(std::move(other.m_expectedManifest))
+      m_expectedManifest(std::move(other.m_expectedManifest)),
+      m_recoverySetUuid(std::move(other.m_recoverySetUuid))
 {
     other.clear();
 }
@@ -1606,7 +1659,7 @@ bool PrivacyCasualArchiveStage::isValid() const
 {
     return (!m_stagingPath.isEmpty() && !m_finalArchivePath.isEmpty() &&
             (m_archiveSize >= 0) && (m_archiveSha256.size() == 32) &&
-            !m_expectedManifest.isEmpty());
+            !m_expectedManifest.isEmpty() && !m_recoverySetUuid.isEmpty());
 }
 
 QString PrivacyCasualArchiveStage::stagingPath() const
@@ -1636,6 +1689,7 @@ void PrivacyCasualArchiveStage::clear()
     m_archiveSize = -1;
     m_archiveSha256.clear();
     m_expectedManifest.clear();
+    m_recoverySetUuid.clear();
 }
 
 QString PrivacyCasualArchiveEngine::manifestMemberName()
@@ -1665,6 +1719,65 @@ bool PrivacyCasualArchiveEngine::checkCapabilities(
     }
 
     return true;
+}
+
+PrivacyCasualArchiveIdentity PrivacyCasualArchiveEngine::inspectIdentity(
+    const QString& archivePath,
+    PrivacyCasualArchiveError* const error) const
+{
+    setError(error, PrivacyCasualArchiveError::None);
+    PrivacyCasualArchiveIdentity identity;
+
+    if (!isSafeAbsoluteFilePath(archivePath, true) ||
+        !archivePath.endsWith(ArchiveSuffix))
+    {
+        setError(error, PrivacyCasualArchiveError::UnsafeDestination);
+        return identity;
+    }
+
+    int zipError = 0;
+    zip_t* archive = zip_open(
+        QFile::encodeName(archivePath).constData(),
+        ZIP_RDONLY | ZIP_CHECKCONS, &zipError);
+
+    if (!archive)
+    {
+        setError(error, PrivacyCasualArchiveError::ArchiveOpenFailed);
+        return identity;
+    }
+
+    int commentLength = 0;
+    const char* const comment =
+        zip_get_archive_comment(archive, &commentLength, 0);
+    QString recoverySetUuid;
+    const bool validComment =
+        comment && decodeArchiveComment(QByteArray(comment, commentLength),
+                                        &recoverySetUuid);
+    zip_discard(archive);
+
+    if (!validComment)
+    {
+        setError(error, PrivacyCasualArchiveError::ArchivePolicyViolation);
+        return identity;
+    }
+
+    QByteArray sha256;
+    qlonglong size = -1;
+
+    if (!hashFile(archivePath, &sha256, &size, {}))
+    {
+        setError(error, PrivacyCasualArchiveError::SourceReadFailed);
+        return identity;
+    }
+
+    identity.valid = true;
+    identity.format = QLatin1String("digiKam Private casual-v1");
+    identity.passwordEncoding = QLatin1String("utf8-nfc-v1");
+    identity.recoverySetUuid = recoverySetUuid;
+    identity.archiveSize = size;
+    identity.sha256 = sha256;
+
+    return identity;
 }
 
 PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
@@ -1698,6 +1811,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
         !isCanonicalUuid(request.categoryUuid) ||
         !isCanonicalUuid(request.containerUuid) ||
         !isCanonicalUuid(request.itemUuid) ||
+        !isCanonicalUuid(request.recoverySetUuid) ||
         request.members.isEmpty() || (request.members.size() > MaximumMemberCount))
     {
         setError(error, safeDestination(request.finalArchivePath)
@@ -1773,8 +1887,11 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
                                                 const_cast<CancellationCheck*>(&isCancelled));
     }
 
-    const QByteArray comment = ArchiveComment.toUtf8();
+    QByteArray comment;
+    const bool commentOkay = encodeArchiveComment(request.recoverySetUuid,
+                                                  &comment);
     bool writeOkay =
+        commentOkay &&
         (zip_set_archive_comment(archive, comment.constData(),
                                  static_cast<zip_uint16_t>(comment.size())) == 0);
 
@@ -1874,7 +1991,8 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
         return stage;
     }
 
-    if (!verifyArchive(stagingPath, manifest, password, isCancelled, error))
+    if (!verifyArchive(stagingPath, manifest, password, isCancelled,
+                       request.recoverySetUuid, error))
     {
         removeKnownStage(stagingPath, request.finalArchivePath);
 
@@ -1898,6 +2016,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
     stage.m_archiveSize      = archiveSize;
     stage.m_archiveSha256    = archiveHash;
     stage.m_expectedManifest = manifest;
+    stage.m_recoverySetUuid  = request.recoverySetUuid;
 
     return stage;
 }
@@ -1925,6 +2044,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::rewriteArchive(
     if (!isCanonicalUuid(request.categoryUuid) ||
         !isCanonicalUuid(request.containerUuid) ||
         !isCanonicalUuid(request.itemUuid) ||
+        !isCanonicalUuid(request.recoverySetUuid) ||
         !safeDestination(request.finalArchivePath) ||
         !QFileInfo(request.finalArchivePath).isFile())
     {
@@ -1954,7 +2074,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::rewriteArchive(
     if (!readManifestForResume(request.finalArchivePath, oldPassword,
                                isCancelled, &oldManifest, error) ||
         !verifyArchive(request.finalArchivePath, oldManifest, oldPassword,
-                       isCancelled, error))
+                       isCancelled, request.recoverySetUuid, error))
     {
         return stage;
     }
@@ -2042,7 +2162,12 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::rewriteArchive(
     const char* const comment =
         zip_get_archive_comment(oldArchive, &commentLength, 0);
 
+    QString oldCommentRecovery;
+
     if (!comment ||
+        !decodeArchiveComment(QByteArray(comment, commentLength),
+                              &oldCommentRecovery) ||
+        (oldCommentRecovery != request.recoverySetUuid) ||
         (zip_set_archive_comment(
              newArchive, comment,
              static_cast<zip_uint16_t>(commentLength)) != 0))
@@ -2173,7 +2298,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::rewriteArchive(
     }
 
     if (!verifyArchive(stagingPath, oldManifest, newPassword,
-                       isCancelled, error))
+                       isCancelled, request.recoverySetUuid, error))
     {
         removeKnownStage(stagingPath, request.finalArchivePath);
         return stage;
@@ -2196,6 +2321,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::rewriteArchive(
     stage.m_archiveSize      = archiveSize;
     stage.m_archiveSha256    = archiveHash;
     stage.m_expectedManifest = oldManifest;
+    stage.m_recoverySetUuid  = request.recoverySetUuid;
 
     return stage;
 }
@@ -2203,6 +2329,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::rewriteArchive(
 PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::resumeStagedArchive(
     const QString& stagingPath, const QString& finalArchivePath,
     qlonglong expectedArchiveSize, const QByteArray& expectedArchiveSha256,
+    const QString& expectedRecoverySetUuid,
     const PrivacyPassword& password, const CancellationCheck& isCancelled,
     PrivacyCasualArchiveError* const error) const
 {
@@ -2222,6 +2349,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::resumeStagedArchive(
     }
 
     if ((expectedArchiveSize < 0) || (expectedArchiveSha256.size() != 32) ||
+        !isCanonicalUuid(expectedRecoverySetUuid) ||
         !safeDestination(finalArchivePath) ||
         !safeStagingPath(stagingPath, finalArchivePath, true))
     {
@@ -2254,7 +2382,8 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::resumeStagedArchive(
 
     if (!readManifestForResume(stagingPath, password, isCancelled,
                                &manifest, error) ||
-        !verifyArchive(stagingPath, manifest, password, isCancelled, error))
+        !verifyArchive(stagingPath, manifest, password, isCancelled,
+                       expectedRecoverySetUuid, error))
     {
         return stage;
     }
@@ -2264,6 +2393,7 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::resumeStagedArchive(
     stage.m_archiveSize      = currentSize;
     stage.m_archiveSha256    = currentHash;
     stage.m_expectedManifest = manifest;
+    stage.m_recoverySetUuid  = expectedRecoverySetUuid;
 
     return stage;
 }
@@ -2284,7 +2414,8 @@ bool PrivacyCasualArchiveEngine::verifyStagedArchive(
     }
 
     return verifyArchive(stage.m_stagingPath, stage.m_expectedManifest,
-                         password, isCancelled, error);
+                         password, isCancelled, stage.m_recoverySetUuid,
+                         error);
 }
 
 bool PrivacyCasualArchiveEngine::publishExactPreparedStage(
@@ -2354,6 +2485,7 @@ bool PrivacyCasualArchiveEngine::restoreMember(
         !isCanonicalUuid(request.categoryUuid) ||
         !isCanonicalUuid(request.containerUuid) ||
         !isCanonicalUuid(request.itemUuid) ||
+        !isCanonicalUuid(request.recoverySetUuid) ||
         !isSafeOriginalName(request.originalName) || (request.role <= 0) ||
         (request.ordinal < 0) ||
         (request.protectedRelativePath != expectedMemberPath(
@@ -2385,7 +2517,7 @@ bool PrivacyCasualArchiveEngine::restoreMember(
     if (!readManifestForResume(request.archivePath, password, isCancelled,
                                &manifest, error) ||
         !verifyArchive(request.archivePath, manifest, password,
-                       isCancelled, error))
+                       isCancelled, request.recoverySetUuid, error))
     {
         return false;
     }

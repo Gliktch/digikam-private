@@ -206,6 +206,7 @@ bool CoreDB::insertPrivacyCategory(const PrivacyCategory& category) const
     QVariantList values;
     values << category.uuid
            << category.name
+           << category.recoverySetUuid
            << static_cast<int>(category.backend)
            << static_cast<int>(category.presentationMode)
            << static_cast<int>(category.unlockedThumbnailMode)
@@ -217,10 +218,10 @@ bool CoreDB::insertPrivacyCategory(const PrivacyCategory& category) const
 
     return (BdEngineBackend::NoErrors ==
             d->db->execSql(QString::fromUtf8("INSERT INTO PrivacyCategories "
-                                             "(uuid, name, backend, presentationMode, "
+                                             "(uuid, name, recoverySetUuid, backend, presentationMode, "
                                              "unlockedThumbnailMode, tagVisibilityMode, lifecycleState, "
                                              "currentCredentialGeneration, schemaVersion, createdAt) "
-                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
+                                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"), values));
 }
 
 bool CoreDB::getPrivacyCategories(QList<PrivacyCategory>* categories) const
@@ -234,7 +235,7 @@ bool CoreDB::getPrivacyCategories(QList<PrivacyCategory>* categories) const
     QVariantList values;
 
     if (BdEngineBackend::NoErrors !=
-        d->db->execSql(QString::fromUtf8("SELECT uuid, name, backend, presentationMode, "
+        d->db->execSql(QString::fromUtf8("SELECT uuid, name, recoverySetUuid, backend, presentationMode, "
                                          "unlockedThumbnailMode, tagVisibilityMode, lifecycleState, "
                                          "currentCredentialGeneration, schemaVersion, createdAt "
                                          "FROM PrivacyCategories ORDER BY name, uuid;"), &values))
@@ -242,7 +243,7 @@ bool CoreDB::getPrivacyCategories(QList<PrivacyCategory>* categories) const
         return false;
     }
 
-    if ((values.size() % 10) != 0)
+    if ((values.size() % 11) != 0)
     {
         return false;
     }
@@ -253,6 +254,7 @@ bool CoreDB::getPrivacyCategories(QList<PrivacyCategory>* categories) const
 
         category.uuid             = (*it++).toString();
         category.name             = (*it++).toString();
+        category.recoverySetUuid  = (*it++).toString();
         category.backend          = static_cast<PrivacyBackend>((*it++).toInt());
         category.presentationMode = static_cast<PrivacyPresentationMode>((*it++).toInt());
         category.unlockedThumbnailMode = static_cast<PrivacyUnlockedThumbnailMode>((*it++).toInt());
@@ -272,12 +274,12 @@ PrivacyCategory CoreDB::getPrivacyCategory(const QString& uuid) const
 {
     QVariantList values;
 
-    d->db->execSql(QString::fromUtf8("SELECT uuid, name, backend, presentationMode, "
+    d->db->execSql(QString::fromUtf8("SELECT uuid, name, recoverySetUuid, backend, presentationMode, "
                                      "unlockedThumbnailMode, tagVisibilityMode, lifecycleState, "
                                      "currentCredentialGeneration, schemaVersion, createdAt "
                                      "FROM PrivacyCategories WHERE uuid=?;"), uuid, &values);
 
-    if (values.size() != 10)
+    if (values.size() != 11)
     {
         return PrivacyCategory();
     }
@@ -287,6 +289,7 @@ PrivacyCategory CoreDB::getPrivacyCategory(const QString& uuid) const
 
     category.uuid             = (*it++).toString();
     category.name             = (*it++).toString();
+    category.recoverySetUuid  = (*it++).toString();
     category.backend          = static_cast<PrivacyBackend>((*it++).toInt());
     category.presentationMode = static_cast<PrivacyPresentationMode>((*it++).toInt());
     category.unlockedThumbnailMode = static_cast<PrivacyUnlockedThumbnailMode>((*it++).toInt());

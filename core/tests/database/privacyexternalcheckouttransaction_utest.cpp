@@ -17,6 +17,7 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUuid>
 
 // C++ includes
 
@@ -260,6 +261,8 @@ struct Fixture
         PrivacyCategory category;
         category.uuid = CategoryUuid;
         category.name = QStringLiteral("Synthetic private category");
+        category.recoverySetUuid =
+            QUuid::createUuid().toString(QUuid::WithoutBraces);
         category.backend = PrivacyBackend::Casual;
         category.lifecycleState = PrivacyCategoryLifecycleState::Active;
         category.currentCredentialGeneration = 1;

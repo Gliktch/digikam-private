@@ -1774,6 +1774,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
     const qlonglong imageId = item->imageId;
     const QString itemUuid = item->uuid;
     const QString categoryUuid = category->uuid;
+    const QString recoverySetUuid = category->recoverySetUuid;
     const QString containerUuid = container->uuid;
     const QString archivePath = QDir(root->configuredPath).absoluteFilePath(
         container->objectRelativePath);
@@ -1795,7 +1796,9 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
         sessions->runWithUnlockedStore(
             categoryUuid,
             [this, &result, imageId, itemUuid, categoryUuid, containerUuid,
-             archivePath, archiveSize, archiveHash, strongBackend, publicRoot,
+             archivePath, archiveSize, archiveHash, strongBackend,
+             recoverySetUuid,
+             publicRoot,
              publicRootExpectation, checkoutStoreUuid, managedStoreRoot,
              storeRootExpectation,
              checkoutAssets, resumeTransactionUuid, resumeTransactionState](
@@ -1946,6 +1949,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
                         restore.categoryUuid = categoryUuid;
                         restore.containerUuid = containerUuid;
                         restore.itemUuid = itemUuid;
+                        restore.recoverySetUuid = recoverySetUuid;
                         restore.protectedRelativePath =
                             asset.protectedRelativePath;
                         restore.originalName = asset.originalName;

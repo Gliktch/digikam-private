@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUuid>
 
 // Local includes
 
@@ -207,6 +208,8 @@ void seedBundle(FakePersistence* persistence, const QString& managedRoot)
     PrivacyCategory category;
     category.uuid = CategoryUuid;
     category.name = QLatin1String("Synthetic strong");
+    category.recoverySetUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
     category.backend = PrivacyBackend::Strong;
     category.presentationMode = PrivacyPresentationMode::Generic;
     category.unlockedThumbnailMode = PrivacyUnlockedThumbnailMode::FocusedClear;

@@ -75,15 +75,16 @@ bool PrivacyCategory::isValid() const
                                  (lifecycleState == PrivacyCategoryLifecycleState::TransactionBlocked) ||
                                  (lifecycleState == PrivacyCategoryLifecycleState::Error));
 
-    return (isCanonicalUuid(uuid)        &&
-            !name.trimmed().isEmpty()    &&
-            validBackend                 &&
-            validPresentation            &&
-            validUnlockedThumbnailMode   &&
-            validTagVisibilityMode       &&
-            validLifecycle               &&
+    return (isCanonicalUuid(uuid)             &&
+            !name.trimmed().isEmpty()         &&
+            isCanonicalUuid(recoverySetUuid)  &&
+            validBackend                      &&
+            validPresentation                 &&
+            validUnlockedThumbnailMode        &&
+            validTagVisibilityMode            &&
+            validLifecycle                    &&
             (currentCredentialGeneration >= 0) &&
-            (schemaVersion > 0)          &&
+            (schemaVersion > 0)               &&
             createdAt.isValid());
 }
 

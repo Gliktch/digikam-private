@@ -1200,6 +1200,31 @@ bool PrivacyMigrationCoordinator::publishTarget(
         return false;
     }
 
+    PrivacyRepositorySnapshot targetSnapshot;
+
+    if (!m_persistence.loadSnapshot(&targetSnapshot))
+    {
+        *detail = QStringLiteral("the privacy catalogue could not be read");
+        return false;
+    }
+
+    QString targetRecoverySetUuid;
+
+    for (const PrivacyCategory& category : targetSnapshot.categories)
+    {
+        if (category.uuid == request.targetCategoryUuid)
+        {
+            targetRecoverySetUuid = category.recoverySetUuid;
+            break;
+        }
+    }
+
+    if (targetRecoverySetUuid.isEmpty())
+    {
+        *detail = QStringLiteral("the target category is missing");
+        return false;
+    }
+
     const bool targetStrong =
         (request.targetBackend == PrivacyBackend::Strong);
     const QString targetArchiveRelative =
@@ -1278,6 +1303,7 @@ bool PrivacyMigrationCoordinator::publishTarget(
         archiveRequest.categoryUuid = request.targetCategoryUuid;
         archiveRequest.containerUuid = targetContainerUuid;
         archiveRequest.itemUuid = request.itemUuid;
+        archiveRequest.recoverySetUuid = targetRecoverySetUuid;
 
         for (const ExposedMember& member : members)
         {
@@ -1380,17 +1406,9 @@ bool PrivacyMigrationCoordinator::publishTarget(
         return false;
     }
 
-    PrivacyRepositorySnapshot snapshot;
-
-    if (!m_persistence.loadSnapshot(&snapshot))
-    {
-        *detail = QStringLiteral("the privacy catalogue could not be read");
-        return false;
-    }
-
     qlonglong targetCredentialGeneration = -1;
 
-    for (const PrivacyCategory& category : snapshot.categories)
+    for (const PrivacyCategory& category : targetSnapshot.categories)
     {
         if (category.uuid == request.targetCategoryUuid)
         {

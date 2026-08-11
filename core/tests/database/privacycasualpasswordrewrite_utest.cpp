@@ -203,6 +203,7 @@ const QString ManagedRootUuid = QLatin1String("30000000-0000-0000-0000-000000000
 const QString PublicRootUuid = QLatin1String("40000000-0000-0000-0000-000000000001");
 const QString ItemUuid = QLatin1String("50000000-0000-0000-0000-000000000001");
 const QString ContainerUuid = QLatin1String("60000000-0000-0000-0000-000000000001");
+const QString RecoverySetUuid = QLatin1String("70000000-0000-0000-0000-000000000001");
 const QByteArray ConfigBytes("opaque casual config");
 const QByteArray Payload("casual rewrite payload");
 
@@ -245,6 +246,7 @@ bool archiveOpensWith(const QString& path, const PrivacyPassword& password,
     request.categoryUuid = CategoryUuid;
     request.containerUuid = ContainerUuid;
     request.itemUuid = ItemUuid;
+    request.recoverySetUuid = RecoverySetUuid;
     request.protectedRelativePath = QLatin1String(
         "digikam-private/assets/1/0/photo.jpg");
     request.originalName = QLatin1String("photo.jpg");
@@ -269,6 +271,7 @@ void seedBundle(FakePersistence* persistence, const QString& publicRoot,
     PrivacyCategory category;
     category.uuid = CategoryUuid;
     category.name = QLatin1String("Synthetic casual");
+    category.recoverySetUuid = RecoverySetUuid;
     category.backend = PrivacyBackend::Casual;
     category.presentationMode = PrivacyPresentationMode::Generic;
     category.unlockedThumbnailMode = PrivacyUnlockedThumbnailMode::FocusedClear;
@@ -408,6 +411,7 @@ void createOldArchive(const QString& publicRoot,
     request.categoryUuid = CategoryUuid;
     request.containerUuid = ContainerUuid;
     request.itemUuid = ItemUuid;
+    request.recoverySetUuid = RecoverySetUuid;
     request.members << member;
     PrivacyCasualArchiveEngine engine;
     PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;

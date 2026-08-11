@@ -133,6 +133,11 @@ public:
 
     QString                 uuid;
     QString                 name;
+    /** Opaque non-semantic recovery-set identity shared by every portable
+     * Casual archive comment for this category. It is intentionally distinct
+     * from the database category UUID so public archive metadata never links
+     * to catalogue identity. */
+    QString                 recoverySetUuid;
     PrivacyBackend          backend          = PrivacyBackend::Casual;
     PrivacyPresentationMode presentationMode = PrivacyPresentationMode::Generic;
     PrivacyUnlockedThumbnailMode unlockedThumbnailMode = PrivacyUnlockedThumbnailMode::FocusedClear;

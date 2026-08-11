@@ -262,6 +262,7 @@
                 <statement mode="plain">CREATE TABLE PrivacyCategories
                     (uuid TEXT PRIMARY KEY NOT NULL,
                     name TEXT NOT NULL,
+                    recoverySetUuid TEXT NOT NULL,
                     backend INTEGER NOT NULL,
                     presentationMode INTEGER NOT NULL,
                     unlockedThumbnailMode INTEGER NOT NULL,
@@ -1116,15 +1117,16 @@
             </statement></dbaction>
 
             <dbaction name="Migrate_Read_PrivacyCategories"><statement mode="query">
-                SELECT uuid, name, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode, lifecycleState,
-                       currentCredentialGeneration, schemaVersion, createdAt FROM PrivacyCategories;
+                SELECT uuid, name, recoverySetUuid, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode,
+                       lifecycleState, currentCredentialGeneration, schemaVersion, createdAt FROM PrivacyCategories;
             </statement></dbaction>
             <dbaction name="Migrate_Write_PrivacyCategories"><statement mode="query">
                 INSERT INTO PrivacyCategories
-                    (uuid, name, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode, lifecycleState,
-                     currentCredentialGeneration, schemaVersion, createdAt)
-                    VALUES (:uuid, :name, :backend, :presentationMode, :unlockedThumbnailMode, :tagVisibilityMode,
-                            :lifecycleState, :currentCredentialGeneration, :schemaVersion, :createdAt);
+                    (uuid, name, recoverySetUuid, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode,
+                     lifecycleState, currentCredentialGeneration, schemaVersion, createdAt)
+                    VALUES (:uuid, :name, :recoverySetUuid, :backend, :presentationMode, :unlockedThumbnailMode,
+                            :tagVisibilityMode, :lifecycleState, :currentCredentialGeneration, :schemaVersion,
+                            :createdAt);
             </statement></dbaction>
 
             <dbaction name="Migrate_Read_PrivacyCredentials"><statement mode="query">
@@ -1446,6 +1448,7 @@
                 <statement mode="plain">CREATE TABLE PrivacyCategories
                     (uuid TEXT PRIMARY KEY NOT NULL,
                     name TEXT NOT NULL,
+                    recoverySetUuid TEXT NOT NULL,
                     backend INTEGER NOT NULL,
                     presentationMode INTEGER NOT NULL,
                     unlockedThumbnailMode INTEGER NOT NULL,
@@ -2043,6 +2046,7 @@
                 <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyCategories
                     (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
                     name LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    recoverySetUuid VARCHAR(36) NOT NULL,
                     backend INTEGER NOT NULL,
                     presentationMode INTEGER NOT NULL,
                     unlockedThumbnailMode INTEGER NOT NULL,
@@ -2961,15 +2965,16 @@
             </statement></dbaction>
 
             <dbaction name="Migrate_Read_PrivacyCategories"><statement mode="query">
-                SELECT uuid, name, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode, lifecycleState,
-                       currentCredentialGeneration, schemaVersion, createdAt FROM PrivacyCategories;
+                SELECT uuid, name, recoverySetUuid, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode,
+                       lifecycleState, currentCredentialGeneration, schemaVersion, createdAt FROM PrivacyCategories;
             </statement></dbaction>
             <dbaction name="Migrate_Write_PrivacyCategories"><statement mode="query">
                 INSERT INTO PrivacyCategories
-                    (uuid, name, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode, lifecycleState,
-                     currentCredentialGeneration, schemaVersion, createdAt)
-                    VALUES (:uuid, :name, :backend, :presentationMode, :unlockedThumbnailMode, :tagVisibilityMode,
-                            :lifecycleState, :currentCredentialGeneration, :schemaVersion, :createdAt);
+                    (uuid, name, recoverySetUuid, backend, presentationMode, unlockedThumbnailMode, tagVisibilityMode,
+                     lifecycleState, currentCredentialGeneration, schemaVersion, createdAt)
+                    VALUES (:uuid, :name, :recoverySetUuid, :backend, :presentationMode, :unlockedThumbnailMode,
+                            :tagVisibilityMode, :lifecycleState, :currentCredentialGeneration, :schemaVersion,
+                            :createdAt);
             </statement></dbaction>
 
             <dbaction name="Migrate_Read_PrivacyCredentials"><statement mode="query">
@@ -3834,6 +3839,7 @@
                 <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyCategories
                     (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
                     name LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,
+                    recoverySetUuid VARCHAR(36) NOT NULL,
                     backend INTEGER NOT NULL,
                     presentationMode INTEGER NOT NULL,
                     unlockedThumbnailMode INTEGER NOT NULL,

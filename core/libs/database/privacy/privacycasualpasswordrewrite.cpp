@@ -766,6 +766,7 @@ PrivacyCasualPasswordRewriteEngine::runRewrap(
         request.categoryUuid = bundle.category.uuid;
         request.containerUuid = pendingContainer.container.uuid;
         request.itemUuid = pendingContainer.item.uuid;
+        request.recoverySetUuid = bundle.category.recoverySetUuid;
         PrivacyCasualArchiveError archiveError = PrivacyCasualArchiveError::None;
         PrivacyCasualArchiveStage stage = m_archiveEngine.rewriteArchive(
             request, oldPassword, newPassword, {}, &archiveError);
