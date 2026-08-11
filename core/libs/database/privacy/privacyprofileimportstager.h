@@ -37,6 +37,8 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyProfileImportStageResult
     PrivacyProfileSummary candidateSummary;
     QStringList           warnings;
     QString               error;
+    int                   addedItemCount = 0;
+    int                   skippedExistingItemCount = 0;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyProfileImportStager
@@ -50,7 +52,8 @@ public:
         const PrivacyProfileSummary& source,
         const QString& stageDirectory,
         const Progress& progress = Progress(),
-        const IsCanceled& isCanceled = IsCanceled());
+        const IsCanceled& isCanceled = IsCanceled(),
+        const QString& additiveTargetP1Path = QString());
 };
 
 } // namespace Digikam

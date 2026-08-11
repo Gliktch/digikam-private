@@ -371,13 +371,6 @@ public:
                                     preflight.error);
             }
         }
-        else if (!source.isPrivateProfile() && target.isPrivateProfile() &&
-                 (target.activeItemCount > 0))
-        {
-            unavailable = i18nc(
-                "@info",
-                "This populated profile requires the additive stock-catalogue importer.");
-        }
 
         importButton->setEnabled(unavailable.isEmpty());
 
@@ -489,6 +482,21 @@ public:
                 source.protectedItemCount, target.activeItemCount,
                 target.privacyCategoryCount, target.protectedItemCount);
         }
+        else if (target.isPrivateProfile() && (target.activeItemCount > 0))
+        {
+            text = i18nc(
+                "@info",
+                "Merge this stock digiKam catalogue into the active digiKam Private profile?\n\n"
+                "Source: %1 indexed items.\n"
+                "Current: %2 indexed items.\n\n"
+                "Items already present in the active profile are kept unchanged; items that "
+                "are new are added together with their metadata. The complete current profile "
+                "is backed up first. Later catalogue and settings changes are not synchronized "
+                "between stock digiKam and digiKam Private; both applications may still modify "
+                "the same media and companion metadata files stored beside it, such as .xmp "
+                "files.",
+                source.activeItemCount, target.activeItemCount);
+        }
         else
         {
             text = i18nc(
@@ -537,8 +545,13 @@ public:
             QCoreApplication::processEvents();
         };
         const auto canceled = [&progress]() { return progress.wasCanceled(); };
+        const bool additive = !source.isPrivateProfile() &&
+                              target.isPrivateProfile() &&
+                              (target.activeItemCount > 0);
         const PrivacyProfileImportStageResult staged =
-            PrivacyProfileImportStager::stage(source, stagingPath, report, canceled);
+            PrivacyProfileImportStager::stage(source, stagingPath, report, canceled,
+                                              additive ? targetPaths.coreDatabasePath
+                                                       : QString());
 
         if (!staged.success)
         {
@@ -574,6 +587,15 @@ public:
         if (!staged.warnings.isEmpty())
         {
             message += QLatin1String("\n\n") + staged.warnings.join(QLatin1Char('\n'));
+        }
+
+        if ((staged.addedItemCount > 0) || (staged.skippedExistingItemCount > 0))
+        {
+            message += QLatin1String("\n\n") +
+                       i18nc("@info",
+                             "Merge result: %1 new items added, %2 existing items kept.",
+                             staged.addedItemCount,
+                             staged.skippedExistingItemCount);
         }
 
         QMessageBox::information(q, q->windowTitle(), message);

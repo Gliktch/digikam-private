@@ -58,6 +58,7 @@ private Q_SLOTS:
     void testProtectedStorePreflightFailsOnMissingRootMarker();
     void testProtectedStorePreflightFailsOnProxySizeMismatch();
     void testP1WithProtectedItemsStagesOnlyAfterPreflight();
+    void testAdditiveStockImportMergesOnlyNewItems();
 };
 
 namespace
@@ -420,6 +421,152 @@ bool buildProtectedFixture(const QString& directory, ProtectedFixture* const fix
     }
 
     return success;
+}
+
+bool populateStockFixtureRows(const QString& path)
+{
+    const QString connectionName = QLatin1String("privacy-stock-rows-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+    bool success = false;
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"),
+                                                          connectionName);
+        database.setDatabaseName(path);
+
+        if (!database.open())
+        {
+            return false;
+        }
+
+        QSqlQuery query(database);
+        const QStringList statements = {
+            QLatin1String(
+                "INSERT INTO AlbumRoots (id, label, status, type, identifier, specificPath, "
+                "caseSensitivity) VALUES (1, NULL, 0, 0, 'volume-1', '/fixture/photos', 0);"),
+            QLatin1String(
+                "INSERT INTO Albums (id, albumRoot, relativePath, date, caption, collection, "
+                "icon, modificationDate) VALUES "
+                "(1, 1, '/', NULL, NULL, NULL, NULL, NULL), "
+                "(2, 1, '/sub', NULL, NULL, NULL, NULL, NULL);"),
+            QLatin1String(
+                "INSERT INTO Images (id, album, name, status, category, modificationDate, "
+                "fileSize, uniqueHash, manualOrder) VALUES "
+                "(1, 1, 'a.jpg', 1, 1, NULL, 100, 'hash-a', 0), "
+                "(2, 1, 'b.jpg', 1, 1, NULL, 200, 'hash-b', 0), "
+                "(3, 2, 'c.jpg', 1, 1, NULL, 300, 'hash-c', 0);"),
+            QLatin1String(
+                "INSERT INTO Tags (id, pid, name, icon, iconkde) VALUES "
+                "(1, 0, 'People', NULL, NULL), "
+                "(2, 1, 'Alice', NULL, NULL);"),
+            QLatin1String(
+                "INSERT INTO ImageTags (imageid, tagid) VALUES (2, 2);"),
+            QLatin1String(
+                "INSERT INTO ImageInformation (imageid, rating, creationDate, "
+                "digitizationDate, orientation, width, height, format, colorDepth, "
+                "colorModel, timeZone) VALUES (2, 5, NULL, NULL, 0, 640, 480, 'JPEG', 24, "
+                "0, NULL);"),
+            QLatin1String(
+                "INSERT INTO ImageComments (id, imageid, type, language, author, date, "
+                "comment) VALUES (1, 2, 0, 'en', 'author', NULL, 'hello');"),
+            QLatin1String(
+                "INSERT INTO ImageHistory (imageid, uuid, history) "
+                "VALUES (2, 'uuid-2', 'history-2');"),
+            QLatin1String(
+                "INSERT INTO Searches (id, type, name, query) "
+                "VALUES (1, 0, 'saved', 'x');"),
+            QLatin1String(
+                "INSERT INTO DownloadHistory (id, identifier, filename, filesize, filedate) "
+                "VALUES (1, 'i', 'f', 1, NULL);")
+        };
+        success = true;
+
+        for (const QString& statement : statements)
+        {
+            if (!query.exec(statement))
+            {
+                qWarning().noquote() << "populateStockFixtureRows failed:"
+                                     << statement.left(80)
+                                     << query.lastError().text();
+                success = false;
+                break;
+            }
+        }
+
+        database.close();
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
+    return success;
+}
+
+bool populateTargetFixtureRows(const QString& path)
+{
+    const QString connectionName = QLatin1String("privacy-target-rows-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+    bool success = false;
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"),
+                                                          connectionName);
+        database.setDatabaseName(path);
+
+        if (!database.open())
+        {
+            return false;
+        }
+
+        QSqlQuery query(database);
+        success = query.exec(QLatin1String(
+            "INSERT INTO AlbumRoots (id, label, status, type, identifier, specificPath, "
+            "caseSensitivity) VALUES (1, NULL, 0, 0, 'volume-1', '/fixture/photos', 0);")) &&
+                  query.exec(QLatin1String(
+            "INSERT INTO Albums (id, albumRoot, relativePath, date, caption, collection, "
+            "icon, modificationDate) VALUES (1, 1, '/', NULL, NULL, NULL, NULL, NULL);")) &&
+                  query.exec(QLatin1String(
+            "INSERT INTO Images (id, album, name, status, category, modificationDate, "
+            "fileSize, uniqueHash, manualOrder) "
+            "VALUES (1, 1, 'a.jpg', 1, 1, NULL, 100, 'hash-a', 0);")) &&
+                  query.exec(QLatin1String(
+            "INSERT INTO Tags (id, pid, name, icon, iconkde) "
+            "VALUES (1, 0, 'People', NULL, NULL);")) &&
+                  query.exec(QLatin1String(
+            "INSERT INTO ImageTags (imageid, tagid) VALUES (1, 1);"));
+        database.close();
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
+    return success;
+}
+
+qlonglong countTableRows(const QString& path, const QString& table)
+{
+    const QString connectionName = QLatin1String("privacy-count-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+    qlonglong count = -1;
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"),
+                                                          connectionName);
+        database.setConnectOptions(QLatin1String("QSQLITE_OPEN_READONLY"));
+        database.setDatabaseName(path);
+
+        if (database.open())
+        {
+            QSqlQuery query(database);
+
+            if (query.exec(QString::fromLatin1("SELECT COUNT(*) FROM %1;").arg(table)) &&
+                query.next())
+            {
+                count = query.value(0).toLongLong();
+            }
+
+            database.close();
+        }
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
+    return count;
 }
 
 PrivacyProfilePaths fixtureProfilePaths(const QString& root)
@@ -880,6 +1027,57 @@ void PrivacyProfileImportTest::testP1WithProtectedItemsStagesOnlyAfterPreflight(
         source, directory.filePath(QLatin1String("stage-fail")));
     QVERIFY(!staged.success);
     QVERIFY(staged.error.contains(QLatin1String("Protected-store validation failed")));
+}
+
+void PrivacyProfileImportTest::testAdditiveStockImportMergesOnlyNewItems()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(QLatin1String("stock-source.db"));
+    const QString targetPath = directory.filePath(QLatin1String("target-p1.db"));
+    QVERIFY(createFullP1Database(sourcePath));
+    QVERIFY(downgradeFixtureToStock17(sourcePath));
+    QVERIFY(populateStockFixtureRows(sourcePath));
+    const PrivacyProfileSummary source =
+        PrivacyProfileInspector::inspectCoreDatabase(sourcePath);
+    QCOMPARE(source.schemaKind, PrivacyProfileSchemaKind::Stock);
+    QCOMPARE(source.activeItemCount, 3LL);
+
+    QVERIFY(createFullP1Database(targetPath));
+    QVERIFY(populateTargetFixtureRows(targetPath));
+    const PrivacyProfileSummary target =
+        PrivacyProfileInspector::inspectCoreDatabase(targetPath);
+    QVERIFY(target.isPrivateProfile());
+    QCOMPARE(target.activeItemCount, 1LL);
+
+    const PrivacyProfileImportStageResult staged = PrivacyProfileImportStager::stage(
+        source, directory.filePath(QLatin1String("additive-stage")),
+        PrivacyProfileImportStager::Progress(),
+        PrivacyProfileImportStager::IsCanceled(),
+        targetPath);
+    QVERIFY2(staged.success, qPrintable(staged.error));
+    QVERIFY(staged.candidateSummary.isPrivateProfile());
+    QCOMPARE(staged.addedItemCount, 2);
+    QCOMPARE(staged.skippedExistingItemCount, 1);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath, QLatin1String("Images")), 3LL);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath, QLatin1String("Albums")), 2LL);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath, QLatin1String("Tags")), 2LL);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath, QLatin1String("ImageTags")), 2LL);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath,
+                            QLatin1String("ImageInformation")), 1LL);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath,
+                            QLatin1String("ImageComments")), 1LL);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath,
+                            QLatin1String("ImageHistory")), 1LL);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath,
+                            QLatin1String("Searches")), 0LL);
+    QCOMPARE(countTableRows(staged.candidateCoreDatabasePath,
+                            QLatin1String("DownloadHistory")), 0LL);
+
+    const PrivacyProfileSummary unchanged =
+        PrivacyProfileInspector::inspectCoreDatabase(sourcePath);
+    QCOMPARE(unchanged.schemaKind, PrivacyProfileSchemaKind::Stock);
+    QCOMPARE(unchanged.activeItemCount, 3LL);
 }
 
 QTEST_GUILESS_MAIN(PrivacyProfileImportTest)

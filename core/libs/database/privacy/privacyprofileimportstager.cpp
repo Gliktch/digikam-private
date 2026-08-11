@@ -24,6 +24,7 @@
 
 #include "coredbcopymanager.h"
 #include "dbengineparameters.h"
+#include "privacyprofilemerge.h"
 #include "privacyprofilepreflight.h"
 #include "privacysqlitesnapshot.h"
 
@@ -86,7 +87,8 @@ PrivacyProfileImportStageResult PrivacyProfileImportStager::stage(
     const PrivacyProfileSummary& source,
     const QString& stageDirectory,
     const Progress& progress,
-    const IsCanceled& isCanceled)
+    const IsCanceled& isCanceled,
+    const QString& additiveTargetP1Path)
 {
     PrivacyProfileImportStageResult result;
     result.stageDirectory = QFileInfo(stageDirectory).absoluteFilePath();
@@ -170,15 +172,140 @@ PrivacyProfileImportStageResult PrivacyProfileImportStager::stage(
         return result;
     }
 
-    if (source.schemaKind == PrivacyProfileSchemaKind::Stock)
+    if (!additiveTargetP1Path.isEmpty())
+    {
+        if (source.schemaKind != PrivacyProfileSchemaKind::Stock)
+        {
+            result.error = QLatin1String(
+                "Only a stock catalogue can be merged additively into a private profile");
+            return result;
+        }
+
+        const QString convertedSourcePath = QDir(candidateDirectory).filePath(
+            QLatin1String("source-converted.db"));
+        reportProgress(progress, QLatin1String("Convert stock catalogue to P1"), 0, 1);
+        const DbEngineParameters from = DbEngineParameters::parametersForSQLite(
+            sourceSnapshotPath);
+        const DbEngineParameters to = DbEngineParameters::parametersForSQLite(
+            convertedSourcePath);
+        CoreDbCopyManager copyManager;
+        int finishState = CoreDbCopyManager::failed;
+        QString copyError = QLatin1String(
+            "The stock catalogue conversion did not finish");
+
+        QObject::connect(&copyManager, &CoreDbCopyManager::finished,
+                         [&finishState, &copyError](int state, const QString& error)
+                         {
+                             finishState = state;
+                             copyError = error;
+                         });
+        QObject::connect(&copyManager, &CoreDbCopyManager::smallStepStarted,
+                         [progress](int current, int total)
+                         {
+                             reportProgress(progress,
+                                            QLatin1String("Convert stock catalogue to P1"),
+                                            current, total);
+                         });
+
+        copyManager.copyDatabases(from, to);
+
+        if (finishState != CoreDbCopyManager::success)
+        {
+            result.canceled = (finishState == CoreDbCopyManager::canceled);
+            result.error = copyError.isEmpty()
+                         ? QLatin1String("The stock catalogue could not be converted to P1")
+                         : copyError;
+            return result;
+        }
+
+        reportProgress(progress, QLatin1String("Copy active private profile"), 0, 1);
+        const PrivacySqliteSnapshotResult targetSnapshot = PrivacySqliteSnapshot::create(
+            additiveTargetP1Path, result.candidateCoreDatabasePath,
+            [progress](int copied, int total)
+            {
+                reportProgress(progress, QLatin1String("Copy active private profile"),
+                               copied, total);
+            },
+            isCanceled);
+
+        if (!targetSnapshot.success)
+        {
+            result.canceled = targetSnapshot.canceled;
+            result.error = targetSnapshot.error;
+            return result;
+        }
+
+        reportProgress(progress, QLatin1String("Merge stock catalogue"), 0, 1);
+        const PrivacyProfileMergeResult merged = PrivacyProfileMerge::mergeStockIntoP1(
+            convertedSourcePath, result.candidateCoreDatabasePath,
+            progress, isCanceled);
+
+        if (!merged.success)
+        {
+            result.canceled = merged.canceled;
+            result.error = merged.error;
+            return result;
+        }
+
+        result.addedItemCount = merged.addedItemCount;
+        result.skippedExistingItemCount = merged.skippedExistingItemCount;
+        result.warnings << merged.warnings;
+
+        // Preserve the target thumbnail database (existing thumbnails stay);
+        // thumbnails for newly merged items are rebuilt by the next scan.
+        const QString targetThumbnailPath = QDir(
+            QFileInfo(additiveTargetP1Path).absolutePath()).filePath(
+            QLatin1String("thumbnails-digikam.db"));
+
+        if (QFileInfo::exists(targetThumbnailPath) &&
+            thumbnailDatabaseIsCompatible(targetThumbnailPath))
+        {
+            result.candidateThumbnailDatabasePath = QDir(candidateDirectory).filePath(
+                QLatin1String("thumbnails-digikam.db"));
+            reportProgress(progress, QLatin1String("Copy active thumbnails"), 0, 1);
+            const PrivacySqliteSnapshotResult thumbnails = PrivacySqliteSnapshot::create(
+                targetThumbnailPath, result.candidateThumbnailDatabasePath,
+                [progress](int copied, int total)
+                {
+                    reportProgress(progress, QLatin1String("Copy active thumbnails"),
+                                   copied, total);
+                },
+                isCanceled);
+
+            if (thumbnails.success)
+            {
+                result.thumbnailDatabaseIncluded = true;
+            }
+            else if (thumbnails.canceled)
+            {
+                result.canceled = true;
+                result.error = thumbnails.error;
+                return result;
+            }
+            else
+            {
+                result.candidateThumbnailDatabasePath.clear();
+                result.warnings << QLatin1String(
+                    "The active thumbnail database could not be captured and will be rebuilt");
+            }
+        }
+        else if (QFileInfo::exists(targetThumbnailPath))
+        {
+            result.warnings << QLatin1String(
+                "The active thumbnail database is incompatible and will be rebuilt");
+        }
+    }
+    else if (source.schemaKind == PrivacyProfileSchemaKind::Stock)
     {
         reportProgress(progress, QLatin1String("Convert stock catalogue to P1"), 0, 1);
-        const DbEngineParameters from = DbEngineParameters::parametersForSQLite(sourceSnapshotPath);
+        const DbEngineParameters from = DbEngineParameters::parametersForSQLite(
+            sourceSnapshotPath);
         const DbEngineParameters to = DbEngineParameters::parametersForSQLite(
             result.candidateCoreDatabasePath);
         CoreDbCopyManager copyManager;
         int finishState = CoreDbCopyManager::failed;
-        QString copyError = QLatin1String("The stock catalogue conversion did not finish");
+        QString copyError = QLatin1String(
+            "The stock catalogue conversion did not finish");
 
         QObject::connect(&copyManager, &CoreDbCopyManager::finished,
                          [&finishState, &copyError](int state, const QString& error)
