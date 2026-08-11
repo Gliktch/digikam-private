@@ -11,6 +11,7 @@
 // Qt includes
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -23,6 +24,7 @@
 
 #include "privacyprofileinspector.h"
 #include "privacyprofileimportstager.h"
+#include "privacyprofilepublication.h"
 #include "privacysqlitesnapshot.h"
 #include "coredbaccess.h"
 #include "dbengineparameters.h"
@@ -43,6 +45,10 @@ private Q_SLOTS:
     void testCanceledSnapshotIsNotPublished();
     void testStockProfileStagesAsP1();
     void testP1ProfileStagesWithoutConversion();
+    void testPreparedPublicationBacksUpAndApplies();
+    void testInterruptedPublicationReplays();
+    void testIncompletePreparationIsIgnored();
+    void testConflictingDisplacedFileBlocksReplay();
 };
 
 namespace
@@ -185,6 +191,94 @@ bool downgradeFixtureToStock17(const QString& path)
 
     QSqlDatabase::removeDatabase(connectionName);
     return success;
+}
+
+bool setDatabaseMarker(const QString& path, const QString& value)
+{
+    const QString connectionName = QLatin1String("privacy-marker-write-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+    bool success = false;
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"), connectionName);
+        database.setDatabaseName(path);
+
+        if (database.open())
+        {
+            QSqlQuery query(database);
+            query.prepare(QLatin1String(
+                "INSERT OR REPLACE INTO Settings (keyword, value) VALUES ('FixtureMarker', ?);"));
+            query.addBindValue(value);
+            success = query.exec();
+            database.close();
+        }
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
+    return success;
+}
+
+QString databaseMarker(const QString& path)
+{
+    const QString connectionName = QLatin1String("privacy-marker-read-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QString value;
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"), connectionName);
+        database.setConnectOptions(QLatin1String("QSQLITE_OPEN_READONLY"));
+        database.setDatabaseName(path);
+
+        if (database.open())
+        {
+            QSqlQuery query(database);
+
+            if (query.exec(QLatin1String(
+                    "SELECT value FROM Settings WHERE keyword='FixtureMarker';")) &&
+                query.next())
+            {
+                value = query.value(0).toString();
+            }
+
+            database.close();
+        }
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
+    return value;
+}
+
+bool writeTextFile(const QString& path, const QByteArray& contents)
+{
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile file(path);
+
+    return file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+           (file.write(contents) == contents.size());
+}
+
+PrivacyProfilePaths fixtureProfilePaths(const QString& root)
+{
+    PrivacyProfilePaths paths;
+    paths.configHome = QDir(root).filePath(QLatin1String("config"));
+    paths.dataHome = QDir(root).filePath(QLatin1String("data"));
+    paths.cacheHome = QDir(root).filePath(QLatin1String("cache"));
+    paths.stateHome = QDir(root).filePath(QLatin1String("state"));
+    paths.transactionHome = QDir(root).filePath(QLatin1String("transactions"));
+    paths.configFilePath = QDir(paths.configHome).filePath(QLatin1String("digikamrc"));
+    paths.coreDatabasePath = QDir(paths.dataHome).filePath(QLatin1String("digikam4.db"));
+    paths.thumbnailDatabasePath = QDir(paths.dataHome).filePath(
+        QLatin1String("thumbnails-digikam.db"));
+    return paths;
+}
+
+PrivacyProfileImportStageResult fixtureStage(const QString& candidatePath)
+{
+    PrivacyProfileImportStageResult staged;
+    staged.success = true;
+    staged.candidateCoreDatabasePath = candidatePath;
+    staged.candidateSummary = PrivacyProfileInspector::inspectCoreDatabase(candidatePath);
+    return staged;
 }
 
 } // namespace
@@ -340,6 +434,141 @@ void PrivacyProfileImportTest::testP1ProfileStagesWithoutConversion()
     QVERIFY(staged.candidateSummary.isPrivateProfile());
     QCOMPARE(staged.candidateSummary.totalItemCount, source.totalItemCount);
     QVERIFY(QFileInfo::exists(staged.candidateCoreDatabasePath));
+}
+
+void PrivacyProfileImportTest::testPreparedPublicationBacksUpAndApplies()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const PrivacyProfilePaths paths = fixtureProfilePaths(directory.path());
+    QVERIFY(paths.isValid());
+    QVERIFY(QDir().mkpath(paths.configHome));
+    QVERIFY(QDir().mkpath(paths.dataHome));
+    QVERIFY(QDir().mkpath(paths.cacheHome));
+    QVERIFY(QDir().mkpath(paths.stateHome));
+    QVERIFY(createFullP1Database(paths.coreDatabasePath));
+    QVERIFY(setDatabaseMarker(paths.coreDatabasePath, QLatin1String("target")));
+    QVERIFY(writeTextFile(paths.configFilePath,
+                          QByteArray("[General Settings]\nVersion=target\n")));
+    QVERIFY(writeTextFile(QDir(paths.cacheHome).filePath(QLatin1String("retained.cache")),
+                          QByteArray("cache")));
+    QVERIFY(writeTextFile(QDir(paths.stateHome).filePath(QLatin1String("retained.state")),
+                          QByteArray("state")));
+    QVERIFY(writeTextFile(QDir(paths.dataHome).filePath(QLatin1String("recognition.db")),
+                          QByteArray("recognition")));
+
+    const QString candidatePath = directory.filePath(QLatin1String("candidate.db"));
+    QVERIFY(createFullP1Database(candidatePath));
+    QVERIFY(setDatabaseMarker(candidatePath, QLatin1String("candidate")));
+    const QString sourceConfig = directory.filePath(QLatin1String("source-digikamrc"));
+    QVERIFY(writeTextFile(sourceConfig,
+                          QByteArray("[General Settings]\nVersion=source\n")));
+    const PrivacyProfilePublicationResult prepared = PrivacyProfilePublication::prepare(
+        fixtureStage(candidatePath), paths, sourceConfig);
+    QVERIFY2(prepared.success, qPrintable(prepared.error));
+    QVERIFY(QFileInfo::exists(QDir(prepared.backupDirectory).filePath(
+        QLatin1String("cache/retained.cache"))));
+    const QString backupCore = QDir(prepared.backupDirectory).filePath(
+        QLatin1String("data/digikam4.db"));
+    QCOMPARE(databaseMarker(backupCore), QLatin1String("target"));
+
+    const PrivacyProfilePublicationResult applied =
+        PrivacyProfilePublication::applyPending(paths.transactionHome);
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QCOMPARE(databaseMarker(paths.coreDatabasePath), QLatin1String("candidate"));
+    QVERIFY(!QFileInfo::exists(QDir(paths.dataHome).filePath(
+        QLatin1String("recognition.db"))));
+    QVERIFY(QFileInfo::exists(QDir(applied.transactionDirectory).filePath(
+        QLatin1String("displaced/recognition.db"))));
+
+    QFile config(paths.configFilePath);
+    QVERIFY(config.open(QIODevice::ReadOnly));
+    const QByteArray configData = config.readAll();
+    QVERIFY(configData.contains("Version=source"));
+    QVERIFY(configData.contains("Database Type=QSQLITE"));
+
+    const PrivacyProfilePublicationResult replay =
+        PrivacyProfilePublication::applyPending(paths.transactionHome);
+    QVERIFY2(replay.success, qPrintable(replay.error));
+}
+
+void PrivacyProfileImportTest::testInterruptedPublicationReplays()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const PrivacyProfilePaths paths = fixtureProfilePaths(directory.path());
+    QVERIFY(QDir().mkpath(paths.configHome));
+    QVERIFY(QDir().mkpath(paths.dataHome));
+    QVERIFY(QDir().mkpath(paths.cacheHome));
+    QVERIFY(QDir().mkpath(paths.stateHome));
+    QVERIFY(createFullP1Database(paths.coreDatabasePath));
+    QVERIFY(setDatabaseMarker(paths.coreDatabasePath, QLatin1String("target")));
+    QVERIFY(writeTextFile(paths.configFilePath, QByteArray("[General Settings]\n")));
+    const QString candidatePath = directory.filePath(QLatin1String("candidate.db"));
+    QVERIFY(createFullP1Database(candidatePath));
+    QVERIFY(setDatabaseMarker(candidatePath, QLatin1String("candidate")));
+
+    const PrivacyProfilePublicationResult prepared = PrivacyProfilePublication::prepare(
+        fixtureStage(candidatePath), paths);
+    QVERIFY2(prepared.success, qPrintable(prepared.error));
+    const QString displaced = QDir(prepared.transactionDirectory).filePath(
+        QLatin1String("displaced"));
+    QVERIFY(QDir().mkpath(displaced));
+    QVERIFY(QFile::rename(paths.coreDatabasePath,
+                          QDir(displaced).filePath(QLatin1String("digikam4.db"))));
+    const QString transactionCandidate = QDir(prepared.transactionDirectory).filePath(
+        QLatin1String("candidate/digikam4.db"));
+    QVERIFY(QFile::copy(transactionCandidate,
+                        paths.coreDatabasePath +
+                        QLatin1String(".digikam-private-import-partial")));
+
+    const PrivacyProfilePublicationResult replayed =
+        PrivacyProfilePublication::applyPending(paths.transactionHome);
+    QVERIFY2(replayed.success, qPrintable(replayed.error));
+    QCOMPARE(databaseMarker(paths.coreDatabasePath), QLatin1String("candidate"));
+}
+
+void PrivacyProfileImportTest::testIncompletePreparationIsIgnored()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const PrivacyProfilePaths paths = fixtureProfilePaths(directory.path());
+    const QString preparing = QDir(paths.transactionHome).filePath(
+        QLatin1String("preparing-incomplete"));
+    QVERIFY(QDir().mkpath(preparing));
+    QVERIFY(writeTextFile(QDir(preparing).filePath(QLatin1String("partial-data")),
+                          QByteArray("incomplete")));
+
+    const PrivacyProfilePublicationResult result =
+        PrivacyProfilePublication::applyPending(paths.transactionHome);
+    QVERIFY2(result.success, qPrintable(result.error));
+}
+
+void PrivacyProfileImportTest::testConflictingDisplacedFileBlocksReplay()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const PrivacyProfilePaths paths = fixtureProfilePaths(directory.path());
+    QVERIFY(QDir().mkpath(paths.configHome));
+    QVERIFY(QDir().mkpath(paths.dataHome));
+    QVERIFY(createFullP1Database(paths.coreDatabasePath));
+    QVERIFY(setDatabaseMarker(paths.coreDatabasePath, QLatin1String("target")));
+    const QString candidatePath = directory.filePath(QLatin1String("candidate.db"));
+    QVERIFY(createFullP1Database(candidatePath));
+    QVERIFY(setDatabaseMarker(candidatePath, QLatin1String("candidate")));
+
+    const PrivacyProfilePublicationResult prepared = PrivacyProfilePublication::prepare(
+        fixtureStage(candidatePath), paths);
+    QVERIFY2(prepared.success, qPrintable(prepared.error));
+    const QString displaced = QDir(prepared.transactionDirectory).filePath(
+        QLatin1String("displaced/digikam4.db"));
+    QVERIFY(writeTextFile(displaced, QByteArray("conflict")));
+
+    const PrivacyProfilePublicationResult result =
+        PrivacyProfilePublication::applyPending(paths.transactionHome);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(QLatin1String("conflicting displaced")));
+    QCOMPARE(databaseMarker(paths.coreDatabasePath), QLatin1String("target"));
 }
 
 QTEST_GUILESS_MAIN(PrivacyProfileImportTest)

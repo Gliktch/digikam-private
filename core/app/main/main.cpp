@@ -115,6 +115,7 @@ using namespace Magick;
 #include "filesdownloader.h"
 #include "dfileoperations.h"
 #include "privacyruntime.h"
+#include "privacyprofilepublication.h"
 #include "privacythreadimagestillitemtransactionowner.h"
 
 #ifdef Q_OS_WIN
@@ -544,6 +545,16 @@ void showPrivacyStartupSummary(QWidget* const parent)
 
 MAIN_EXPORT int MAIN_FN(int argc, char** argv)
 {
+    const PrivacyProfilePublicationResult publication =
+        PrivacyProfilePublication::applyPendingFromEnvironment();
+
+    if (!publication.success)
+    {
+        qCritical() << "Pending digiKam Private profile publication failed:"
+                    << publication.error;
+        return 1;
+    }
+
     SystemSettings system(QLatin1String("digikam"));
 
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))

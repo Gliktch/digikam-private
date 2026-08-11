@@ -27,6 +27,7 @@ printf '%s\n' \
     "cache=$XDG_CACHE_HOME" \
     "state=$XDG_STATE_HOME" \
     "database=$DIGIKAM_PRIVATE_DATABASE_HOME" \
+    "transactions=$DIGIKAM_PRIVATE_TRANSACTION_HOME" \
     "args=$*"
 EOF
 chmod 755 "$fixture/app/usr/bin/digikam"
@@ -50,6 +51,7 @@ grep -Fx "data=$fixture/home/.local/share/digikam-private" <<< "$default_output"
 grep -Fx "cache=$fixture/home/.cache/digikam-private" <<< "$default_output"
 grep -Fx "state=$fixture/home/.local/state/digikam-private" <<< "$default_output"
 grep -Fx "database=$fixture/home/.local/share/digikam-private" <<< "$default_output"
+grep -Fx "transactions=$fixture/home/.local/share/digikam-private-profile-transactions" <<< "$default_output"
 grep -Fx 'args=--profile-probe' <<< "$default_output"
 
 portable_output=$(run_probe \
@@ -61,11 +63,14 @@ grep -Fx "data=$fixture/portable/data" <<< "$portable_output"
 grep -Fx "cache=$fixture/portable/cache" <<< "$portable_output"
 grep -Fx "state=$fixture/portable/state" <<< "$portable_output"
 grep -Fx "database=$fixture/portable/data" <<< "$portable_output"
+grep -Fx "transactions=$fixture/portable/profile-transactions" <<< "$portable_output"
 grep -Fx 'args=--portable-probe' <<< "$portable_output"
 
 for directory in config data cache state
 do
     test "$(stat -c '%a' "$fixture/portable/$directory")" = 700
 done
+
+test "$(stat -c '%a' "$fixture/portable/profile-transactions")" = 700
 
 echo "digiKam Private AppImage profile isolation passed"
