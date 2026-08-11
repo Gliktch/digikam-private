@@ -701,6 +701,15 @@ bool PrivacyRepository::beginExternalCheckout(
                                                       normalizedJournal);
 }
 
+bool PrivacyRepository::removeContainerAndAssets(
+    const QString& containerUuid, const QString& itemUuid) const
+{
+    CoreDbAccess access;
+
+    return access.db()->removePrivacyContainerAndAssets(
+        normalizedUuid(containerUuid), normalizedUuid(itemUuid));
+}
+
 bool PrivacyRepository::beginPasswordRewrap(
     const PrivacyTransaction& transaction,
     const PrivacyTransactionJournal& journal) const
@@ -715,6 +724,63 @@ bool PrivacyRepository::beginPasswordRewrap(
 
     return access.db()->beginPrivacyPasswordRewrap(normalizedTransaction,
                                                     normalizedJournal);
+}
+
+bool PrivacyRepository::beginMigration(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    normalizedTransaction.itemUuid = normalizedUuid(transaction.itemUuid);
+    PrivacyTransactionJournal normalizedJournal = journal;
+    normalizedJournal.transactionUuid = normalizedUuid(journal.transactionUuid);
+    normalizedJournal.rootUuid = normalizedUuid(journal.rootUuid);
+    CoreDbAccess access;
+
+    return access.db()->beginPrivacyMigration(normalizedTransaction,
+                                               normalizedJournal);
+}
+
+bool PrivacyRepository::publishMigration(
+    const PrivacyItem& item, const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets, const QString& sourceContainerUuid,
+    const PrivacyTransaction& transaction,
+    PrivacyTransactionState expectedState,
+    qlonglong expectedGeneration) const
+{
+    PrivacyItem normalizedItem = item;
+    normalizedItem.uuid = normalizedUuid(item.uuid);
+    normalizedItem.categoryUuid = normalizedUuid(item.categoryUuid);
+    PrivacyContainer normalizedContainer = container;
+    normalizedContainer.uuid = normalizedUuid(container.uuid);
+    normalizedContainer.itemUuid = normalizedUuid(container.itemUuid);
+    normalizedContainer.rootUuid = normalizedUuid(container.rootUuid);
+    normalizedContainer.storeUuid = normalizedUuid(container.storeUuid);
+    QList<PrivacyAsset> normalizedAssets;
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        PrivacyAsset normalizedAsset = asset;
+        normalizedAsset.itemUuid = normalizedUuid(asset.itemUuid);
+        normalizedAsset.publicRootUuid =
+            normalizedUuid(asset.publicRootUuid);
+        normalizedAsset.containerUuid = normalizedUuid(asset.containerUuid);
+        normalizedAssets << normalizedAsset;
+    }
+
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid =
+        normalizedUuid(transaction.categoryUuid);
+    normalizedTransaction.itemUuid = normalizedUuid(transaction.itemUuid);
+    CoreDbAccess access;
+
+    return access.db()->publishPrivacyMigration(
+        normalizedItem, normalizedContainer, normalizedAssets,
+        normalizedUuid(sourceContainerUuid), normalizedTransaction,
+        expectedState, expectedGeneration);
 }
 
 bool PrivacyRepository::publishPasswordRewrap(

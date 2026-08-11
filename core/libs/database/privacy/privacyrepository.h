@@ -108,8 +108,19 @@ public:
                                   const PrivacyTransactionJournal& journal) const;
     bool beginExternalCheckout(const PrivacyTransaction& transaction,
                                const PrivacyTransactionJournal& journal) const;
+    bool removeContainerAndAssets(const QString& containerUuid,
+                                  const QString& itemUuid) const;
     bool beginPasswordRewrap(const PrivacyTransaction& transaction,
                              const PrivacyTransactionJournal& journal) const;
+    bool beginMigration(const PrivacyTransaction& transaction,
+                        const PrivacyTransactionJournal& journal) const;
+    bool publishMigration(const PrivacyItem& item,
+                          const PrivacyContainer& container,
+                          const QList<PrivacyAsset>& assets,
+                          const QString& sourceContainerUuid,
+                          const PrivacyTransaction& transaction,
+                          PrivacyTransactionState expectedState,
+                          qlonglong expectedGeneration) const;
     bool publishPasswordRewrap(const QString& categoryUuid,
                                qlonglong categoryGeneration,
                                const PrivacyCredential& credential,

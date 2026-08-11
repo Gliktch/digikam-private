@@ -180,12 +180,16 @@ public:
                                       const PrivacyTransaction& transaction)                                    const;
     bool beginPrivacyItemUnprotection(const PrivacyTransaction& transaction,
                                       const PrivacyTransactionJournal& journal)                                 const;
+    bool removePrivacyContainerAndAssets(const QString& containerUuid,
+                                         const QString& itemUuid)                                               const;
     bool beginPrivacyCompatibilityUnlock(const PrivacyTransaction& transaction,
                                          const PrivacyTransactionJournal& journal)                              const;
     bool beginPrivacyExternalCheckout(const PrivacyTransaction& transaction,
                                       const PrivacyTransactionJournal& journal)                                 const;
     bool beginPrivacyPasswordRewrap(const PrivacyTransaction& transaction,
                                     const PrivacyTransactionJournal& journal)                                  const;
+    bool beginPrivacyMigration(const PrivacyTransaction& transaction,
+                               const PrivacyTransactionJournal& journal)                                    const;
     bool publishPrivacyPasswordRewrap(const QString& categoryUuid,
                                       qlonglong categoryGeneration,
                                       const PrivacyCredential& credential,
@@ -194,6 +198,13 @@ public:
                                       const PrivacyTransaction& transaction,
                                       PrivacyTransactionState expectedState,
                                       qlonglong expectedGeneration)                                  const;
+    bool publishPrivacyMigration(const PrivacyItem& item,
+                                 const PrivacyContainer& container,
+                                 const QList<PrivacyAsset>& assets,
+                                 const QString& sourceContainerUuid,
+                                 const PrivacyTransaction& transaction,
+                                 PrivacyTransactionState expectedState,
+                                 qlonglong expectedGeneration)                                 const;
     bool publishPrivacyItemUnprotection(qlonglong imageId,
                                         const QString& itemUuid,
                                         const QString& categoryUuid,

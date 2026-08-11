@@ -2032,6 +2032,43 @@ bool CoreDB::beginPrivacyItemUnprotection(
     return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
 }
 
+bool CoreDB::removePrivacyContainerAndAssets(
+    const QString& containerUuid, const QString& itemUuid) const
+{
+    if (containerUuid.isEmpty() || itemUuid.isEmpty() ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList containerValues;
+    containerValues << containerUuid << itemUuid;
+    const QSqlQuery containerQuery = d->db->execQuery(QString::fromUtf8(
+        "DELETE FROM PrivacyContainers WHERE uuid=? AND itemUuid=?;"),
+        containerValues);
+
+    QVariantList assetValues;
+    assetValues << containerUuid << itemUuid;
+    const QSqlQuery assetQuery = d->db->execQuery(QString::fromUtf8(
+        "DELETE FROM PrivacyAssets WHERE containerUuid=? AND itemUuid=?;"),
+        assetValues);
+
+    if (!containerQuery.isActive() || (containerQuery.numRowsAffected() != 1) ||
+        !assetQuery.isActive())
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
 bool CoreDB::beginPrivacyCompatibilityUnlock(
     const PrivacyTransaction& transaction,
     const PrivacyTransactionJournal& journal) const
@@ -2183,6 +2220,51 @@ bool CoreDB::beginPrivacyPasswordRewrap(
     return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
 }
 
+bool CoreDB::beginPrivacyMigration(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    if (!transaction.isValid() || !journal.isValid() ||
+        transaction.itemUuid.isEmpty() ||
+        (transaction.type != PrivacyTransactionType::MigrateBackend) ||
+        (transaction.state != PrivacyTransactionState::Created) ||
+        (transaction.generation != 0) ||
+        (journal.transactionUuid != transaction.uuid) ||
+        (journal.stage != static_cast<int>(PrivacyJournalStage::Created)) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList bindings;
+    bindings << transaction.uuid << transaction.itemUuid
+             << static_cast<int>(PrivacyTransactionState::Complete);
+    QVariantList expected;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE itemUuid=? "
+        "AND state<>?);"),
+        bindings, &expected);
+
+    if ((expected.size() != 2) ||
+        std::any_of(expected.cbegin(), expected.cend(),
+                    [](const QVariant& value) { return !value.toBool(); }) ||
+        !insertPrivacyTransaction(transaction) ||
+        !insertPrivacyTransactionJournal(journal))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
 bool CoreDB::publishPrivacyPasswordRewrap(
     const QString& categoryUuid, qlonglong categoryGeneration,
     const PrivacyCredential& credential, const QString& storeUuid,
@@ -2276,6 +2358,80 @@ bool CoreDB::publishPrivacyPasswordRewrap(
 
     if (!categoryQuery.isActive() || (categoryQuery.numRowsAffected() != 1) ||
         !storeQuery.isActive() || (storeQuery.numRowsAffected() != 1) ||
+        !compareAndUpdatePrivacyTransaction(transaction, expectedState,
+                                            expectedGeneration))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::publishPrivacyMigration(
+    const PrivacyItem& item, const PrivacyContainer& container,
+    const QList<PrivacyAsset>& assets, const QString& sourceContainerUuid,
+    const PrivacyTransaction& transaction,
+    PrivacyTransactionState expectedState, qlonglong expectedGeneration) const
+{
+    if (!item.isValid() || !container.isValid() || assets.isEmpty() ||
+        sourceContainerUuid.isEmpty() || !transaction.isValid() ||
+        (transaction.type != PrivacyTransactionType::MigrateBackend) ||
+        (transaction.itemUuid != item.uuid) ||
+        (transaction.categoryUuid != item.categoryUuid) ||
+        (transaction.state != PrivacyTransactionState::Applying) ||
+        (transaction.generation != expectedGeneration + 1) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList itemValues;
+    itemValues << item.categoryUuid << item.expectedProxyHash
+               << item.expectedProxySize << item.presentationVersion
+               << item.generation << item.transactionState << item.uuid;
+    const QSqlQuery itemQuery = d->db->execQuery(QString::fromUtf8(
+        "UPDATE PrivacyItems SET categoryUuid=?, expectedProxyHash=?, "
+        "expectedProxySize=?, presentationVersion=?, generation=?, "
+        "transactionState=? WHERE uuid=?;"),
+        itemValues);
+
+    if (!itemQuery.isActive() || (itemQuery.numRowsAffected() != 1) ||
+        !insertPrivacyContainer(container))
+    {
+        return abort();
+    }
+
+    for (const PrivacyAsset& asset : assets)
+    {
+        if ((asset.itemUuid != item.uuid) ||
+            (asset.containerUuid != container.uuid) ||
+            !insertPrivacyAsset(asset))
+        {
+            return abort();
+        }
+    }
+
+    QVariantList sourceValues;
+    sourceValues << sourceContainerUuid << item.uuid;
+    const QSqlQuery sourceQuery = d->db->execQuery(QString::fromUtf8(
+        "DELETE FROM PrivacyContainers WHERE uuid=? AND itemUuid=?;"),
+        sourceValues);
+
+    QVariantList sourceAssetValues;
+    sourceAssetValues << sourceContainerUuid << item.uuid;
+    const QSqlQuery sourceAssetQuery = d->db->execQuery(QString::fromUtf8(
+        "DELETE FROM PrivacyAssets WHERE containerUuid=? AND itemUuid=?;"),
+        sourceAssetValues);
+
+    if (!sourceQuery.isActive() || (sourceQuery.numRowsAffected() != 1) ||
+        !sourceAssetQuery.isActive() ||
         !compareAndUpdatePrivacyTransaction(transaction, expectedState,
                                             expectedGeneration))
     {
