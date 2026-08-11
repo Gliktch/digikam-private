@@ -349,6 +349,57 @@ PrivacyRepositorySnapshot makeSnapshot()
     return snapshot;
 }
 
+PrivacyRepositorySnapshot makeStrongSnapshot(
+    const QString& managedRootUuid,
+    const QString& storeUuid,
+    const QString& configuredPath = QLatin1String("/synthetic/vault"))
+{
+    PrivacyRepositorySnapshot snapshot;
+    PrivacyCategory strong = makeCategory();
+    strong.backend = PrivacyBackend::Strong;
+    snapshot.categories << strong;
+
+    PrivacyStorageRoot managedRoot = makeRoot(managedRootUuid, -1);
+    managedRoot.kind = PrivacyStorageRootKind::ManagedStoreRoot;
+    managedRoot.configuredPath = configuredPath;
+    managedRoot.identityData =
+        PrivacyRootIdentityCodec::encodeManagedRootV1(markerUuid);
+    managedRoot.markerUuid = markerUuid;
+    snapshot.storageRoots << makeRoot(rootUuid, 9) << managedRoot;
+
+    PrivacyStore store;
+    store.uuid = storeUuid;
+    store.categoryUuid = categoryUuid;
+    store.rootUuid = managedRootUuid;
+    store.format = QLatin1String("gocryptfs");
+    store.formatVersion = 2;
+    store.cipherRelativePath = QLatin1String("stores/") + storeUuid;
+    store.configRelativePath = store.cipherRelativePath +
+                               QLatin1String("/gocryptfs.conf");
+    store.configGeneration = 1;
+    store.lifecycleState = PrivacyStoreLifecycleState::Active;
+    store.createdAt = QDateTime::currentDateTimeUtc();
+    snapshot.stores << store;
+
+    PrivacyStoreBinding binding;
+    binding.categoryUuid = categoryUuid;
+    binding.role = PrivacyStoreRole::Originals;
+    binding.storeUuid = storeUuid;
+    snapshot.storeBindings << binding;
+
+    snapshot.items << makeItem();
+    snapshot.assets << makeAsset(PrivacyAsset::PrimaryMediaRole, 55);
+    PrivacyContainer strongContainer = makeContainer(
+        QLatin1String("50000000-0000-0000-0000-000000000001"),
+        QLatin1String("originals/50000000-0000-0000-0000-000000000001"), 100);
+    strongContainer.kind = PrivacyContainerKind::StrongObject;
+    strongContainer.rootUuid.clear();
+    strongContainer.storeUuid = storeUuid;
+    snapshot.containers << strongContainer;
+
+    return snapshot;
+}
+
 PrivacyScanRequest makeScanRequest(int albumRootId, qlonglong size)
 {
     PrivacyScanRequest request;
@@ -392,6 +443,8 @@ private Q_SLOTS:
     void testDynamicAlbumRootRegistration();
     void testDynamicProtectedItemPublication();
     void testStrongOriginalAvailabilityFollowsUnlockState();
+    void testStrongManagedStoreMissingCiphertextOrConfig();
+    void testStrongManagedRootIdentityMismatch();
     void testClearThumbnailSourcePublication();
     void testRootEpochTransition();
     void testTransactionStates();
@@ -1509,49 +1562,8 @@ void PrivacyRuntimeTest::testStrongOriginalAvailabilityFollowsUnlockState()
         QLatin1String("30000000-0000-0000-0000-000000000003");
     const QString storeUuid =
         QLatin1String("70000000-0000-0000-0000-000000000001");
-
-    PrivacyRepositorySnapshot snapshot;
-    PrivacyCategory strong = makeCategory();
-    strong.backend = PrivacyBackend::Strong;
-    snapshot.categories << strong;
-
-    PrivacyStorageRoot managedRoot = makeRoot(managedRootUuid, -1);
-    managedRoot.kind = PrivacyStorageRootKind::ManagedStoreRoot;
-    managedRoot.configuredPath = QLatin1String("/synthetic/vault");
-    managedRoot.identityData =
-        PrivacyRootIdentityCodec::encodeManagedRootV1(markerUuid);
-    managedRoot.markerUuid = markerUuid;
-    snapshot.storageRoots << makeRoot(rootUuid, 9) << managedRoot;
-
-    PrivacyStore store;
-    store.uuid = storeUuid;
-    store.categoryUuid = categoryUuid;
-    store.rootUuid = managedRootUuid;
-    store.format = QLatin1String("gocryptfs");
-    store.formatVersion = 2;
-    store.cipherRelativePath = QLatin1String("stores/") + storeUuid;
-    store.configRelativePath = store.cipherRelativePath +
-                               QLatin1String("/gocryptfs.conf");
-    store.configGeneration = 1;
-    store.lifecycleState = PrivacyStoreLifecycleState::Active;
-    store.createdAt = QDateTime::currentDateTimeUtc();
-    snapshot.stores << store;
-
-    PrivacyStoreBinding binding;
-    binding.categoryUuid = categoryUuid;
-    binding.role = PrivacyStoreRole::Originals;
-    binding.storeUuid = storeUuid;
-    snapshot.storeBindings << binding;
-
-    snapshot.items << makeItem();
-    snapshot.assets << makeAsset(PrivacyAsset::PrimaryMediaRole, 55);
-    PrivacyContainer strongContainer = makeContainer(
-        QLatin1String("50000000-0000-0000-0000-000000000001"),
-        QLatin1String("originals/50000000-0000-0000-0000-000000000001"), 100);
-    strongContainer.kind = PrivacyContainerKind::StrongObject;
-    strongContainer.rootUuid.clear();
-    strongContainer.storeUuid = storeUuid;
-    snapshot.containers << strongContainer;
+    const PrivacyRepositorySnapshot snapshot =
+        makeStrongSnapshot(managedRootUuid, storeUuid);
 
     const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
     verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
@@ -1606,6 +1618,114 @@ void PrivacyRuntimeTest::testStrongOriginalAvailabilityFollowsUnlockState()
     QVERIFY(!leaseState.storeRootAvailable);
     QCOMPARE(registry.validate(originalLease),
              PrivacyLeaseValidation::RootUnavailable);
+}
+
+void PrivacyRuntimeTest::testStrongManagedStoreMissingCiphertextOrConfig()
+{
+    QTemporaryDir temporaryRoot;
+    QVERIFY(temporaryRoot.isValid());
+    const QString managedRootUuid =
+        QLatin1String("30000000-0000-0000-0000-000000000003");
+    const QString storeUuid =
+        QLatin1String("70000000-0000-0000-0000-000000000001");
+    PrivacyRepositorySnapshot snapshot =
+        makeStrongSnapshot(managedRootUuid, storeUuid,
+                           temporaryRoot.path());
+    const QString storeDirectory = QDir(temporaryRoot.path()).filePath(
+        snapshot.stores.constFirst().cipherRelativePath);
+    const QString configPath = QDir(temporaryRoot.path()).filePath(
+        snapshot.stores.constFirst().configRelativePath);
+    QVERIFY(QDir().mkpath(storeDirectory));
+    QVERIFY(writeSizedFile(configPath, 128));
+
+    const QSharedPointer<const PrivacyRootIntegrityInspector> inspector =
+        createDefaultPrivacyRootIntegrityInspector();
+    PrivacyRootInspectionResult result = inspector->inspect(
+        snapshot.storageRoots.constLast(), snapshot);
+    QCOMPARE(result.disposition, PrivacyIntegrityDisposition::Verified);
+    QCOMPARE(result.summary.missingProtectedObjectCount, 0);
+    QVERIFY(!result.originalIssueItemUuids.contains(itemUuid));
+
+    QVERIFY(QFile::remove(configPath));
+    result = inspector->inspect(snapshot.storageRoots.constLast(), snapshot);
+    QCOMPARE(result.summary.missingProtectedObjectCount, 1);
+    QVERIFY(result.originalIssueItemUuids.contains(itemUuid));
+
+    QVERIFY(QDir(storeDirectory).removeRecursively());
+    result = inspector->inspect(snapshot.storageRoots.constLast(), snapshot);
+    QCOMPARE(result.summary.missingProtectedObjectCount, 1);
+    QVERIFY(result.originalIssueItemUuids.contains(itemUuid));
+
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+    verifier->states.insert(managedRootUuid,
+                            PrivacyRootRuntimeState::VerifiedAvailable);
+    const QSharedPointer<PrivacyRuntimeCoordinator> runtime(
+        new PrivacyRuntimeCoordinator);
+    const PrivacyStartupReport report =
+        runtime->initialize(snapshot, verifier, {}, inspector);
+    const PrivacyRootIntegritySummary* managedSummary = nullptr;
+
+    for (const PrivacyRootIntegritySummary& reportedRoot : report.roots)
+    {
+        if (reportedRoot.rootUuid == managedRootUuid)
+        {
+            managedSummary = &reportedRoot;
+            break;
+        }
+    }
+
+    QVERIFY(managedSummary);
+    QCOMPARE(runtime->rootState(managedRootUuid),
+             PrivacyRootRuntimeState::VerifiedAvailable);
+    QCOMPARE(managedSummary->missingProtectedObjectCount, 1);
+    QVERIFY(runtime->setCategoryUnlocked(categoryUuid, true));
+
+    PrivacyActionItemState actionState;
+    QVERIFY(runtime->stateForItem(42, &actionState));
+    QCOMPARE(actionState.access, PrivacyItemAccess::Unlocked);
+    QVERIFY(!actionState.originalReady);
+    PrivacyLeaseCurrentState leaseState;
+    QVERIFY(runtime->currentState(itemUuid, &leaseState));
+    QVERIFY(leaseState.categoryUnlocked);
+    QVERIFY(!leaseState.storeRootAvailable);
+}
+
+void PrivacyRuntimeTest::testStrongManagedRootIdentityMismatch()
+{
+    const QString managedRootUuid =
+        QLatin1String("30000000-0000-0000-0000-000000000003");
+    const QString storeUuid =
+        QLatin1String("70000000-0000-0000-0000-000000000001");
+    const PrivacyRepositorySnapshot snapshot =
+        makeStrongSnapshot(managedRootUuid, storeUuid);
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+    verifier->states.insert(managedRootUuid,
+                            PrivacyRootRuntimeState::IdentityMismatch);
+    const QSharedPointer<FakeIntegrityInspector> integrity(
+        new FakeIntegrityInspector);
+    const QSharedPointer<PrivacyRuntimeCoordinator> runtime(
+        new PrivacyRuntimeCoordinator);
+    const PrivacyStartupReport report = runtime->initialize(
+        snapshot, verifier, {}, integrity);
+    QCOMPARE(report.mismatchedRootCount, 1);
+    QCOMPARE(runtime->rootState(managedRootUuid),
+             PrivacyRootRuntimeState::IdentityMismatch);
+
+    PrivacyActionItemState actionState;
+    QVERIFY(runtime->stateForItem(42, &actionState));
+    QCOMPARE(actionState.originalRootState,
+             PrivacyRootRuntimeState::IdentityMismatch);
+    QVERIFY(!actionState.originalReady);
+
+    QVERIFY(runtime->setCategoryUnlocked(categoryUuid, true));
+    QVERIFY(runtime->stateForItem(42, &actionState));
+    QCOMPARE(actionState.access, PrivacyItemAccess::Unlocked);
+    QVERIFY(!actionState.originalReady);
+    PrivacyLeaseCurrentState leaseState;
+    QVERIFY(runtime->currentState(itemUuid, &leaseState));
+    QVERIFY(!leaseState.storeRootAvailable);
 }
 
 void PrivacyRuntimeTest::testClearThumbnailSourcePublication()

@@ -627,11 +627,41 @@ public:
                 continue;
             }
 
+            bool storeArtifactsMissing = false;
+
+            if (store.lifecycleState == PrivacyStoreLifecycleState::Active)
+            {
+                QString cipherPath;
+                QString configPath;
+                const QFileInfo cipherInfo(
+                    checkedPath(store.cipherRelativePath, &cipherPath)
+                        ? cipherPath
+                        : QString());
+                const QFileInfo configInfo(
+                    checkedPath(store.configRelativePath, &configPath)
+                        ? configPath
+                        : QString());
+
+                storeArtifactsMissing =
+                    !cipherInfo.exists() || !cipherInfo.isDir() ||
+                    cipherInfo.isSymLink() || !configInfo.exists() ||
+                    !configInfo.isFile() || configInfo.isSymLink() ||
+                    (configInfo.size() <= 0) ||
+                    (configInfo.size() > (1024 * 1024));
+            }
+
             for (const PrivacyContainer& container : snapshot.containers)
             {
                 if (container.storeUuid == store.uuid)
                 {
                     protectedItemUuids.insert(container.itemUuid);
+
+                    if (storeArtifactsMissing)
+                    {
+                        ++result.summary.missingProtectedObjectCount;
+                        result.originalIssueItemUuids.insert(
+                            container.itemUuid);
+                    }
                 }
             }
         }
@@ -3082,15 +3112,6 @@ bool PrivacyRuntimeCoordinator::publishProtectedItemForProtectRecovery(
         int activeTransactionCount = 0;
         bool exactProtectAffectsRoot = false;
 
-        if ((d->rootStates.value(rootUuid,
-                                 PrivacyRootRuntimeState::Unknown) !=
-             PrivacyRootRuntimeState::Recovering) ||
-            summary.identityMismatch ||
-            (summary.unresolvedTransactionCount != 1))
-        {
-            return false;
-        }
-
         for (const PrivacyTransaction& transaction :
              std::as_const(d->snapshot.transactions))
         {
@@ -3117,11 +3138,29 @@ bool PrivacyRuntimeCoordinator::publishProtectedItemForProtectRecovery(
             }
 
             ++activeTransactionCount;
-            exactProtectAffectsRoot = exactProtectAffectsRoot ||
-                (transaction.uuid == completedTransaction.uuid);
+                exactProtectAffectsRoot = exactProtectAffectsRoot ||
+                    (transaction.uuid == completedTransaction.uuid);
         }
 
-        if ((activeTransactionCount != 1) || !exactProtectAffectsRoot)
+        const PrivacyRootRuntimeState rootState =
+            d->rootStates.value(rootUuid,
+                                PrivacyRootRuntimeState::Unknown);
+
+        if (rootState == PrivacyRootRuntimeState::Recovering)
+        {
+            if (summary.identityMismatch ||
+                (summary.unresolvedTransactionCount != 1) ||
+                (activeTransactionCount != 1) ||
+                !exactProtectAffectsRoot)
+            {
+                return false;
+            }
+        }
+        else if ((rootState !=
+                  PrivacyRootRuntimeState::VerifiedAvailable) ||
+                 summary.identityMismatch ||
+                 (activeTransactionCount != 0) ||
+                 summary.hasReportableIssues(true))
         {
             return false;
         }
@@ -3424,15 +3463,6 @@ bool PrivacyRuntimeCoordinator::removeProtectedItemInternal(
             int activeTransactionCount = 0;
             bool recoveryTransactionAffectsRoot = false;
 
-            if ((d->rootStates.value(rootUuid,
-                                     PrivacyRootRuntimeState::Unknown) !=
-                 PrivacyRootRuntimeState::Recovering) ||
-                summary.identityMismatch ||
-                (summary.unresolvedTransactionCount != 1))
-            {
-                return false;
-            }
-
             for (const PrivacyTransaction& transaction :
                  std::as_const(d->snapshot.transactions))
             {
@@ -3464,8 +3494,25 @@ bool PrivacyRuntimeCoordinator::removeProtectedItemInternal(
                     (transaction.uuid == recoveryTransactionUuid);
             }
 
-            if ((activeTransactionCount != 1) ||
-                !recoveryTransactionAffectsRoot)
+            const PrivacyRootRuntimeState rootState =
+                d->rootStates.value(rootUuid,
+                                    PrivacyRootRuntimeState::Unknown);
+
+            if (rootState == PrivacyRootRuntimeState::Recovering)
+            {
+                if (summary.identityMismatch ||
+                    (summary.unresolvedTransactionCount != 1) ||
+                    (activeTransactionCount != 1) ||
+                    !recoveryTransactionAffectsRoot)
+                {
+                    return false;
+                }
+            }
+            else if ((rootState !=
+                      PrivacyRootRuntimeState::VerifiedAvailable) ||
+                     summary.identityMismatch ||
+                     (activeTransactionCount != 0) ||
+                     summary.hasReportableIssues(true))
             {
                 return false;
             }
