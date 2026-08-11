@@ -1481,13 +1481,32 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityUnlock(
     const PrivacyStorageRoot* const root = primary
         ? rootForUuid(snapshot, primary->publicRootUuid)
         : nullptr;
+    const PrivacyContainer* compatibilityContainer = nullptr;
+
+    for (const PrivacyContainer& candidate : snapshot.containers)
+    {
+        if (candidate.itemUuid == item->uuid)
+        {
+            compatibilityContainer = &candidate;
+            break;
+        }
+    }
+
+    const QString strongStoreUuid =
+        (category && compatibilityContainer &&
+         (category->backend == PrivacyBackend::Strong) &&
+         (compatibilityContainer->kind ==
+          PrivacyContainerKind::StrongObject))
+            ? compatibilityContainer->storeUuid
+            : QString();
     PrivacyJournalRootExpectation expectation;
 
     if (!item || !category || !primary || (assetCount <= 0) ||
         (activeTransactionCount != 0) ||
-        (category->backend != PrivacyBackend::Casual) ||
         (category->lifecycleState !=
          PrivacyCategoryLifecycleState::Active) ||
+        ((category->backend == PrivacyBackend::Strong) &&
+         strongStoreUuid.isEmpty()) ||
         !root ||
         (runtime->rootState(root->uuid) !=
          PrivacyRootRuntimeState::VerifiedAvailable) ||
@@ -1519,11 +1538,11 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityUnlock(
     const QString categoryUuid = category->uuid;
     const PrivacyStorageRoot publicRoot = *root;
     const PrivacyCategoryOperationStatus operationStatus =
-        sessions->runWithUnlockedSecret(
+        sessions->runWithUnlockedStore(
             categoryUuid,
             [this, &info, &result, itemUuid, categoryUuid, publicRoot,
-             expectation]
-            (const PrivacyPassword& password)
+             expectation, strongStoreUuid]
+            (const PrivacyPassword& password, const QString& plaintextRoot)
             {
                 PrivacyCompatibilityUnlockRequest request;
                 request.imageId = info.id();
@@ -1533,6 +1552,8 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityUnlock(
                 request.groupUuid = newUuid();
                 request.publicRoot = publicRoot;
                 request.rootExpectation = expectation;
+                request.vaultPlaintextRoot = plaintextRoot;
+                request.strongStoreUuid = strongStoreUuid;
                 QMutexLocker locker(&d->transactionMutex);
                 result = d->engine.compatibilityUnlock(request, password);
             });

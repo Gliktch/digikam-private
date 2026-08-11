@@ -158,6 +158,10 @@ public:
     QString groupUuid;
     PrivacyStorageRoot publicRoot;
     PrivacyJournalRootExpectation rootExpectation;
+    // Strong categories only: mounted Originals vault context supplied by the
+    // authenticated category session.
+    QString vaultPlaintextRoot;
+    QString strongStoreUuid;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyCompatibilityRelockRequest

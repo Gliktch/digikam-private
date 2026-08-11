@@ -4323,32 +4323,91 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
         snapshot, request.categoryUuid);
     const PrivacyContainer* const container = containerForItem(snapshot, itemUuid);
     const QList<PrivacyAsset> assets = assetsForItem(snapshot, itemUuid);
+    const bool strongBackend =
+        (category && (category->backend == PrivacyBackend::Strong));
+    const bool containerMatches =
+        (category && !strongBackend)
+            ? ((container &&
+                (container->kind ==
+                 PrivacyContainerKind::CasualArchive)) &&
+               (container->rootUuid == request.publicRoot.uuid))
+            : (strongBackend &&
+               (container &&
+                (container->kind ==
+                 PrivacyContainerKind::StrongObject)) &&
+               container->rootUuid.isEmpty() &&
+               (container->storeUuid == request.strongStoreUuid));
+
+    if (strongBackend &&
+        (request.vaultPlaintextRoot.isEmpty() ||
+         !QFileInfo(request.vaultPlaintextRoot).isDir() ||
+         !canonicalUuid(request.strongStoreUuid)))
+    {
+        return fail(PrivacyStillItemTransactionStatus::InvalidRequest,
+                    QStringLiteral(
+                        "Strong Compatibility Unlock requires the mounted Originals vault"));
+    }
 
     if (!item || (item->imageId != request.imageId) ||
         (item->categoryUuid != request.categoryUuid) || !category ||
-        (category->backend != PrivacyBackend::Casual) ||
         (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
-        !container || (container->kind != PrivacyContainerKind::CasualArchive) ||
+        !container || !containerMatches ||
         (container->state != PrivacyContainerState::Verified) ||
-        (container->rootUuid != request.publicRoot.uuid) || assets.isEmpty() ||
+        assets.isEmpty() ||
         (assets.size() > PrivacyTransactionJournalCodec::MaximumAssetCount))
     {
         return fail(
             PrivacyStillItemTransactionStatus::AssociatedAssetSetUnsupported,
-            QStringLiteral("item is not one exact active Casual asset set"));
+            QStringLiteral("item is not one exact active protected asset set"));
     }
 
     const QString archivePath = absolutePath(request.publicRoot,
                                              container->objectRelativePath);
     PrivacyJournalObjectFact archiveFact;
 
-    if (archivePath.isEmpty() ||
-        !stableFileFact(archivePath, nullptr, &archiveFact) ||
-        (archiveFact.linkCount != 1) ||
-        (archiveFact.size != container->protectedSize) ||
-        (container->protectedHashAlgorithm != QLatin1String("sha256")) ||
-        (archiveFact.sha256 !=
-         QByteArray::fromHex(container->protectedHash.toLatin1())))
+    if (strongBackend)
+    {
+        QList<PrivacyStrongObjectMember> strongMembers;
+
+        for (const PrivacyAsset& asset : assets)
+        {
+            PrivacyStrongObjectMember strongMember;
+            strongMember.sourcePath.clear();
+            strongMember.protectedRelativePath =
+                asset.protectedRelativePath;
+            strongMember.originalName = asset.originalName;
+            strongMember.expectedSize = asset.originalSize;
+            strongMember.expectedSha256 = QByteArray::fromHex(
+                asset.originalHash.toLatin1());
+            strongMembers << strongMember;
+        }
+
+        QString strongDetail;
+
+        if (!PrivacyStrongObjectBackend::verifyObjects(
+                request.vaultPlaintextRoot,
+                container->objectRelativePath, strongMembers,
+                container->protectedSize,
+                QByteArray::fromHex(container->protectedHash.toLatin1()),
+                &strongDetail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                        strongDetail);
+        }
+
+        archiveFact.presence = PrivacyJournalExpectedPresence::Present;
+        archiveFact.size = container->protectedSize;
+        archiveFact.linkCount = 1;
+        archiveFact.sha256 = QByteArray::fromHex(
+            container->protectedHash.toLatin1());
+    }
+    else if (archivePath.isEmpty() ||
+             !stableFileFact(archivePath, nullptr, &archiveFact) ||
+             (archiveFact.linkCount != 1) ||
+             (archiveFact.size != container->protectedSize) ||
+             (container->protectedHashAlgorithm != QLatin1String("sha256")) ||
+             (archiveFact.sha256 !=
+              QByteArray::fromHex(container->protectedHash.toLatin1())))
     {
         return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
                     QStringLiteral("verified Casual archive facts do not match"));
@@ -4451,7 +4510,8 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
     }
 
     if (!foundPrimary ||
-        !verifyArchiveMember(d->archive, created, archivePath, password))
+        (!strongBackend &&
+         !verifyArchiveMember(d->archive, created, archivePath, password)))
     {
         return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
                     QStringLiteral("archive/member/password verification failed"));
@@ -4542,19 +4602,6 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
                         QStringLiteral("asset mapping disappeared"));
         }
 
-        PrivacyCasualArchiveRestoreRequest restore;
-        restore.archivePath = archivePath;
-        restore.categoryUuid = request.categoryUuid;
-        restore.containerUuid = container->uuid;
-        restore.itemUuid = itemUuid;
-        restore.protectedRelativePath = assetIt->protectedRelativePath;
-        restore.originalName = assetIt->originalName;
-        restore.role = assetIt->role;
-        restore.ordinal = assetIt->ordinal;
-        restore.expectedArchiveSize = archiveFact.size;
-        restore.expectedArchiveSha256 = archiveFact.sha256;
-        restore.expectedMemberSize = assetIt->originalSize;
-        restore.expectedMemberSha256 = journalAsset.original.sha256;
         PrivacyPublicReplacementStageRequest stageRequest;
         stageRequest.absoluteRootPath = request.publicRoot.configuredPath;
         stageRequest.rootExpectation = request.rootExpectation;
@@ -4566,7 +4613,7 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
         const PrivacyPublicReplacementStageResult staged =
             d->transition.stageReplacement(
                 stageRequest,
-                [&](int descriptor, QString*)
+                [&](int descriptor, QString* producerDetail)
                 {
                     QFile destination;
 
@@ -4576,10 +4623,79 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
                         return false;
                     }
 
-                    const bool restored = d->archive.restoreMember(
-                        restore, password, &destination);
-                    destination.close();
-                    return restored;
+                    if (strongBackend)
+                    {
+                        const QString objectPath = QDir(
+                            request.vaultPlaintextRoot).filePath(
+                            assetIt->protectedRelativePath);
+                        QFile object(objectPath);
+
+                        if (!object.open(QIODevice::ReadOnly) ||
+                            (object.size() != assetIt->originalSize))
+                        {
+                            destination.close();
+                            return false;
+                        }
+
+                        QCryptographicHash hasher(QCryptographicHash::Sha256);
+                        QByteArray buffer;
+                        buffer.resize(1024 * 1024);
+
+                        while (!object.atEnd())
+                        {
+                            const qint64 read =
+                                object.read(buffer.data(), buffer.size());
+
+                            if ((read <= 0) ||
+                                (destination.write(buffer.constData(),
+                                                   read) != read))
+                            {
+                                destination.close();
+                                return false;
+                            }
+
+                            hasher.addData(buffer.constData(), read);
+                        }
+
+                        destination.close();
+
+                        if (hasher.result() !=
+                            QByteArray::fromHex(
+                                assetIt->originalHash.toLatin1()))
+                        {
+                            if (producerDetail)
+                            {
+                                *producerDetail = QStringLiteral(
+                                    "Strong vault object hash mismatch");
+                            }
+
+                            return false;
+                        }
+
+                        return true;
+                    }
+                    else
+                    {
+                        PrivacyCasualArchiveRestoreRequest restore;
+                        restore.archivePath = archivePath;
+                        restore.categoryUuid = request.categoryUuid;
+                        restore.containerUuid = container->uuid;
+                        restore.itemUuid = itemUuid;
+                        restore.protectedRelativePath =
+                            assetIt->protectedRelativePath;
+                        restore.originalName = assetIt->originalName;
+                        restore.role = assetIt->role;
+                        restore.ordinal = assetIt->ordinal;
+                        restore.expectedArchiveSize = archiveFact.size;
+                        restore.expectedArchiveSha256 = archiveFact.sha256;
+                        restore.expectedMemberSize = assetIt->originalSize;
+                        restore.expectedMemberSha256 =
+                            journalAsset.original.sha256;
+                        const bool restored = d->archive.restoreMember(
+                            restore, password, &destination);
+                        destination.close();
+                        return restored;
+                    }
                 });
 
         if (!staged.succeeded())
@@ -4751,8 +4867,9 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
                            primaryTransitionAsset->publicRelativePath);
     PrivacyJournalObjectFact transitionArchiveFact;
 
-    if (!stableFileFact(archivePath, nullptr, &transitionArchiveFact) ||
-        !sameFact(transitionArchiveFact, archiveFact))
+    if (!strongBackend &&
+        (!stableFileFact(archivePath, nullptr, &transitionArchiveFact) ||
+         !sameFact(transitionArchiveFact, archiveFact)))
     {
         return fail(
             PrivacyStillItemTransactionStatus::ArchiveFailure,
