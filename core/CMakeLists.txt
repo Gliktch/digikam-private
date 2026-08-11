@@ -109,6 +109,7 @@ endif()
 
 find_package(PkgConfig)
 find_package(libzip 1.11.4 EXACT CONFIG REQUIRED)       # digiKam Private casual archives.
+find_package(SQLite3 REQUIRED)                          # digiKam Private profile snapshots.
 find_package(Jasper)                               # For JPEG 2000 support.
 find_package(Eigen3)                               # For Refocus tool.
 

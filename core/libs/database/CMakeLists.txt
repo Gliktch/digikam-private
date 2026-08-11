@@ -113,6 +113,8 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyleaseregistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacypreparedaccessregistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyprotectpreflight.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyprofileinspector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacysqlitesnapshot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyproxygenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacycheckoutstore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacyderivativestore.cpp
@@ -238,6 +240,7 @@ target_compile_definitions(digikamdatabase_obj
 target_link_libraries(digikamdatabase_obj
                       PRIVATE
                       libzip::zip
+                      SQLite::SQLite3
 )
 
 # Specific settings with C++20 required by Qt 6.7 and later for history classes based on Boost.

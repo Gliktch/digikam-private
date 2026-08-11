@@ -51,6 +51,7 @@ target_link_libraries(digikamdatabase
                       digikamcore
 
                       libzip::zip
+                      SQLite::SQLite3
 
                       opencv_core
                       opencv_objdetect
