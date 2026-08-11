@@ -915,12 +915,18 @@ PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::create(
         snapshot, request.publicRoot.uuid);
     const PrivacyStorageRoot* const storeRoot = storageRootFor(
         snapshot, request.storeRoot.uuid);
+    const bool containerMatches =
+        (category->backend == PrivacyBackend::Casual)
+            ? ((container->kind == PrivacyContainerKind::CasualArchive) &&
+               (container->rootUuid == request.publicRoot.uuid))
+            : ((container->kind == PrivacyContainerKind::StrongObject) &&
+               container->rootUuid.isEmpty() &&
+               (container->storeUuid == categoryStore->uuid));
 
     if (!category || !container || !categoryStore || !publicRoot || !storeRoot ||
         (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
         (container->state != PrivacyContainerState::Verified) ||
-        (container->rootUuid != request.publicRoot.uuid) ||
-        (container->kind != PrivacyContainerKind::CasualArchive) ||
+        !containerMatches ||
         (categoryStore->categoryUuid != request.categoryUuid) ||
         (categoryStore->rootUuid != request.storeRoot.uuid) ||
         (categoryStore->format != QLatin1String("gocryptfs")) ||
@@ -930,7 +936,7 @@ PrivacyExternalCheckoutResult PrivacyExternalCheckoutTransactionEngine::create(
     {
         return failure(PrivacyExternalCheckoutStatus::ItemUnavailable,
                        request.transactionUuid, item->uuid,
-                       QStringLiteral("verified Casual protected object is unavailable"));
+                       QStringLiteral("verified protected object is unavailable"));
     }
 
     for (const PrivacyTransaction& transaction : snapshot.transactions)
@@ -1329,15 +1335,24 @@ PrivacyExternalCheckoutTransactionEngine::resumeAuthenticatedCreate(
                           return (candidate.itemUuid == item->uuid);
                       })
         : nullptr;
+    const bool containerMatches =
+        (category && (category->backend == PrivacyBackend::Casual))
+            ? ((container &&
+                (container->kind ==
+                 PrivacyContainerKind::CasualArchive)) &&
+               (container->rootUuid == request.publicRoot.uuid))
+            : ((container &&
+                (container->kind ==
+                 PrivacyContainerKind::StrongObject)) &&
+               container->rootUuid.isEmpty() &&
+               (container->storeUuid == request.storeUuid));
 
     if (!item || !category || !container ||
         (item->categoryUuid != request.categoryUuid) ||
         (item->generation != created.generation) ||
-        (category->backend != PrivacyBackend::Casual) ||
         (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
-        (container->kind != PrivacyContainerKind::CasualArchive) ||
+        !containerMatches ||
         (container->state != PrivacyContainerState::Verified) ||
-        (container->rootUuid != request.publicRoot.uuid) ||
         (container->credentialGeneration != created.credentialGeneration))
     {
         return failure(PrivacyExternalCheckoutStatus::ItemUnavailable,

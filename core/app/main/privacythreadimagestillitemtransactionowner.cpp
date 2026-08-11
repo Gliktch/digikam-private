@@ -1657,8 +1657,25 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
         }
     }
 
+    const PrivacyAsset* const primaryAsset = [&assets]()
+    {
+        for (const PrivacyAsset& candidate : assets)
+        {
+            if ((candidate.role == PrivacyAsset::PrimaryMediaRole) &&
+                (candidate.ordinal == 0))
+            {
+                return &candidate;
+            }
+        }
+
+        return static_cast<const PrivacyAsset*>(nullptr);
+    }();
     const PrivacyStorageRoot* const root = container
-        ? rootForUuid(snapshot, container->rootUuid)
+        ? ((container->kind == PrivacyContainerKind::CasualArchive)
+               ? rootForUuid(snapshot, container->rootUuid)
+               : (primaryAsset
+                      ? rootForUuid(snapshot, primaryAsset->publicRootUuid)
+                      : nullptr))
         : nullptr;
     const PrivacyStore* const checkoutStore = category
         ? checkoutStoreForCategory(snapshot, category->uuid)
@@ -1666,14 +1683,25 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
     const PrivacyStorageRoot* const checkoutStoreRoot = checkoutStore
         ? rootForUuid(snapshot, checkoutStore->rootUuid)
         : nullptr;
+    const bool containerMatches =
+        (category && container &&
+         (category->backend == PrivacyBackend::Casual))
+            ? ((container->kind ==
+                PrivacyContainerKind::CasualArchive) &&
+               root && (container->rootUuid == root->uuid))
+            : (category && container && checkoutStore &&
+               (category->backend == PrivacyBackend::Strong) &&
+               (container->kind ==
+                PrivacyContainerKind::StrongObject) &&
+               container->rootUuid.isEmpty() &&
+               (container->storeUuid == checkoutStore->uuid));
     PrivacyJournalRootExpectation publicRootExpectation;
     PrivacyJournalRootExpectation storeRootExpectation;
 
-    if (!category || !container || assets.isEmpty() ||
-        (category->backend != PrivacyBackend::Casual) ||
+    if (!category || !container || assets.isEmpty() || !primaryAsset ||
         (category->lifecycleState !=
          PrivacyCategoryLifecycleState::Active) ||
-        (container->kind != PrivacyContainerKind::CasualArchive) ||
+        !containerMatches ||
         (container->state != PrivacyContainerState::Verified) || !root ||
         !checkoutStore || !checkoutStoreRoot ||
         (checkoutStore->lifecycleState != PrivacyStoreLifecycleState::Active) ||
@@ -1738,11 +1766,13 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
     const PrivacyTransactionState resumeTransactionState = activeTransaction
         ? activeTransaction->state
         : static_cast<PrivacyTransactionState>(0);
+    const bool strongBackend =
+        (category->backend == PrivacyBackend::Strong);
     const PrivacyCategoryOperationStatus operationStatus =
         sessions->runWithUnlockedStore(
             categoryUuid,
             [this, &result, imageId, itemUuid, categoryUuid, containerUuid,
-             archivePath, archiveSize, archiveHash, publicRoot,
+             archivePath, archiveSize, archiveHash, strongBackend, publicRoot,
              publicRootExpectation, checkoutStoreUuid, managedStoreRoot,
              storeRootExpectation,
              checkoutAssets, resumeTransactionUuid, resumeTransactionState](
@@ -1762,89 +1792,213 @@ PrivacyThreadImageIOStillItemTransactionOwner::prepareExternalOpen(
 
                 for (const PrivacyAsset& asset : checkoutAssets)
                 {
-                    PrivacyCasualArchiveRestoreRequest restore;
-                    restore.archivePath = archivePath;
-                    restore.categoryUuid = categoryUuid;
-                    restore.containerUuid = containerUuid;
-                    restore.itemUuid = itemUuid;
-                    restore.protectedRelativePath = asset.protectedRelativePath;
-                    restore.originalName = asset.originalName;
-                    restore.role = asset.role;
-                    restore.ordinal = asset.ordinal;
-                    restore.expectedArchiveSize = archiveSize;
-                    restore.expectedArchiveSha256 = archiveHash;
-                    restore.expectedMemberSize = asset.originalSize;
-                    restore.expectedMemberSha256 = QByteArray::fromHex(
-                        asset.originalHash.toLatin1());
                     const QDateTime modificationDate =
                         asset.originalModificationDate;
                     PrivacyExternalCheckoutAssetSource source;
                     source.role = asset.role;
                     source.ordinal = asset.ordinal;
-                    source.producer =
-                        [this, restore, modificationDate, &password]
-                        (int descriptor, QString* producerDetail)
-                        {
-                            QFile destination;
 
-                            if (!destination.open(
-                                    descriptor, QIODevice::WriteOnly,
-                                    QFileDevice::DontCloseHandle))
+                    if (strongBackend)
+                    {
+                        const QString vaultRoot = plaintextRoot;
+                        const QString protectedRelativePath =
+                            asset.protectedRelativePath;
+                        const qlonglong expectedSize = asset.originalSize;
+                        const QByteArray expectedHash = QByteArray::fromHex(
+                            asset.originalHash.toLatin1());
+                        source.producer =
+                            [vaultRoot, protectedRelativePath, expectedSize,
+                             expectedHash, modificationDate]
+                            (int descriptor, QString* producerDetail)
                             {
-                                if (producerDetail)
-                                {
-                                    *producerDetail = QStringLiteral(
-                                        "cannot attach checkout destination");
-                                }
+                                QFile destination;
 
-                                return false;
-                            }
-
-                            const bool restored = d->archive.restoreMember(
-                                restore, password, &destination);
-                            destination.close();
-
-                            if (!restored)
-                            {
-                                if (producerDetail)
-                                {
-                                    *producerDetail = QStringLiteral(
-                                        "cannot restore verified archive member");
-                                }
-
-                                return false;
-                            }
-
-#if defined(Q_OS_UNIX)
-
-                            if (modificationDate.isValid())
-                            {
-                                const qint64 milliseconds =
-                                    modificationDate.toMSecsSinceEpoch();
-                                struct timespec times[2] = {};
-                                times[0].tv_nsec = UTIME_OMIT;
-                                times[1].tv_sec = milliseconds / 1000;
-                                times[1].tv_nsec =
-                                    (milliseconds % 1000) * 1000000;
-
-                                if (::futimens(descriptor, times) != 0)
+                                if (!destination.open(
+                                        descriptor, QIODevice::WriteOnly,
+                                        QFileDevice::DontCloseHandle))
                                 {
                                     if (producerDetail)
                                     {
                                         *producerDetail = QStringLiteral(
-                                            "cannot restore checkout modification time");
+                                            "cannot attach checkout destination");
                                     }
 
                                     return false;
                                 }
-                            }
+
+                                const QString objectPath = QDir(vaultRoot).filePath(
+                                    protectedRelativePath);
+                                QFile object(objectPath);
+
+                                if (!object.open(QIODevice::ReadOnly) ||
+                                    (object.size() != expectedSize))
+                                {
+                                    destination.close();
+
+                                    if (producerDetail)
+                                    {
+                                        *producerDetail = QStringLiteral(
+                                            "cannot open exact Strong vault object");
+                                    }
+
+                                    return false;
+                                }
+
+                                QCryptographicHash hasher(
+                                    QCryptographicHash::Sha256);
+                                QByteArray buffer;
+                                buffer.resize(1024 * 1024);
+
+                                while (!object.atEnd())
+                                {
+                                    const qint64 read =
+                                        object.read(buffer.data(), buffer.size());
+
+                                    if ((read <= 0) ||
+                                        (destination.write(buffer.constData(),
+                                                           read) != read))
+                                    {
+                                        destination.close();
+
+                                        if (producerDetail)
+                                        {
+                                            *producerDetail = QStringLiteral(
+                                                "cannot copy Strong vault object");
+                                        }
+
+                                        return false;
+                                    }
+
+                                    hasher.addData(buffer.constData(), read);
+                                }
+
+                                destination.close();
+
+                                if (hasher.result() != expectedHash)
+                                {
+                                    if (producerDetail)
+                                    {
+                                        *producerDetail = QStringLiteral(
+                                            "Strong vault object hash mismatch");
+                                    }
+
+                                    return false;
+                                }
+
+#if defined(Q_OS_UNIX)
+
+                                if (modificationDate.isValid())
+                                {
+                                    const qint64 milliseconds =
+                                        modificationDate.toMSecsSinceEpoch();
+                                    struct timespec times[2] = {};
+                                    times[0].tv_nsec = UTIME_OMIT;
+                                    times[1].tv_sec = milliseconds / 1000;
+                                    times[1].tv_nsec =
+                                        (milliseconds % 1000) * 1000000;
+
+                                    if (::futimens(descriptor, times) != 0)
+                                    {
+                                        if (producerDetail)
+                                        {
+                                            *producerDetail = QStringLiteral(
+                                                "cannot restore checkout modification time");
+                                        }
+
+                                        return false;
+                                    }
+                                }
 
 #else
-                            Q_UNUSED(modificationDate);
+                                Q_UNUSED(modificationDate);
 #endif
 
-                            return true;
-                        };
+                                return true;
+                            };
+                    }
+                    else
+                    {
+                        PrivacyCasualArchiveRestoreRequest restore;
+                        restore.archivePath = archivePath;
+                        restore.categoryUuid = categoryUuid;
+                        restore.containerUuid = containerUuid;
+                        restore.itemUuid = itemUuid;
+                        restore.protectedRelativePath =
+                            asset.protectedRelativePath;
+                        restore.originalName = asset.originalName;
+                        restore.role = asset.role;
+                        restore.ordinal = asset.ordinal;
+                        restore.expectedArchiveSize = archiveSize;
+                        restore.expectedArchiveSha256 = archiveHash;
+                        restore.expectedMemberSize = asset.originalSize;
+                        restore.expectedMemberSha256 = QByteArray::fromHex(
+                            asset.originalHash.toLatin1());
+                        source.producer =
+                            [this, restore, modificationDate, &password]
+                            (int descriptor, QString* producerDetail)
+                            {
+                                QFile destination;
+
+                                if (!destination.open(
+                                        descriptor, QIODevice::WriteOnly,
+                                        QFileDevice::DontCloseHandle))
+                                {
+                                    if (producerDetail)
+                                    {
+                                        *producerDetail = QStringLiteral(
+                                            "cannot attach checkout destination");
+                                    }
+
+                                    return false;
+                                }
+
+                                const bool restored = d->archive.restoreMember(
+                                    restore, password, &destination);
+                                destination.close();
+
+                                if (!restored)
+                                {
+                                    if (producerDetail)
+                                    {
+                                        *producerDetail = QStringLiteral(
+                                            "cannot restore verified archive member");
+                                    }
+
+                                    return false;
+                                }
+
+#if defined(Q_OS_UNIX)
+
+                                if (modificationDate.isValid())
+                                {
+                                    const qint64 milliseconds =
+                                        modificationDate.toMSecsSinceEpoch();
+                                    struct timespec times[2] = {};
+                                    times[0].tv_nsec = UTIME_OMIT;
+                                    times[1].tv_sec = milliseconds / 1000;
+                                    times[1].tv_nsec =
+                                        (milliseconds % 1000) * 1000000;
+
+                                    if (::futimens(descriptor, times) != 0)
+                                    {
+                                        if (producerDetail)
+                                        {
+                                            *producerDetail = QStringLiteral(
+                                                "cannot restore checkout modification time");
+                                        }
+
+                                        return false;
+                                    }
+                                }
+
+#else
+                                Q_UNUSED(modificationDate);
+#endif
+
+                                return true;
+                            };
+                    }
+
                     request.sources << source;
                 }
 
