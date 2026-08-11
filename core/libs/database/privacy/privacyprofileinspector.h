@@ -44,6 +44,7 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyProfileSummary
     qlonglong                totalItemCount = 0;
     qlonglong                protectedItemCount = 0;
     int                      privacyCategoryCount = 0;
+    int                      incompletePrivacyTransactionCount = 0;
     QStringList              collectionRoots;
     qint64                   databaseBytes = 0;
     QDateTime                latestModification;

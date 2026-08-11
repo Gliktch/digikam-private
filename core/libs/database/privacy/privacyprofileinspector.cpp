@@ -290,6 +290,11 @@ PrivacyProfileSummary PrivacyProfileInspector::inspectCoreDatabase(
                             database,
                             QLatin1String("SELECT COUNT(*) FROM PrivacyCategories;"))
                                                          .toInt();
+                        result.incompletePrivacyTransactionCount = singleValue(
+                            database,
+                            QLatin1String("SELECT COUNT(*) FROM PrivacyTransactions "
+                                          "WHERE state<>7;"))
+                                                         .toInt();
                     }
 
                     const QString check = singleValue(

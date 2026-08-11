@@ -22,7 +22,10 @@
 // Local includes
 
 #include "privacyprofileinspector.h"
+#include "privacyprofileimportstager.h"
 #include "privacysqlitesnapshot.h"
+#include "coredbaccess.h"
+#include "dbengineparameters.h"
 
 using namespace Digikam;
 
@@ -32,11 +35,14 @@ class PrivacyProfileImportTest : public QObject
 
 private Q_SLOTS:
 
+    void cleanup();
     void testVersionLabels();
     void testStockAndP1Inspection();
     void testAmbiguousSchemaIsRejected();
     void testOnlineBackupCapturesWalState();
     void testCanceledSnapshotIsNotPublished();
+    void testStockProfileStagesAsP1();
+    void testP1ProfileStagesWithoutConversion();
 };
 
 namespace
@@ -122,7 +128,71 @@ bool createSyntheticDatabase(const QString& path,
     return success;
 }
 
+bool createFullP1Database(const QString& path)
+{
+    CoreDbAccess::cleanUpDatabase();
+    DbEngineParameters parameters = DbEngineParameters::parametersForSQLite(path);
+    CoreDbAccess::setParameters(parameters);
+    const bool success = CoreDbAccess::checkReadyForUse();
+    CoreDbAccess::cleanUpDatabase();
+    return success;
+}
+
+bool downgradeFixtureToStock17(const QString& path)
+{
+    const QString connectionName = QLatin1String("privacy-stock-fixture-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+    bool success = false;
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"), connectionName);
+        database.setDatabaseName(path);
+
+        if (database.open())
+        {
+            QSqlQuery query(database);
+            success = query.exec(QLatin1String("PRAGMA foreign_keys=OFF;")) &&
+                      query.exec(QLatin1String(
+                          "UPDATE Settings SET value='17' WHERE keyword='DBVersion';")) &&
+                      query.exec(QLatin1String(
+                          "UPDATE Settings SET value='17' WHERE keyword='DBVersionRequired';")) &&
+                      query.exec(QLatin1String(
+                          "DELETE FROM Settings WHERE keyword IN "
+                          "('DBSchemaFlavor', 'DBSchemaFlavorVersion', 'DBSchemaBaseVersion');"));
+            const QStringList privacyTables = {
+                QLatin1String("PrivacyTransactionJournals"),
+                QLatin1String("PrivacyTransactions"),
+                QLatin1String("PrivacyDerivatives"),
+                QLatin1String("PrivacyAssets"),
+                QLatin1String("PrivacyContainers"),
+                QLatin1String("PrivacyItems"),
+                QLatin1String("PrivacyStoreBindings"),
+                QLatin1String("PrivacyStores"),
+                QLatin1String("PrivacyStorageRoots"),
+                QLatin1String("PrivacyCredentials"),
+                QLatin1String("PrivacyCategories")
+            };
+
+            for (const QString& table : privacyTables)
+            {
+                success = success && query.exec(
+                    QString::fromUtf8("DROP TABLE %1;").arg(table));
+            }
+
+            database.close();
+        }
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
+    return success;
+}
+
 } // namespace
+
+void PrivacyProfileImportTest::cleanup()
+{
+    CoreDbAccess::cleanUpDatabase();
+}
 
 void PrivacyProfileImportTest::testVersionLabels()
 {
@@ -233,6 +303,43 @@ void PrivacyProfileImportTest::testCanceledSnapshotIsNotPublished()
     const QStringList partials = QDir(directory.path()).entryList(
         QStringList { QLatin1String("canceled.db.partial-*") }, QDir::Files);
     QVERIFY(partials.isEmpty());
+}
+
+void PrivacyProfileImportTest::testStockProfileStagesAsP1()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(QLatin1String("stock17.db"));
+    QVERIFY(createFullP1Database(sourcePath));
+    QVERIFY(downgradeFixtureToStock17(sourcePath));
+    const PrivacyProfileSummary source =
+        PrivacyProfileInspector::inspectCoreDatabase(sourcePath);
+    QCOMPARE(source.schemaKind, PrivacyProfileSchemaKind::Stock);
+
+    const PrivacyProfileImportStageResult staged = PrivacyProfileImportStager::stage(
+        source, directory.filePath(QLatin1String("stock-stage")));
+    QVERIFY2(staged.success, qPrintable(staged.error));
+    QVERIFY(staged.candidateSummary.isPrivateProfile());
+    QCOMPARE(staged.candidateSummary.schemaVersion, 101);
+    QVERIFY(QFileInfo::exists(staged.candidateCoreDatabasePath));
+}
+
+void PrivacyProfileImportTest::testP1ProfileStagesWithoutConversion()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(QLatin1String("source-p1.db"));
+    QVERIFY(createFullP1Database(sourcePath));
+    const PrivacyProfileSummary source =
+        PrivacyProfileInspector::inspectCoreDatabase(sourcePath);
+    QVERIFY(source.isPrivateProfile());
+
+    const PrivacyProfileImportStageResult staged = PrivacyProfileImportStager::stage(
+        source, directory.filePath(QLatin1String("p1-stage")));
+    QVERIFY2(staged.success, qPrintable(staged.error));
+    QVERIFY(staged.candidateSummary.isPrivateProfile());
+    QCOMPARE(staged.candidateSummary.totalItemCount, source.totalItemCount);
+    QVERIFY(QFileInfo::exists(staged.candidateCoreDatabasePath));
 }
 
 QTEST_GUILESS_MAIN(PrivacyProfileImportTest)

@@ -114,6 +114,7 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacypreparedaccessregistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyprotectpreflight.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyprofileinspector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyprofileimportstager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacysqlitesnapshot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyproxygenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/storage/privacycheckoutstore.cpp
