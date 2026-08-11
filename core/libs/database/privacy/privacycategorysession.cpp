@@ -987,8 +987,13 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
     PrivacyCategory category;
     category.uuid = categoryUuid;
     category.name = name;
+    // Strong store UUIDs are the opaque recovery identity: portable discovery
+    // can group a Strong store from its public cipher-directory name before
+    // authentication, and the encrypted manifest's storeUuid then agrees.
     category.recoverySetUuid =
-        QUuid::createUuid().toString(QUuid::WithoutBraces);
+        (request.backend == PrivacyBackend::Strong)
+            ? storeUuid
+            : QUuid::createUuid().toString(QUuid::WithoutBraces);
     category.backend = request.backend;
     category.presentationMode = request.presentationMode;
     category.unlockedThumbnailMode = request.unlockedThumbnailMode;

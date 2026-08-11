@@ -466,6 +466,14 @@ void PrivacyCasualArchiveTest::testPublicIdentityInspection()
     QCOMPARE(identity.archiveSize, QFileInfo(finalPath).size());
     QCOMPARE(identity.sha256, fileHash(finalPath));
 
+    const PrivacyCasualArchiveIdentity commentOnly =
+        engine.readPublicIdentity(finalPath, &error);
+    QVERIFY(commentOnly.valid);
+    QCOMPARE(error, PrivacyCasualArchiveError::None);
+    QCOMPARE(commentOnly.recoverySetUuid, RecoverySetUuid);
+    QCOMPARE(commentOnly.archiveSize, -1);
+    QVERIFY(commentOnly.sha256.isEmpty());
+
     const QString nonArchivePath = directory.filePath(
         QLatin1String("ordinary.txt.digikam-private.zip"));
     QVERIFY(writeBytes(nonArchivePath, QByteArray("not a zip archive")));

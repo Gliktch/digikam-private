@@ -1721,7 +1721,7 @@ bool PrivacyCasualArchiveEngine::checkCapabilities(
     return true;
 }
 
-PrivacyCasualArchiveIdentity PrivacyCasualArchiveEngine::inspectIdentity(
+PrivacyCasualArchiveIdentity PrivacyCasualArchiveEngine::readPublicIdentity(
     const QString& archivePath,
     PrivacyCasualArchiveError* const error) const
 {
@@ -1761,19 +1761,36 @@ PrivacyCasualArchiveIdentity PrivacyCasualArchiveEngine::inspectIdentity(
         return identity;
     }
 
+    identity.valid = true;
+    identity.format = QLatin1String("digiKam Private casual-v1");
+    identity.passwordEncoding = QLatin1String("utf8-nfc-v1");
+    identity.recoverySetUuid = recoverySetUuid;
+
+    return identity;
+}
+
+PrivacyCasualArchiveIdentity PrivacyCasualArchiveEngine::inspectIdentity(
+    const QString& archivePath,
+    PrivacyCasualArchiveError* const error) const
+{
+    setError(error, PrivacyCasualArchiveError::None);
+    PrivacyCasualArchiveIdentity identity =
+        readPublicIdentity(archivePath, error);
+
+    if (!identity.valid)
+    {
+        return identity;
+    }
+
     QByteArray sha256;
     qlonglong size = -1;
 
     if (!hashFile(archivePath, &sha256, &size, {}))
     {
         setError(error, PrivacyCasualArchiveError::SourceReadFailed);
-        return identity;
+        return PrivacyCasualArchiveIdentity();
     }
 
-    identity.valid = true;
-    identity.format = QLatin1String("digiKam Private casual-v1");
-    identity.passwordEncoding = QLatin1String("utf8-nfc-v1");
-    identity.recoverySetUuid = recoverySetUuid;
     identity.archiveSize = size;
     identity.sha256 = sha256;
 

@@ -183,6 +183,13 @@ public:
         const QString& archivePath,
         PrivacyCasualArchiveError* error = nullptr) const;
 
+    /** Same public comment/format facts as inspectIdentity() but without
+     * reading the archive bytes, so filesystem discovery can group many
+     * candidates cheaply. archiveSize and sha256 are left unset. */
+    PrivacyCasualArchiveIdentity readPublicIdentity(
+        const QString& archivePath,
+        PrivacyCasualArchiveError* error = nullptr) const;
+
     PrivacyCasualArchiveStage stageArchive(
         const PrivacyCasualArchiveRequest& request,
         const PrivacyPassword& password,
