@@ -167,6 +167,27 @@ public:
                 return finished({}, spec);
             }
 
+            if (spec.arguments.contains(QLatin1String("-passwd")))
+            {
+                if (standardInput.isEmpty() ||
+                    (standardInput.count('\n') != 3) ||
+                    !standardInput.endsWith('\n'))
+                {
+                    return failed(spec);
+                }
+
+                QFile config(spec.arguments.constLast() +
+                             QLatin1String("/gocryptfs.conf"));
+
+                if (!config.open(QIODevice::WriteOnly) ||
+                    (config.write(rewrapConfig) != rewrapConfig.size()))
+                {
+                    return failed(spec);
+                }
+
+                return finished({}, spec);
+            }
+
             if (spec.arguments.contains(QLatin1String("-fg")))
             {
                 if (!passwordMatches || !hasPassfileStdin(spec))
@@ -248,6 +269,7 @@ public:
     QByteArray                        opaqueConfig         = QByteArray("opaque config bytes\n");
     QByteArray                        gocryptfsVersion     = QByteArray("2.6.1");
     QByteArray                        xrayVersion          = QByteArray("2.6.1");
+    QByteArray                        rewrapConfig         = QByteArray("rewrapped opaque config\n");
     QList<PrivacyProcessSpec>         specs;
     std::shared_ptr<FakeProcessState> foreground;
     PrivacyMountStateProbe::State      mountStateOnStart =
@@ -425,6 +447,7 @@ private Q_SLOTS:
     void testCategoryStoreDescriptorConfinedCreateAndReplay();
     void testCategoryStoreRejectsHostileSymlinks();
     void testCategoryStorePinsStagingAcrossRenameRace();
+    void testStrongPasswordRewrap();
 };
 
 void PrivacyStorageTest::testPasswordBoundary()
@@ -692,6 +715,53 @@ void PrivacyStorageTest::testCategoryStorePinsStagingAcrossRenameRace()
                                            QDir::NoDotAndDotDot).isEmpty());
     QVERIFY(!QFileInfo(fixture.outside + QLatin1Char('/') +
                        fixture.store.uuid + QLatin1String(".creating")).exists());
+}
+
+void PrivacyStorageTest::testStrongPasswordRewrap()
+{
+    ManagedStoreFixture fixture;
+    QVERIFY(fixture.valid);
+    PrivacyGocryptfsCategoryStoreBackend backend(
+        fixture.runner, fixture.probe, fixture.paths, fixture.runtime);
+    const PrivacyPassword oldPassword = testPassword();
+    const PrivacyPassword newPassword =
+        PrivacyPassword::fromUnicode(QLatin1String("new-secret"));
+    PrivacyGocryptfsEnvelope envelope;
+    PrivacyGocryptfsError error = PrivacyGocryptfsError::None;
+    const QByteArray sentinel("category-store-sentinel");
+
+    QVERIFY2(backend.createOrResume(fixture.root, fixture.store,
+                                    fixture.temporaryRelativePath(),
+                                    oldPassword, sentinel, &envelope, &error),
+             qPrintable(QString::number(static_cast<int>(error))));
+    QVERIFY(envelope.isValid());
+
+    fixture.runner.expectedPasswordLine = QByteArray("new-secret\n");
+    QByteArray newConfig;
+    QVERIFY2(backend.rewrapPassword(fixture.root, fixture.store, envelope,
+                                    oldPassword, newPassword, sentinel,
+                                    &newConfig, &error),
+             qPrintable(QString::number(static_cast<int>(error))));
+    QCOMPARE(newConfig, fixture.runner.rewrapConfig);
+    QVERIFY(newConfig != envelope.opaqueConfig());
+
+    bool sawRewrap = false;
+
+    for (const PrivacyProcessSpec& spec : std::as_const(fixture.runner.specs))
+    {
+        if (spec.arguments.contains(QLatin1String("-passwd")))
+        {
+            sawRewrap = true;
+        }
+    }
+
+    QVERIFY(sawRewrap);
+    QVERIFY(!fixture.runner.secretLeaked);
+
+    const PrivacyGocryptfsEnvelope replayed =
+        PrivacyGocryptfsEnvelope::fromOpaqueConfig(
+            QLatin1String("gocryptfs-config-v2"), newConfig, &error);
+    QVERIFY(replayed.isValid());
 }
 
 QTEST_GUILESS_MAIN(PrivacyStorageTest)

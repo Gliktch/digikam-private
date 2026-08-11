@@ -20,6 +20,7 @@
 #include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcessEnvironment>
 #include <QTemporaryDir>
 
 #ifdef Q_OS_UNIX
@@ -31,6 +32,7 @@
 // Local includes
 
 #include "privacyposixstorage_p.h"
+#include "privacyprocessrunner.h"
 #include "privacytransactionjournal.h"
 
 namespace Digikam
@@ -38,6 +40,8 @@ namespace Digikam
 
 namespace
 {
+
+constexpr qsizetype MaximumSentinelBytes = 4096;
 
 void setError(PrivacyGocryptfsError* const error, PrivacyGocryptfsError value)
 {
@@ -600,6 +604,141 @@ bool PrivacyGocryptfsCategoryStoreBackend::lock(
     }
 
     lease.reset();
+    return true;
+}
+
+bool PrivacyGocryptfsCategoryStoreBackend::rewrapPassword(
+    const PrivacyStorageRoot& root, const PrivacyStore& store,
+    const PrivacyGocryptfsEnvelope& envelope,
+    const PrivacyPassword& oldPassword, const PrivacyPassword& newPassword,
+    const QByteArray& sentinel, QByteArray* const newOpaqueConfig,
+    PrivacyGocryptfsError* const error)
+{
+    setError(error, PrivacyGocryptfsError::None);
+
+    if (!newOpaqueConfig || !root.isValid() || !store.isValid() ||
+        !envelope.isValid() || !oldPassword.isValid() ||
+        !newPassword.isValid() ||
+        (root.kind != PrivacyStorageRootKind::ManagedStoreRoot) ||
+        (store.rootUuid != root.uuid))
+    {
+        setError(error, (!oldPassword.isValid() || !newPassword.isValid())
+                            ? PrivacyGocryptfsError::InvalidPassword
+                            : PrivacyGocryptfsError::InvalidEnvelope);
+        return false;
+    }
+
+    if (sentinel.isEmpty() || (sentinel.size() > MaximumSentinelBytes))
+    {
+        setError(error, PrivacyGocryptfsError::InvalidSentinel);
+        return false;
+    }
+
+    const QString cipher = pathBelow(root.configuredPath,
+                                     store.cipherRelativePath);
+    QByteArray currentConfig;
+
+    if (cipher.isEmpty() || !readConfig(cipher, &currentConfig) ||
+        (currentConfig != envelope.opaqueConfig()) ||
+        !secureDirectory(m_runtimeRoot))
+    {
+        setError(error, PrivacyGocryptfsError::InvalidEnvelope);
+        return false;
+    }
+
+    const QString workspace = m_runtimeRoot + QLatin1Char('/') + store.uuid;
+
+    if (!secureDirectory(workspace))
+    {
+        setError(error, PrivacyGocryptfsError::UnsafeWorkspace);
+        return false;
+    }
+
+    QByteArray rewrapInput;
+    bool inputBuilt = false;
+    const bool collected = oldPassword.withStdinLine(
+        [&](const QByteArray& oldLine)
+        {
+            return newPassword.withStdinLine(
+                [&](const QByteArray& newLine)
+                {
+                    rewrapInput = oldLine + newLine + newLine;
+                    inputBuilt = true;
+                    return true;
+                });
+        });
+
+    if (!collected || !inputBuilt)
+    {
+        setError(error, PrivacyGocryptfsError::InvalidPassword);
+        return false;
+    }
+
+    PrivacyProcessSpec spec;
+    spec.program = m_toolPaths.gocryptfs;
+    spec.arguments = { QLatin1String("-passwd"), QLatin1String("-q"),
+                       QLatin1String("-nosyslog"), cipher };
+    spec.sensitiveOutput = true;
+    QProcessEnvironment environment;
+    environment.insert(QLatin1String("LANG"), QLatin1String("C"));
+    environment.insert(QLatin1String("LC_ALL"), QLatin1String("C"));
+    environment.insert(QLatin1String("PATH"), QLatin1String("/usr/bin:/bin"));
+    spec.environment = environment;
+    const PrivacyProcessResult result = m_runner.run(spec, rewrapInput);
+    rewrapInput.fill(0);
+
+    if (!result.succeeded())
+    {
+        setError(error, PrivacyGocryptfsError::ProcessFailed);
+        return false;
+    }
+
+    QByteArray newConfig;
+
+    if (!readConfig(cipher, &newConfig) || (newConfig == currentConfig))
+    {
+        setError(error, PrivacyGocryptfsError::FileOperationFailed);
+        return false;
+    }
+
+    PrivacyGocryptfsStoreLayout layout;
+    layout.workspaceRoot = workspace;
+    layout.cipherDirectory = cipher;
+    layout.mountDirectory = workspace + QLatin1String("/mount");
+    layout.runtimeDirectory = workspace + QLatin1String("/runtime");
+    PrivacyGocryptfsStoreHarness harness(
+        m_runner, m_mountProbe, m_toolPaths, layout);
+
+    if (!harness.checkCapabilities(error))
+    {
+        return false;
+    }
+
+    std::unique_ptr<PrivacyGocryptfsMountLease> mount =
+        harness.mountStore(newPassword, sentinel, error);
+
+    if (!mount)
+    {
+        return false;
+    }
+
+    if (!harness.unmountStore(*mount, error))
+    {
+        return false;
+    }
+
+    std::unique_ptr<PrivacyGocryptfsMountLease> rejected =
+        harness.mountStore(oldPassword, sentinel, error);
+
+    if (rejected)
+    {
+        harness.unmountStore(*rejected, nullptr);
+        setError(error, PrivacyGocryptfsError::ProcessFailed);
+        return false;
+    }
+
+    *newOpaqueConfig = newConfig;
+    setError(error, PrivacyGocryptfsError::None);
     return true;
 }
 

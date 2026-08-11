@@ -48,6 +48,14 @@ public:
         PrivacyGocryptfsError* error) override;
     bool lock(std::unique_ptr<PrivacyCategoryStoreLease>& lease,
               PrivacyGocryptfsError* error) override;
+    bool rewrapPassword(const PrivacyStorageRoot& root,
+                        const PrivacyStore& store,
+                        const PrivacyGocryptfsEnvelope& envelope,
+                        const PrivacyPassword& oldPassword,
+                        const PrivacyPassword& newPassword,
+                        const QByteArray& sentinel,
+                        QByteArray* newOpaqueConfig,
+                        PrivacyGocryptfsError* error) override;
 
 private:
 

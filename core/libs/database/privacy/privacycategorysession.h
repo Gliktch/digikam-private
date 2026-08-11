@@ -221,6 +221,19 @@ public:
         PrivacyGocryptfsError* error) = 0;
     virtual bool lock(std::unique_ptr<PrivacyCategoryStoreLease>& lease,
                       PrivacyGocryptfsError* error) = 0;
+
+    /** Atomically rewraps one active category store's gocryptfs password.
+     * The old password must still open the store, the store must not be
+     * mounted, and the returned opaque config is the new credential
+     * envelope. The caller journals and retains the prior config. */
+    virtual bool rewrapPassword(const PrivacyStorageRoot& root,
+                                const PrivacyStore& store,
+                                const PrivacyGocryptfsEnvelope& envelope,
+                                const PrivacyPassword& oldPassword,
+                                const PrivacyPassword& newPassword,
+                                const QByteArray& sentinel,
+                                QByteArray* newOpaqueConfig,
+                                PrivacyGocryptfsError* error) = 0;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacySecretLifetimeObserver

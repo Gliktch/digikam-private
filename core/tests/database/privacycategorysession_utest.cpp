@@ -562,15 +562,43 @@ public:
         return true;
     }
 
+    bool rewrapPassword(const PrivacyStorageRoot&, const PrivacyStore&,
+                        const PrivacyGocryptfsEnvelope&,
+                        const PrivacyPassword&, const PrivacyPassword&,
+                        const QByteArray&, QByteArray* const newOpaqueConfig,
+                        PrivacyGocryptfsError* error) override
+    {
+        ++rewrapCalls;
+
+        if (failRewrap)
+        {
+            if (error)
+            {
+                *error = PrivacyGocryptfsError::ProcessFailed;
+            }
+
+            return false;
+        }
+
+        if (newOpaqueConfig)
+        {
+            *newOpaqueConfig = QByteArray("rewrapped config");
+        }
+
+        return true;
+    }
+
     std::atomic<int> createCalls { 0 };
     std::atomic<int> validateCalls { 0 };
     std::atomic<int> unlockCalls { 0 };
     std::atomic<int> lockCalls { 0 };
+    std::atomic<int> rewrapCalls { 0 };
     std::atomic<int> leaseDestructions { 0 };
     std::atomic<bool> journalReadyAtCreate { false };
     std::atomic<int>* journalCreateCounter = nullptr;
     bool failCreate = false;
     bool failLock = false;
+    bool failRewrap = false;
     bool blockCreate = false;
     bool blockValidate = false;
     bool blockUnlock = false;

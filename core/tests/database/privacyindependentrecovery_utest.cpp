@@ -32,6 +32,7 @@ private Q_SLOTS:
 
     void testPasswordRecoveryRestoresExactOriginals();
     void testMasterKeyRecoveryRestoresExactOriginals();
+    void testPasswordRewrapPreservesExactOriginals();
     void testWrongPasswordIsRejected();
 };
 
@@ -41,6 +42,7 @@ namespace
 const QByteArray PrimaryBytes("synthetic original payload\0with NUL bytes", 39);
 const QByteArray SidecarBytes("synthetic sidecar payload", 25);
 const QByteArray Password("external-recovery-passphrase");
+const QByteArray NewPassword("replacement-recovery-passphrase");
 
 QString toolPath(const QString& name)
 {
@@ -439,6 +441,54 @@ void PrivacyIndependentRecoveryTest::testWrongPasswordIsRejected()
         QByteArray("wrong-password") + '\n', nullptr, &error);
     QVERIFY(exitCode != 0);
     QVERIFY(QDir(mountPoint).isEmpty());
+}
+
+void PrivacyIndependentRecoveryTest::testPasswordRewrapPreservesExactOriginals()
+{
+    const QString gocryptfs = toolPath(QLatin1String("gocryptfs"));
+
+    if (!fileExists(gocryptfs))
+    {
+        QSKIP("gocryptfs is unavailable in this test environment");
+    }
+
+    if (!fileExists(QLatin1String("/dev/fuse")))
+    {
+        QSKIP("FUSE is unavailable in this test environment");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString cipherDirectory = directory.filePath(QLatin1String("cipher"));
+    const QString mountPoint = directory.filePath(QLatin1String("mount"));
+    const QString remountPoint = directory.filePath(QLatin1String("remount"));
+    const QString restoreDirectory = directory.filePath(QLatin1String("restored"));
+    QVERIFY(QDir().mkpath(mountPoint));
+    QVERIFY(QDir().mkpath(remountPoint));
+
+    QString detail;
+    QVERIFY2(prepareStrongStore(gocryptfs, cipherDirectory, mountPoint,
+                                Password, &detail),
+             qPrintable(detail));
+    const QByteArray configBefore = readFile(
+        cipherDirectory + QLatin1String("/gocryptfs.conf"));
+
+    QByteArray rewrapError;
+    const int rewrapCode = runProcess(
+        gocryptfs,
+        { QLatin1String("-passwd"), QLatin1String("-q"),
+          QLatin1String("-nosyslog"), cipherDirectory },
+        Password + '\n' + NewPassword + '\n' + NewPassword + '\n',
+        nullptr, &rewrapError);
+    QVERIFY2(rewrapCode == 0, qPrintable(QString::fromUtf8(rewrapError)));
+    QVERIFY(readFile(cipherDirectory + QLatin1String("/gocryptfs.conf")) !=
+            configBefore);
+
+    QVERIFY(!mountStore(cipherDirectory, remountPoint, Password, &detail));
+    QVERIFY2(mountStore(cipherDirectory, remountPoint, NewPassword, &detail),
+             qPrintable(detail));
+    verifyExactRestore(remountPoint, restoreDirectory);
+    QVERIFY(unmount(remountPoint));
 }
 
 QTEST_GUILESS_MAIN(PrivacyIndependentRecoveryTest)
