@@ -108,6 +108,38 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveIdentity
     QByteArray sha256;
 };
 
+/** One decrypted, verified member record from a Casual recovery manifest. */
+struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveManifestMember
+{
+    bool isValid() const;
+
+    QString   protectedRelativePath;
+    QString   originalName;
+    int       role = 0;
+    int       ordinal = -1;
+    QString   hashAlgorithm;
+    QByteArray sha256;
+    qlonglong size = -1;
+    QDateTime creationTimeUtc;
+    QDateTime modificationTimeUtc;
+    QByteArray portableAttributes;
+    quint32   unixMode = 0;
+};
+
+/** Decrypted Casual recovery manifest facts used by portable import. */
+struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveManifest
+{
+    bool isValid() const;
+
+    QString   format;
+    int       formatVersion = 0;
+    QString   passwordEncoding;
+    QString   categoryUuid;
+    QString   containerUuid;
+    QString   itemUuid;
+    QList<PrivacyCasualArchiveManifestMember> members;
+};
+
 struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveRestoreRequest
 {
     QString    archivePath;
@@ -188,6 +220,19 @@ public:
      * candidates cheaply. archiveSize and sha256 are left unset. */
     PrivacyCasualArchiveIdentity readPublicIdentity(
         const QString& archivePath,
+        PrivacyCasualArchiveError* error = nullptr) const;
+
+    /** Decrypts and fully verifies an existing Casual archive (comment
+     * policy, manifest, every member's Store/PKWARE policy, size and SHA-256)
+     * and returns the parsed manifest facts. expectedArchiveSize/Sha256 must
+     * match the file bytes; pass the identity facts from inspectIdentity(). */
+    bool verifyAndReadManifest(
+        const QString& archivePath,
+        const PrivacyPassword& password,
+        qlonglong expectedArchiveSize,
+        const QByteArray& expectedArchiveSha256,
+        PrivacyCasualArchiveManifest* manifest,
+        const CancellationCheck& isCancelled = {},
         PrivacyCasualArchiveError* error = nullptr) const;
 
     PrivacyCasualArchiveStage stageArchive(

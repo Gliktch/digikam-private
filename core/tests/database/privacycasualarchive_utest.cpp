@@ -334,6 +334,7 @@ private Q_SLOTS:
 
     void testCapabilitiesAndArchivePolicy();
     void testPublicIdentityInspection();
+    void testVerifiedManifestRead();
     void testStandardToolRecovery();
     void testPasswordRewritePreservesExactMembers();
     void testResumeVerifiedStageFromJournalFacts();
@@ -508,6 +509,92 @@ void PrivacyCasualArchiveTest::testPublicIdentityInspection()
     QVERIFY(buffer.open(QIODevice::WriteOnly));
     QVERIFY(!engine.restoreMember(restore, password, &buffer, {}, &error));
     QVERIFY(error != PrivacyCasualArchiveError::None);
+}
+
+void PrivacyCasualArchiveTest::testVerifiedManifestRead()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString imagePath = directory.filePath(QLatin1String("image-source.bin"));
+    const QString sidecarPath = directory.filePath(QLatin1String("sidecar-source.bin"));
+    const QByteArray imageBytes("verified manifest image");
+    const QByteArray sidecarBytes("verified manifest sidecar");
+    QVERIFY(writeBytes(imagePath, imageBytes));
+    QVERIFY(writeBytes(sidecarPath, sidecarBytes));
+
+    const QString finalPath = directory.filePath(
+        QLatin1String("photo.jpg.digikam-private.zip"));
+    const PrivacyCasualArchiveMember image =
+        makeMember(imagePath, QLatin1String("photo.jpg"), 1, 0,
+                   QByteArray("attrs\0image", 11));
+    const PrivacyCasualArchiveMember sidecar =
+        makeMember(sidecarPath, QLatin1String("photo.xmp"), 2, 0,
+                   QByteArray("attrs-sidecar"));
+    const PrivacyPassword password = PrivacyPassword::fromUnicode(
+        QLatin1String("verified-passphrase"));
+    PrivacyCasualArchiveEngine engine;
+    PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
+    auto stage = engine.stageArchive(
+        makeRequest(finalPath, { image, sidecar }), password, {}, &error);
+    QVERIFY(stage.isValid());
+    QVERIFY(engine.publishNew(&stage, &error));
+
+    const PrivacyCasualArchiveIdentity identity =
+        engine.inspectIdentity(finalPath, &error);
+    QVERIFY(identity.valid);
+
+    PrivacyCasualArchiveManifest manifest;
+    QVERIFY(engine.verifyAndReadManifest(
+        finalPath, password, identity.archiveSize, identity.sha256,
+        &manifest, {}, &error));
+    QCOMPARE(error, PrivacyCasualArchiveError::None);
+    QVERIFY(manifest.isValid());
+    QCOMPARE(manifest.categoryUuid, CategoryUuid);
+    QCOMPARE(manifest.containerUuid, ContainerUuid);
+    QCOMPARE(manifest.itemUuid, ItemUuid);
+    QCOMPARE(manifest.members.size(), 2);
+
+    const PrivacyCasualArchiveManifestMember* imageMember = nullptr;
+    const PrivacyCasualArchiveManifestMember* sidecarMember = nullptr;
+
+    for (const PrivacyCasualArchiveManifestMember& member : manifest.members)
+    {
+        if ((member.role == 1) && (member.ordinal == 0))
+        {
+            imageMember = &member;
+        }
+        else if ((member.role == 2) && (member.ordinal == 0))
+        {
+            sidecarMember = &member;
+        }
+    }
+
+    QVERIFY(imageMember);
+    QVERIFY(sidecarMember);
+    QCOMPARE(imageMember->originalName, QLatin1String("photo.jpg"));
+    QCOMPARE(imageMember->protectedRelativePath,
+             QLatin1String("digikam-private/assets/1/0/photo.jpg"));
+    QCOMPARE(imageMember->size, qlonglong(imageBytes.size()));
+    QCOMPARE(imageMember->sha256,
+             QCryptographicHash::hash(imageBytes, QCryptographicHash::Sha256));
+    QCOMPARE(imageMember->portableAttributes, image.portableAttributes);
+    QVERIFY((imageMember->unixMode & 0170000) == 0100000);
+    QVERIFY(imageMember->modificationTimeUtc.isValid());
+    QCOMPARE(sidecarMember->originalName, QLatin1String("photo.xmp"));
+    QCOMPARE(sidecarMember->size, qlonglong(sidecarBytes.size()));
+
+    const PrivacyPassword wrongPassword = PrivacyPassword::fromUnicode(
+        QLatin1String("wrong-passphrase"));
+    QVERIFY(!engine.verifyAndReadManifest(
+        finalPath, wrongPassword, identity.archiveSize, identity.sha256,
+        &manifest, {}, &error));
+    QVERIFY(error != PrivacyCasualArchiveError::None);
+
+    QVERIFY(!engine.verifyAndReadManifest(
+        finalPath, password, identity.archiveSize, QByteArray(32, '\x11'),
+        &manifest, {}, &error));
+    QCOMPARE(error, PrivacyCasualArchiveError::ExistingArchiveMismatch);
 }
 
 void PrivacyCasualArchiveTest::testStandardToolRecovery()

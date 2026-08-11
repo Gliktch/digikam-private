@@ -800,6 +800,120 @@ bool parseManifest(const QByteArray& bytes,
     return true;
 }
 
+bool parsePortableManifest(const QByteArray& bytes,
+                           PrivacyCasualArchiveManifest* const manifest)
+{
+    if (!manifest)
+    {
+        return false;
+    }
+
+    QList<ExpectedMember> validated;
+    QJsonObject semantic;
+
+    if (!parseManifest(bytes, &validated, &semantic) || validated.isEmpty())
+    {
+        return false;
+    }
+
+    PrivacyCasualArchiveManifest decoded;
+    decoded.format = semantic.value(QLatin1String("format")).toString();
+    decoded.formatVersion =
+        semantic.value(QLatin1String("formatVersion")).toInt();
+    decoded.passwordEncoding =
+        semantic.value(QLatin1String("passwordEncoding")).toString();
+    decoded.categoryUuid =
+        semantic.value(QLatin1String("categoryUuid")).toString();
+    decoded.containerUuid =
+        semantic.value(QLatin1String("containerUuid")).toString();
+    decoded.itemUuid = semantic.value(QLatin1String("itemUuid")).toString();
+
+    const QJsonArray array = semantic.value(QLatin1String("members")).toArray();
+
+    for (const QJsonValue& value : array)
+    {
+        if (!value.isObject())
+        {
+            return false;
+        }
+
+        const QJsonObject object = value.toObject();
+        PrivacyCasualArchiveManifestMember member;
+        member.protectedRelativePath =
+            object.value(QLatin1String("path")).toString();
+        member.originalName =
+            object.value(QLatin1String("originalName")).toString();
+        member.role = object.value(QLatin1String("role")).toInt();
+        member.ordinal = object.value(QLatin1String("ordinal")).toInt();
+        member.hashAlgorithm =
+            object.value(QLatin1String("hashAlgorithm")).toString();
+        member.sha256 = QByteArray::fromHex(
+            object.value(QLatin1String("hash")).toString().toLatin1());
+
+        qlonglong size = -1;
+
+        if (!decimalString(object.value(QLatin1String("size")), &size))
+        {
+            return false;
+        }
+
+        member.size = size;
+        qlonglong mode = -1;
+
+        if (!decimalString(object.value(QLatin1String("unixMode")), &mode))
+        {
+            return false;
+        }
+
+        member.unixMode = static_cast<quint32>(mode);
+        qlonglong creation = 0;
+        qlonglong modification = 0;
+
+        if (decimalString(object.value(QLatin1String("creationTimeUtcMs")),
+                          &creation, true))
+        {
+            if (!object.value(QLatin1String("creationTimeUtcMs")).isNull())
+            {
+                member.creationTimeUtc =
+                    QDateTime::fromMSecsSinceEpoch(creation, QTimeZone::UTC);
+            }
+        }
+
+        if (decimalString(object.value(QLatin1String("modificationTimeUtcMs")),
+                          &modification, true))
+        {
+            if (!object.value(QLatin1String("modificationTimeUtcMs")).isNull())
+            {
+                member.modificationTimeUtc =
+                    QDateTime::fromMSecsSinceEpoch(modification, QTimeZone::UTC);
+            }
+        }
+
+        member.portableAttributes = QByteArray::fromBase64(
+            object.value(QLatin1String("portableAttributes"))
+                .toObject().value(QLatin1String("data")).toString().toLatin1(),
+            QByteArray::AbortOnBase64DecodingErrors);
+
+        if (!member.isValid() ||
+            (member.protectedRelativePath !=
+             PrivacyCasualArchiveEngine::expectedMemberPath(
+                 member.role, member.ordinal, member.originalName)))
+        {
+            return false;
+        }
+
+        decoded.members << member;
+    }
+
+    if (decoded.members.size() != validated.size())
+    {
+        return false;
+    }
+
+    *manifest = decoded;
+    return true;
+}
+
 bool prepareMember(const PrivacyCasualArchiveMember& input,
                    PreparedMember* const prepared,
                    const PrivacyCasualArchiveEngine::CancellationCheck& isCancelled,
@@ -1721,6 +1835,27 @@ bool PrivacyCasualArchiveEngine::checkCapabilities(
     return true;
 }
 
+bool PrivacyCasualArchiveManifestMember::isValid() const
+{
+    return (isSafeOriginalName(originalName) &&
+            (role > 0) && (ordinal >= 0) &&
+            (hashAlgorithm == QLatin1String("sha256")) &&
+            (sha256.size() == 32) && (size >= 0) &&
+            (portableAttributes.size() <= MaximumPortableAttributes) &&
+            ((unixMode & 0170000) == 0100000));
+}
+
+bool PrivacyCasualArchiveManifest::isValid() const
+{
+    return ((format == QLatin1String("digikam-private-casual")) &&
+            (formatVersion == 1) &&
+            (passwordEncoding == QLatin1String("utf8-nfc-v1")) &&
+            isCanonicalUuid(categoryUuid) &&
+            isCanonicalUuid(containerUuid) &&
+            isCanonicalUuid(itemUuid) && !members.isEmpty() &&
+            (members.size() <= MaximumMemberCount));
+}
+
 PrivacyCasualArchiveIdentity PrivacyCasualArchiveEngine::readPublicIdentity(
     const QString& archivePath,
     PrivacyCasualArchiveError* const error) const
@@ -1795,6 +1930,58 @@ PrivacyCasualArchiveIdentity PrivacyCasualArchiveEngine::inspectIdentity(
     identity.sha256 = sha256;
 
     return identity;
+}
+
+bool PrivacyCasualArchiveEngine::verifyAndReadManifest(
+    const QString& archivePath,
+    const PrivacyPassword& password,
+    qlonglong expectedArchiveSize,
+    const QByteArray& expectedArchiveSha256,
+    PrivacyCasualArchiveManifest* const manifest,
+    const CancellationCheck& isCancelled,
+    PrivacyCasualArchiveError* const error) const
+{
+    setError(error, PrivacyCasualArchiveError::None);
+
+    if (!manifest || !password.isValid() ||
+        (expectedArchiveSize < 0) ||
+        (expectedArchiveSha256.size() != 32) ||
+        !isSafeAbsoluteFilePath(archivePath, true))
+    {
+        setError(error, PrivacyCasualArchiveError::InvalidRequest);
+        return false;
+    }
+
+    QByteArray archiveHash;
+    qlonglong archiveSize = -1;
+
+    if (!hashFile(archivePath, &archiveHash, &archiveSize, isCancelled) ||
+        (archiveHash != expectedArchiveSha256) ||
+        (archiveSize != expectedArchiveSize))
+    {
+        setError(error, cancelled(isCancelled)
+                        ? PrivacyCasualArchiveError::Cancelled
+                        : PrivacyCasualArchiveError::ExistingArchiveMismatch);
+        return false;
+    }
+
+    QByteArray manifestBytes;
+
+    if (!readManifestForResume(archivePath, password, isCancelled,
+                               &manifestBytes, error) ||
+        !verifyArchive(archivePath, manifestBytes, password, isCancelled,
+                       QString(), error))
+    {
+        return false;
+    }
+
+    if (!parsePortableManifest(manifestBytes, manifest))
+    {
+        setError(error, PrivacyCasualArchiveError::ManifestInvalid);
+        return false;
+    }
+
+    return true;
 }
 
 PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
