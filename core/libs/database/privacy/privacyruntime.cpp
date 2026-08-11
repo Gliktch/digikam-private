@@ -884,6 +884,7 @@ struct ValidatedProtectedItemFacts
     QString originalRootUuid;
     qlonglong expectedProxySize = -1;
     bool originalInspectable = false;
+    bool strongBackend = false;
     QSet<QString> rootUuids;
 };
 
@@ -1049,6 +1050,8 @@ bool validateProtectedItemFacts(
     facts->expectedProxySize = primary.proxySize;
     facts->originalInspectable =
         (category.backend == PrivacyBackend::Casual);
+    facts->strongBackend =
+        (category.backend == PrivacyBackend::Strong);
     facts->rootUuids = requiredRootUuids;
 
     return true;
@@ -1155,6 +1158,7 @@ public:
         QString     originalRootUuid;
         qlonglong   expectedProxySize = -1;
         bool        originalInspectable = false;
+        bool        strongBackend = false;
         bool        mappingConflict = false;
     };
 
@@ -1772,10 +1776,12 @@ PrivacyStartupReport PrivacyRuntimeCoordinator::initialize(
                  storesByUuid.contains(container.storeUuid))
         {
             runtimeIt->originalRootUuid = storesByUuid.value(container.storeUuid).rootUuid;
-            // Strong plaintext availability additionally requires a verified
-            // mounted-store sentinel. That provider is not installed yet.
+            // Strong plaintext availability additionally requires the category
+            // store to be mounted and unlocked; that requirement is enforced
+            // in currentState against the session access state.
 
             runtimeIt->originalInspectable = false;
+            runtimeIt->strongBackend = true;
         }
         else
         {
@@ -2825,6 +2831,7 @@ bool PrivacyRuntimeCoordinator::publishProtectedItem(
     runtime.originalRootUuid      = facts.originalRootUuid;
     runtime.expectedProxySize     = facts.expectedProxySize;
     runtime.originalInspectable  = facts.originalInspectable;
+    runtime.strongBackend        = facts.strongBackend;
 
     d->snapshot.items << item;
     d->snapshot.containers << container;
@@ -3177,6 +3184,7 @@ bool PrivacyRuntimeCoordinator::publishProtectedItemForProtectRecovery(
     runtimeIt->originalRootUuid = facts.originalRootUuid;
     runtimeIt->expectedProxySize = facts.expectedProxySize;
     runtimeIt->originalInspectable = facts.originalInspectable;
+    runtimeIt->strongBackend = facts.strongBackend;
     runtimeIt->mappingConflict = false;
     d->conflictingItemUuids.remove(item.uuid);
     d->hasUnassignedProtectedItems = false;
@@ -3855,7 +3863,8 @@ bool PrivacyRuntimeCoordinator::stateForItem(qlonglong imageId,
                           !d->displayProxyIssueItemsByRoot.value(
                               runtime.publicRootUuid).contains(
                               runtime.item.uuid));
-            originalReady = (runtime.originalInspectable &&
+            originalReady = ((runtime.originalInspectable ||
+                              runtime.strongBackend) &&
                              (originalRootState ==
                               PrivacyRootRuntimeState::VerifiedAvailable) &&
                              !d->originalIssueItemsByRoot.value(runtime.originalRootUuid).contains(
@@ -3886,6 +3895,12 @@ bool PrivacyRuntimeCoordinator::stateForItem(qlonglong imageId,
         (sessionState.access == PrivacyItemAccess::Unprotected))
     {
         return false;
+    }
+
+    if (runtime.strongBackend &&
+        (sessionState.access != PrivacyItemAccess::Unlocked))
+    {
+        originalReady = false;
     }
 
     state->protectedItem       = true;
@@ -3950,7 +3965,8 @@ bool PrivacyRuntimeCoordinator::currentState(
                        !d->displayProxyIssueItemsByRoot.value(
                            runtime.publicRootUuid).contains(
                            itemUuid));
-        originalReady = (runtime.originalInspectable &&
+        originalReady = ((runtime.originalInspectable ||
+                          runtime.strongBackend) &&
                          (d->rootStates.value(runtime.originalRootUuid) ==
                           PrivacyRootRuntimeState::VerifiedAvailable) &&
                          !d->originalIssueItemsByRoot.value(runtime.originalRootUuid).contains(
@@ -3987,6 +4003,12 @@ bool PrivacyRuntimeCoordinator::currentState(
         {
             return false;
         }
+    }
+
+    if (runtime.strongBackend &&
+        (sessionState.access != PrivacyItemAccess::Unlocked))
+    {
+        originalReady = false;
     }
 
     state->itemUuid             = itemUuid;

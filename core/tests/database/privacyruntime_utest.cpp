@@ -391,6 +391,7 @@ private Q_SLOTS:
     void testMixedRootAndConflictingMappings();
     void testDynamicAlbumRootRegistration();
     void testDynamicProtectedItemPublication();
+    void testStrongOriginalAvailabilityFollowsUnlockState();
     void testClearThumbnailSourcePublication();
     void testRootEpochTransition();
     void testTransactionStates();
@@ -1500,6 +1501,111 @@ void PrivacyRuntimeTest::testDynamicProtectedItemPublication()
              PrivacyAnalysisDisposition::Allowed);
     QVERIFY(!runtime.hasProtectedItem(item, container, { primary }));
     QVERIFY(!runtime.removeProtectedItem(item, container, { primary }));
+}
+
+void PrivacyRuntimeTest::testStrongOriginalAvailabilityFollowsUnlockState()
+{
+    const QString managedRootUuid =
+        QLatin1String("30000000-0000-0000-0000-000000000003");
+    const QString storeUuid =
+        QLatin1String("70000000-0000-0000-0000-000000000001");
+
+    PrivacyRepositorySnapshot snapshot;
+    PrivacyCategory strong = makeCategory();
+    strong.backend = PrivacyBackend::Strong;
+    snapshot.categories << strong;
+
+    PrivacyStorageRoot managedRoot = makeRoot(managedRootUuid, -1);
+    managedRoot.kind = PrivacyStorageRootKind::ManagedStoreRoot;
+    managedRoot.configuredPath = QLatin1String("/synthetic/vault");
+    managedRoot.identityData =
+        PrivacyRootIdentityCodec::encodeManagedRootV1(markerUuid);
+    managedRoot.markerUuid = markerUuid;
+    snapshot.storageRoots << makeRoot(rootUuid, 9) << managedRoot;
+
+    PrivacyStore store;
+    store.uuid = storeUuid;
+    store.categoryUuid = categoryUuid;
+    store.rootUuid = managedRootUuid;
+    store.format = QLatin1String("gocryptfs");
+    store.formatVersion = 2;
+    store.cipherRelativePath = QLatin1String("stores/") + storeUuid;
+    store.configRelativePath = store.cipherRelativePath +
+                               QLatin1String("/gocryptfs.conf");
+    store.configGeneration = 1;
+    store.lifecycleState = PrivacyStoreLifecycleState::Active;
+    store.createdAt = QDateTime::currentDateTimeUtc();
+    snapshot.stores << store;
+
+    PrivacyStoreBinding binding;
+    binding.categoryUuid = categoryUuid;
+    binding.role = PrivacyStoreRole::Originals;
+    binding.storeUuid = storeUuid;
+    snapshot.storeBindings << binding;
+
+    snapshot.items << makeItem();
+    snapshot.assets << makeAsset(PrivacyAsset::PrimaryMediaRole, 55);
+    PrivacyContainer strongContainer = makeContainer(
+        QLatin1String("50000000-0000-0000-0000-000000000001"),
+        QLatin1String("originals/50000000-0000-0000-0000-000000000001"), 100);
+    strongContainer.kind = PrivacyContainerKind::StrongObject;
+    strongContainer.rootUuid.clear();
+    strongContainer.storeUuid = storeUuid;
+    snapshot.containers << strongContainer;
+
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid, PrivacyRootRuntimeState::VerifiedAvailable);
+    verifier->states.insert(managedRootUuid,
+                            PrivacyRootRuntimeState::VerifiedAvailable);
+    const QSharedPointer<FakeIntegrityInspector> integrity(
+        new FakeIntegrityInspector);
+    const QSharedPointer<PrivacyRuntimeCoordinator> runtime(
+        new PrivacyRuntimeCoordinator);
+    QCOMPARE(runtime->initialize(snapshot, verifier, {}, integrity).state,
+             PrivacyStartupState::Ready);
+
+    PrivacyActionItemState actionState;
+    QVERIFY(runtime->stateForItem(42, &actionState));
+    QVERIFY(actionState.protectedItem);
+    QCOMPARE(actionState.access, PrivacyItemAccess::Locked);
+    QCOMPARE(actionState.originalRootState,
+             PrivacyRootRuntimeState::VerifiedAvailable);
+    QVERIFY(actionState.proxyReady);
+    QVERIFY(!actionState.originalReady);
+    QVERIFY(!actionState.checkoutReady);
+
+    PrivacyLeaseCurrentState leaseState;
+    QVERIFY(runtime->currentState(itemUuid, &leaseState));
+    QVERIFY(leaseState.isValid());
+    QVERIFY(!leaseState.categoryUnlocked);
+    QVERIFY(leaseState.publicRootAvailable);
+    QVERIFY(!leaseState.storeRootAvailable);
+
+    const QSharedPointer<const PrivacyLeaseStateProvider> leaseProvider = runtime;
+    PrivacyLeaseRegistry registry(leaseProvider);
+    QVERIFY(!registry.issue(itemUuid, true).isValid());
+
+    QVERIFY(runtime->setCategoryUnlocked(categoryUuid, true));
+    QVERIFY(runtime->stateForItem(42, &actionState));
+    QCOMPARE(actionState.access, PrivacyItemAccess::Unlocked);
+    QVERIFY(actionState.originalReady);
+    QVERIFY(actionState.checkoutReady);
+    QVERIFY(runtime->currentState(itemUuid, &leaseState));
+    QVERIFY(leaseState.categoryUnlocked);
+    QVERIFY(leaseState.storeRootAvailable);
+    const PrivacyLeaseToken originalLease = registry.issue(itemUuid, true);
+    QVERIFY(originalLease.isValid());
+
+    QVERIFY(runtime->setCategoryUnlocked(categoryUuid, false));
+    QVERIFY(runtime->stateForItem(42, &actionState));
+    QCOMPARE(actionState.access, PrivacyItemAccess::Locked);
+    QVERIFY(!actionState.originalReady);
+    QVERIFY(!actionState.checkoutReady);
+    QVERIFY(runtime->currentState(itemUuid, &leaseState));
+    QVERIFY(!leaseState.categoryUnlocked);
+    QVERIFY(!leaseState.storeRootAvailable);
+    QCOMPARE(registry.validate(originalLease),
+             PrivacyLeaseValidation::RootUnavailable);
 }
 
 void PrivacyRuntimeTest::testClearThumbnailSourcePublication()
