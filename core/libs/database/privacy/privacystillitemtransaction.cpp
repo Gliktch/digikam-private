@@ -1260,7 +1260,9 @@ bool PrivacyCompatibilityBatchResult::succeeded() const
 PrivacyStillItemTransactionResult PrivacyCompatibilityExposureGuardEngine::relock(
     const PrivacyStorageRoot& publicRoot,
     const PrivacyJournalRootExpectation& rootExpectation,
-    const QString& unlockTransactionUuid)
+    const QString& unlockTransactionUuid,
+    const QString& vaultPlaintextRoot,
+    const QString& strongStoreUuid)
 {
     QString itemUuid;
     const auto fail = [&](PrivacyStillItemTransactionStatus status,
@@ -1268,12 +1270,22 @@ PrivacyStillItemTransactionResult PrivacyCompatibilityExposureGuardEngine::reloc
     {
         return failure(status, unlockTransactionUuid, itemUuid, detail);
     };
+    const bool strongContext = !vaultPlaintextRoot.isEmpty() ||
+                               !strongStoreUuid.isEmpty();
 
     if (!canonicalUuid(unlockTransactionUuid) ||
-        !sameRootExpectation(publicRoot, rootExpectation))
+        !sameRootExpectation(publicRoot, rootExpectation) ||
+        (strongContext &&
+         (vaultPlaintextRoot.isEmpty() ||
+          strongStoreUuid.isEmpty() ||
+          !QFileInfo(vaultPlaintextRoot).isDir() ||
+          !canonicalUuid(strongStoreUuid))))
     {
         return fail(PrivacyStillItemTransactionStatus::InvalidRequest,
-                    QStringLiteral("Compatibility guard request is invalid"));
+                    strongContext
+                        ? QStringLiteral(
+                              "Strong Compatibility relock requires the mounted Originals vault")
+                        : QStringLiteral("Compatibility guard request is invalid"));
     }
 
     PrivacyJournalError journalError = PrivacyJournalError::None;
@@ -1338,6 +1350,31 @@ PrivacyStillItemTransactionResult PrivacyCompatibilityExposureGuardEngine::reloc
         publicRoot, record.assets.constFirst().containerRelativePath);
     const auto protectedCopyExact = [&]()
     {
+        if (strongContext)
+        {
+            QList<PrivacyStrongObjectMember> members;
+
+            for (const PrivacyJournalAsset& asset : record.assets)
+            {
+                PrivacyStrongObjectMember member;
+                member.sourcePath.clear();
+                member.protectedRelativePath = asset.protectedRelativePath;
+                member.originalName =
+                    QFileInfo(asset.publicRelativePath).fileName();
+                member.expectedSize = asset.original.size;
+                member.expectedSha256 = asset.original.sha256;
+                members << member;
+            }
+
+            QString verifyDetail;
+
+            return PrivacyStrongObjectBackend::verifyObjects(
+                vaultPlaintextRoot,
+                record.assets.constFirst().containerRelativePath,
+                members, expectedArchive.size, expectedArchive.sha256,
+                &verifyDetail);
+        }
+
         PrivacyJournalObjectFact archiveFact;
         return (!archivePath.isEmpty() &&
                 stableFileFact(archivePath, nullptr, &archiveFact) &&
@@ -1398,6 +1435,65 @@ PrivacyStillItemTransactionResult PrivacyCompatibilityExposureGuardEngine::reloc
 
         return true;
     };
+    const auto restoreStrongVaultCopy = [&]()
+    {
+        if (!strongContext || protectedCopyExact())
+        {
+            return true;
+        }
+
+        QList<PrivacyStrongObjectMember> members;
+
+        for (const PrivacyJournalAsset& asset : record.assets)
+        {
+            PrivacyStrongObjectMember member;
+            member.sourcePath = absolutePath(
+                publicRoot, asset.publicRelativePath);
+            member.protectedRelativePath = asset.protectedRelativePath;
+            member.originalName =
+                QFileInfo(asset.publicRelativePath).fileName();
+            member.expectedSize = asset.original.size;
+            member.expectedSha256 = asset.original.sha256;
+            members << member;
+        }
+
+        const QString staged = QLatin1String("originals/.relock-") +
+                               unlockTransactionUuid;
+        const QString containerRelativePath =
+            record.assets.constFirst().containerRelativePath;
+        QString backendDetail;
+
+        const PrivacyStrongObjectStageResult stagedResult =
+            PrivacyStrongObjectBackend::stageObjects(
+                vaultPlaintextRoot, staged, members, &backendDetail);
+
+        if (!stagedResult.valid)
+        {
+            return false;
+        }
+
+        if (!PrivacyStrongObjectBackend::publishObjects(
+                vaultPlaintextRoot, staged, containerRelativePath,
+                members, expectedArchive.size, expectedArchive.sha256,
+                &backendDetail))
+        {
+            // A verified staged copy exists above; replace the stale vault
+            // namespace only when the staged copy is exact, then retry.
+            if (!PrivacyStrongObjectBackend::removeObjects(
+                    vaultPlaintextRoot, containerRelativePath,
+                    &backendDetail) ||
+                !PrivacyStrongObjectBackend::publishObjects(
+                    vaultPlaintextRoot, staged, containerRelativePath,
+                    members, expectedArchive.size, expectedArchive.sha256,
+                    &backendDetail))
+            {
+                return false;
+            }
+        }
+
+        return PrivacyStrongObjectBackend::removeObjects(
+            vaultPlaintextRoot, staged, &backendDetail);
+    };
 
     if (record.stage == PrivacyJournalStage::Complete)
     {
@@ -1457,9 +1553,13 @@ PrivacyStillItemTransactionResult PrivacyCompatibilityExposureGuardEngine::reloc
 
     if (!protectedCopyExact())
     {
-        return fail(PrivacyStillItemTransactionStatus::ReconciliationRequired,
-                    QStringLiteral(
-                        "protected copy changed before guarded relock"));
+        if (!restoreStrongVaultCopy())
+        {
+            return fail(
+                PrivacyStillItemTransactionStatus::ReconciliationRequired,
+                QStringLiteral(
+                    "protected copy changed before guarded relock"));
+        }
     }
 
     if (record.stage == PrivacyJournalStage::Applying)
@@ -1500,7 +1600,8 @@ PrivacyStillItemTransactionResult PrivacyCompatibilityExposureGuardEngine::reloc
                     : exposed.detail);
         }
 
-        return relock(publicRoot, rootExpectation, unlockTransactionUuid);
+        return relock(publicRoot, rootExpectation, unlockTransactionUuid,
+                      vaultPlaintextRoot, strongStoreUuid);
     }
 
     QList<PrivacyPublicTransitionRequest> transitions;
@@ -4758,7 +4859,8 @@ PrivacyStillItemTransactionEngine::compatibilityUnlock(
             const PrivacyStillItemTransactionResult cancelled =
                 PrivacyCompatibilityExposureGuardEngine::relock(
                     request.publicRoot, request.rootExpectation,
-                    transactionUuid);
+                    transactionUuid, request.vaultPlaintextRoot,
+                    request.strongStoreUuid);
             const PrivacyJournalRecord complete = recordAt(
                 protectedCopy, PrivacyJournalStage::Complete);
 
@@ -5076,6 +5178,27 @@ PrivacyStillItemTransactionEngine::compatibilityUnlockBatch(
     return batch;
 }
 
+PrivacyStillItemTransactionResult
+PrivacyStillItemTransactionEngine::compatibilityRelock(
+    const PrivacyCompatibilityRelockRequest& request)
+{
+    const PrivacyStillItemTransactionResult guarded =
+        PrivacyCompatibilityExposureGuardEngine::relock(
+            request.publicRoot, request.rootExpectation,
+            request.transactionUuid, request.vaultPlaintextRoot,
+            request.strongStoreUuid);
+    PrivacyStillItemTransactionResult settled = recover(
+        request.publicRoot, request.transactionUuid,
+        request.vaultPlaintextRoot, request.strongStoreUuid);
+
+    if (!settled.succeeded() && settled.detail.isEmpty())
+    {
+        settled.detail = guarded.detail;
+    }
+
+    return settled;
+}
+
 PrivacyCompatibilityBatchResult
 PrivacyStillItemTransactionEngine::compatibilityRelockBatch(
     const QList<PrivacyCompatibilityRelockRequest>& requests,
@@ -5113,21 +5236,10 @@ PrivacyStillItemTransactionEngine::compatibilityRelockBatch(
 
     for (const PrivacyCompatibilityRelockRequest& request : requests)
     {
-        const PrivacyStillItemTransactionResult guarded =
-            PrivacyCompatibilityExposureGuardEngine::relock(
-                request.publicRoot, request.rootExpectation,
-                request.transactionUuid);
-        PrivacyStillItemTransactionResult settled = recover(
-            request.publicRoot, request.transactionUuid);
-
-        if (!settled.succeeded() && settled.detail.isEmpty())
-        {
-            settled.detail = guarded.detail;
-        }
+        const PrivacyStillItemTransactionResult settled =
+            compatibilityRelock(request);
 
         reconciliationRequired = reconciliationRequired ||
-            (guarded.status ==
-             PrivacyStillItemTransactionStatus::ReconciliationRequired) ||
             (settled.status ==
              PrivacyStillItemTransactionStatus::ReconciliationRequired);
         batch.itemResults.append(settled);
@@ -5166,7 +5278,9 @@ PrivacyStillItemTransactionEngine::compatibilityRelockBatch(
 PrivacyStillItemTransactionResult
 PrivacyStillItemTransactionEngine::recoverCompatibility(
     const PrivacyStorageRoot& publicRoot,
-    const PrivacyTransaction& transaction)
+    const PrivacyTransaction& transaction,
+    const QString& vaultPlaintextRoot,
+    const QString& strongStoreUuid)
 {
     const auto fail = [&](PrivacyStillItemTransactionStatus status,
                           const QString& detail)
@@ -5211,6 +5325,27 @@ PrivacyStillItemTransactionEngine::recoverCompatibility(
     }
 
     const PrivacyItem* const item = itemForUuid(snapshot, transaction.itemUuid);
+    const PrivacyCategory* const category = item
+        ? categoryForUuid(snapshot, item->categoryUuid)
+        : nullptr;
+    const PrivacyContainer* const container = item
+        ? containerForItem(snapshot, item->uuid)
+        : nullptr;
+    const bool strongBackend =
+        (category && (category->backend == PrivacyBackend::Strong));
+
+    if (strongBackend &&
+        (vaultPlaintextRoot.isEmpty() ||
+         !QFileInfo(vaultPlaintextRoot).isDir() ||
+         strongStoreUuid.isEmpty() || !canonicalUuid(strongStoreUuid) ||
+         !container ||
+         (container->kind != PrivacyContainerKind::StrongObject) ||
+         (container->storeUuid != strongStoreUuid)))
+    {
+        return fail(PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                    QStringLiteral(
+                        "Strong Compatibility recovery requires the mounted Originals vault"));
+    }
 
     if (!item || (item->categoryUuid != transaction.categoryUuid))
     {
@@ -5426,7 +5561,8 @@ PrivacyStillItemTransactionEngine::recoverCompatibility(
             {
                 const PrivacyStillItemTransactionResult guarded =
                     PrivacyCompatibilityExposureGuardEngine::relock(
-                        publicRoot, expectation, transaction.uuid);
+                        publicRoot, expectation, transaction.uuid,
+                        vaultPlaintextRoot, strongStoreUuid);
 
                 if (!guarded.succeeded())
                 {
@@ -5666,7 +5802,8 @@ PrivacyStillItemTransactionEngine::recoverCompatibility(
 
         const PrivacyStillItemTransactionResult guarded =
             PrivacyCompatibilityExposureGuardEngine::relock(
-                publicRoot, expectation, transaction.uuid);
+                publicRoot, expectation, transaction.uuid,
+                vaultPlaintextRoot, strongStoreUuid);
 
         if (!guarded.succeeded())
         {
@@ -5746,25 +5883,30 @@ PrivacyStillItemTransactionEngine::recoverCompatibility(
 }
 
 PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::recover(
-    const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText)
+    const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText,
+    const QString& vaultPlaintextRoot, const QString& strongStoreUuid)
 {
-    return recoverInternal(publicRoot, transactionUuidText, nullptr, false);
+    return recoverInternal(publicRoot, transactionUuidText, nullptr, false,
+                           vaultPlaintextRoot, strongStoreUuid);
 }
 
 PrivacyStillItemTransactionResult
 PrivacyStillItemTransactionEngine::resumeAuthenticated(
     const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText,
-    const PrivacyPassword& verifiedPassword, bool freshAuthenticationConfirmed)
+    const PrivacyPassword& verifiedPassword, bool freshAuthenticationConfirmed,
+    const QString& vaultPlaintextRoot, const QString& strongStoreUuid)
 {
     return recoverInternal(publicRoot, transactionUuidText, &verifiedPassword,
-                           freshAuthenticationConfirmed);
+                           freshAuthenticationConfirmed,
+                           vaultPlaintextRoot, strongStoreUuid);
 }
 
 PrivacyStillItemTransactionResult
 PrivacyStillItemTransactionEngine::recoverInternal(
     const PrivacyStorageRoot& publicRoot, const QString& transactionUuidText,
     const PrivacyPassword* const verifiedPassword,
-    bool freshAuthenticationConfirmed)
+    bool freshAuthenticationConfirmed,
+    const QString& vaultPlaintextRoot, const QString& strongStoreUuid)
 {
     const QString transactionUuid = normalizedUuid(transactionUuidText);
     const auto fail = [&](PrivacyStillItemTransactionStatus status,
@@ -5801,7 +5943,8 @@ PrivacyStillItemTransactionEngine::recoverInternal(
 
     if (transaction->type == PrivacyTransactionType::CompatibilityUnlock)
     {
-        return recoverCompatibility(publicRoot, *transaction);
+        return recoverCompatibility(publicRoot, *transaction,
+                                    vaultPlaintextRoot, strongStoreUuid);
     }
 
     if ((transaction->type != PrivacyTransactionType::ProtectItem) &&
@@ -5899,11 +6042,18 @@ PrivacyStillItemTransactionEngine::recoverInternal(
     }
 
     const PrivacyJournalAsset& journalAsset = *journalAssetIt;
+    const PrivacyCategory* const payloadCategory =
+        categoryForUuid(snapshot, record.categoryUuid);
+    const bool strongPayload =
+        (payloadCategory &&
+         (payloadCategory->backend == PrivacyBackend::Strong));
 
     const QString expectedPayloadPath =
         (transaction->type == PrivacyTransactionType::ProtectItem)
-            ? protectArchiveStageRelativePath(journalAsset.publicRelativePath,
-                                              transactionUuid)
+            ? (strongPayload
+                   ? QLatin1String("originals/.staging-") + transactionUuid
+                   : protectArchiveStageRelativePath(
+                         journalAsset.publicRelativePath, transactionUuid))
             : journalAsset.containerRelativePath;
 
     if (payloadPath != expectedPayloadPath)
@@ -5948,6 +6098,25 @@ PrivacyStillItemTransactionEngine::recoverInternal(
         }
 
         imageId = teardownItem.imageId;
+    }
+
+    const PrivacyItem* const categoryItem = item
+        ? item : ((teardownItem.imageId > 0) ? &teardownItem : nullptr);
+    const PrivacyCategory* const category = categoryItem
+        ? categoryForUuid(snapshot, categoryItem->categoryUuid)
+        : payloadCategory;
+    const bool strongBackend =
+        (category && (category->backend == PrivacyBackend::Strong));
+
+    if (strongBackend &&
+        (vaultPlaintextRoot.isEmpty() ||
+         !QFileInfo(vaultPlaintextRoot).isDir() ||
+         strongStoreUuid.isEmpty() || !canonicalUuid(strongStoreUuid)))
+    {
+        return fail(PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                    journalAsset.itemUuid,
+                    QStringLiteral(
+                        "Strong still recovery requires the mounted Originals vault"));
     }
 
     if ((imageId <= 0) ||
@@ -6060,6 +6229,8 @@ PrivacyStillItemTransactionEngine::recoverInternal(
         request.originalPixelSize = QSize(item->originalWidth,
                                           item->originalHeight);
         request.originalCreationDate = item->originalCreationDate;
+        request.vaultPlaintextRoot = vaultPlaintextRoot;
+        request.strongStoreUuid = strongStoreUuid;
 
         return protect(request, replayPassword);
     }
@@ -6072,6 +6243,8 @@ PrivacyStillItemTransactionEngine::recoverInternal(
     request.rootExpectation = rootExpectation;
     request.freshAuthenticationConfirmed = created &&
                                            freshAuthenticationConfirmed;
+    request.vaultPlaintextRoot = vaultPlaintextRoot;
+    request.strongStoreUuid = strongStoreUuid;
 
     return unprotect(request, replayPassword);
 }

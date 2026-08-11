@@ -104,7 +104,9 @@ public:
     static PrivacyStillItemTransactionResult relock(
         const PrivacyStorageRoot& publicRoot,
         const PrivacyJournalRootExpectation& rootExpectation,
-        const QString& unlockTransactionUuid);
+        const QString& unlockTransactionUuid,
+        const QString& vaultPlaintextRoot = {},
+        const QString& strongStoreUuid = {});
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyStillProtectRequest
@@ -171,6 +173,10 @@ public:
     QString transactionUuid;
     PrivacyStorageRoot publicRoot;
     PrivacyJournalRootExpectation rootExpectation;
+    // Strong categories only: mounted Originals vault context supplied by the
+    // authenticated category session.
+    QString vaultPlaintextRoot;
+    QString strongStoreUuid;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyStillItemPersistence
@@ -320,6 +326,8 @@ public:
         const QList<PrivacyCompatibilityUnlockRequest>& requests,
         const PrivacyPassword& password,
         const CompatibilityBatchProgress& progress = {});
+    PrivacyStillItemTransactionResult compatibilityRelock(
+        const PrivacyCompatibilityRelockRequest& request);
     PrivacyCompatibilityBatchResult compatibilityRelockBatch(
         const QList<PrivacyCompatibilityRelockRequest>& requests,
         const CompatibilityBatchProgress& progress = {});
@@ -331,7 +339,9 @@ public:
      */
     PrivacyStillItemTransactionResult recover(
         const PrivacyStorageRoot& publicRoot,
-        const QString& transactionUuid);
+        const QString& transactionUuid,
+        const QString& vaultPlaintextRoot = {},
+        const QString& strongStoreUuid = {});
 
     /**
      * Resumes one exact durable transaction with a caller-verified category
@@ -343,7 +353,9 @@ public:
         const PrivacyStorageRoot& publicRoot,
         const QString& transactionUuid,
         const PrivacyPassword& verifiedPassword,
-        bool freshAuthenticationConfirmed);
+        bool freshAuthenticationConfirmed,
+        const QString& vaultPlaintextRoot = {},
+        const QString& strongStoreUuid = {});
 
 private:
 
@@ -351,10 +363,14 @@ private:
         const PrivacyStorageRoot& publicRoot,
         const QString& transactionUuid,
         const PrivacyPassword* verifiedPassword,
-        bool freshAuthenticationConfirmed);
+        bool freshAuthenticationConfirmed,
+        const QString& vaultPlaintextRoot = {},
+        const QString& strongStoreUuid = {});
     PrivacyStillItemTransactionResult recoverCompatibility(
         const PrivacyStorageRoot& publicRoot,
-        const PrivacyTransaction& transaction);
+        const PrivacyTransaction& transaction,
+        const QString& vaultPlaintextRoot = {},
+        const QString& strongStoreUuid = {});
 
     class Private;
     QScopedPointer<Private> d;

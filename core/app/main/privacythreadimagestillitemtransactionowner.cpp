@@ -532,6 +532,8 @@ public:
     mutable QString                          authenticatedTransactionUuid;
     mutable const PrivacyPassword*           authenticatedPassword = nullptr;
     mutable bool                             freshAuthenticationConfirmed = false;
+    mutable QString                          authenticatedVaultPlaintextRoot;
+    mutable QString                          authenticatedStrongStoreUuid;
     mutable PrivacyStillItemTransactionResult* authenticatedResult = nullptr;
 };
 
@@ -2261,8 +2263,9 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelock(
     }
 
     QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+    QSharedPointer<PrivacyCategorySessionOwner> sessions;
 
-    if (!currentActionComposition(&d->runtime, &runtime))
+    if (!currentActionComposition(&d->runtime, &runtime, &sessions))
     {
         return actionFailure(
             PrivacyStillItemTransactionStatus::CategoryUnavailable,
@@ -2337,9 +2340,31 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelock(
     const PrivacyCategory* const category = item
         ? categoryForUuid(snapshot, item->categoryUuid)
         : nullptr;
+    const PrivacyContainer* container = nullptr;
+
+    if (item)
+    {
+        for (const PrivacyContainer& candidate : snapshot.containers)
+        {
+            if (candidate.itemUuid == item->uuid)
+            {
+                container = &candidate;
+                break;
+            }
+        }
+    }
+
     const PrivacyStorageRoot* const root = primary
         ? rootForUuid(snapshot, primary->publicRootUuid)
         : nullptr;
+    const bool strongBackend =
+        (category && (category->backend == PrivacyBackend::Strong));
+    const QString strongStoreUuid =
+        (strongBackend && container &&
+         (container->kind == PrivacyContainerKind::StrongObject) &&
+         container->rootUuid.isEmpty() && !container->storeUuid.isEmpty())
+            ? container->storeUuid
+            : QString();
     PrivacyJournalRootExpectation expectation;
 
     if (!item || !category || !unlock || !primary ||
@@ -2347,7 +2372,7 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelock(
         (unlock->type != PrivacyTransactionType::CompatibilityUnlock) ||
         (unlock->state != PrivacyTransactionState::Exposed) ||
         (unlock->categoryUuid != category->uuid) ||
-        (category->backend != PrivacyBackend::Casual) || !root ||
+        (strongBackend && strongStoreUuid.isEmpty()) || !root ||
         (runtime->rootState(root->uuid) !=
          PrivacyRootRuntimeState::VerifiedAvailable) ||
         !rootExpectation(*root, &expectation))
@@ -2358,10 +2383,51 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelock(
                 "The exact Compatibility Unlock exposure is unavailable"));
     }
 
-    QMutexLocker locker(&d->transactionMutex);
-    PrivacyCompatibilityExposureGuardEngine::relock(
-        *root, expectation, unlock->uuid);
-    return d->engine.recover(*root, unlock->uuid);
+    if (!strongBackend)
+    {
+        QMutexLocker locker(&d->transactionMutex);
+        PrivacyCompatibilityExposureGuardEngine::relock(
+            *root, expectation, unlock->uuid);
+
+        return d->engine.recover(*root, unlock->uuid);
+    }
+
+    PrivacyStillItemTransactionResult result = actionFailure(
+        PrivacyStillItemTransactionStatus::AuthenticationRequired,
+        QStringLiteral(
+            "Strong Compatibility relock requires the mounted Originals vault"));
+    const PrivacyStorageRoot publicRoot = *root;
+    const PrivacyJournalRootExpectation publicExpectation = expectation;
+    const QString transactionUuid = unlock->uuid;
+    const PrivacyCategoryOperationStatus operationStatus =
+        sessions->runWithUnlockedStore(
+            category->uuid,
+            [this, &result, publicRoot, publicExpectation, transactionUuid,
+             strongStoreUuid](const PrivacyPassword&,
+                              const QString& plaintextRoot)
+            {
+                PrivacyCompatibilityRelockRequest request;
+                request.transactionUuid = transactionUuid;
+                request.publicRoot = publicRoot;
+                request.rootExpectation = publicExpectation;
+                request.vaultPlaintextRoot = plaintextRoot;
+                request.strongStoreUuid = strongStoreUuid;
+                QMutexLocker locker(&d->transactionMutex);
+                result = d->engine.compatibilityRelock(request);
+            });
+
+    if (operationStatus != PrivacyCategoryOperationStatus::Completed)
+    {
+        result = actionFailure(
+            PrivacyStillItemTransactionStatus::AuthenticationRequired,
+            (operationStatus == PrivacyCategoryOperationStatus::CategoryLocked)
+                ? QStringLiteral(
+                      "The category is locked; authenticate to relock the exposure")
+                : QStringLiteral(
+                      "Another category operation is already active"));
+    }
+
+    return result;
 }
 
 PrivacyCompatibilityBatchResult
@@ -2584,8 +2650,9 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelockCategory(
     }
 
     QSharedPointer<PrivacyRuntimeCoordinator> runtime;
+    QSharedPointer<PrivacyCategorySessionOwner> sessions;
 
-    if (!currentActionComposition(&d->runtime, &runtime))
+    if (!currentActionComposition(&d->runtime, &runtime, &sessions))
     {
         return batchFailure(
             PrivacyStillItemTransactionStatus::CategoryUnavailable,
@@ -2599,6 +2666,28 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelockCategory(
         return batchFailure(
             PrivacyStillItemTransactionStatus::PersistenceFailure,
             QStringLiteral("The privacy catalogue could not be read"));
+    }
+
+    const PrivacyCategory* category = nullptr;
+
+    for (const PrivacyCategory& candidate :
+         std::as_const(snapshot.categories))
+    {
+        if (candidate.uuid == categoryUuid)
+        {
+            category = &candidate;
+            break;
+        }
+    }
+
+    const bool strongBackend =
+        (category && (category->backend == PrivacyBackend::Strong));
+
+    if (strongBackend && !sessions)
+    {
+        return batchFailure(
+            PrivacyStillItemTransactionStatus::CategoryUnavailable,
+            QStringLiteral("Privacy startup is still changing"));
     }
 
     QList<PrivacyTransaction> transactions;
@@ -2676,6 +2765,40 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelockCategory(
         request.transactionUuid = transaction.uuid;
         request.publicRoot = *root;
         request.rootExpectation = expectation;
+
+        if (strongBackend)
+        {
+            const PrivacyContainer* container = nullptr;
+
+            for (const PrivacyContainer& candidate :
+                 std::as_const(snapshot.containers))
+            {
+                if (candidate.itemUuid == transaction.itemUuid)
+                {
+                    container = &candidate;
+                    break;
+                }
+            }
+
+            if (!container ||
+                (container->kind != PrivacyContainerKind::StrongObject) ||
+                !container->rootUuid.isEmpty() ||
+                container->storeUuid.isEmpty())
+            {
+                PrivacyStillItemTransactionResult item = actionFailure(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral(
+                        "The Strong Compatibility exposure mapping is incomplete"));
+                item.transactionUuid = transaction.uuid;
+                item.itemUuid = transaction.itemUuid;
+                unavailable.append(item);
+                reconciliationRequired = true;
+                continue;
+            }
+
+            request.strongStoreUuid = container->storeUuid;
+        }
+
         requests.append(request);
     }
 
@@ -2694,9 +2817,45 @@ PrivacyThreadImageIOStillItemTransactionOwner::compatibilityRelockCategory(
                 };
         }
 
-        QMutexLocker locker(&d->transactionMutex);
-        available = d->engine.compatibilityRelockBatch(
-            requests, availableProgress);
+        const auto runBatch = [&](const QString& plaintextRoot)
+        {
+            for (PrivacyCompatibilityRelockRequest& request : requests)
+            {
+                request.vaultPlaintextRoot = plaintextRoot;
+            }
+
+            QMutexLocker locker(&d->transactionMutex);
+            available = d->engine.compatibilityRelockBatch(
+                requests, availableProgress);
+        };
+
+        if (strongBackend)
+        {
+            const PrivacyCategoryOperationStatus operation =
+                sessions->runWithUnlockedStore(
+                    categoryUuid,
+                    [&runBatch](const PrivacyPassword&,
+                                const QString& plaintextRoot)
+                    {
+                        runBatch(plaintextRoot);
+                    });
+
+            if (operation != PrivacyCategoryOperationStatus::Completed)
+            {
+                available = batchFailure(
+                    PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                    (operation ==
+                     PrivacyCategoryOperationStatus::CategoryLocked)
+                        ? QStringLiteral(
+                              "The category is locked; authenticate to relock the exposures")
+                        : QStringLiteral(
+                              "Another category operation is already active"));
+            }
+        }
+        else
+        {
+            runBatch({});
+        }
     }
 
     PrivacyCompatibilityBatchResult result;
@@ -2987,10 +3146,33 @@ PrivacyThreadImageIOStillItemTransactionOwner::resume(
                                          ? rootForUuid(snapshot,
                                                        journal->rootUuid)
                                          : nullptr;
+    const PrivacyContainer* container = nullptr;
+
+    if (item)
+    {
+        for (const PrivacyContainer& candidate :
+             std::as_const(snapshot.containers))
+        {
+            if (candidate.itemUuid == item->uuid)
+            {
+                container = &candidate;
+                break;
+            }
+        }
+    }
+
+    const bool strongBackend =
+        (category && (category->backend == PrivacyBackend::Strong));
+    const QString strongStoreUuid =
+        (strongBackend && container &&
+         (container->kind == PrivacyContainerKind::StrongObject) &&
+         container->rootUuid.isEmpty() && !container->storeUuid.isEmpty())
+            ? container->storeUuid
+            : QString();
 
     if (!item || (itemCount != 1) || (journalCount != 1) || !category || !root ||
         (item->categoryUuid != category->uuid) ||
-        (category->backend != PrivacyBackend::Casual) ||
+        (strongBackend && strongStoreUuid.isEmpty()) ||
         (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
         (root->kind != PrivacyStorageRootKind::AlbumRoot) ||
         (runtime->rootState(root->uuid) != PrivacyRootRuntimeState::Recovering))
@@ -3005,7 +3187,9 @@ PrivacyThreadImageIOStillItemTransactionOwner::resume(
         QStringLiteral("The transaction was not resumed"));
     const auto resumeWithPassword =
         [this, &runtime, &root, &transaction, &result]
-        (const PrivacyPassword& password, bool freshAuthenticationConfirmed)
+        (const PrivacyPassword& password, bool freshAuthenticationConfirmed,
+         const QString& vaultPlaintextRoot = {},
+         const QString& strongStoreUuid = {})
         {
             QMutexLocker locker(&d->transactionMutex);
 
@@ -3021,12 +3205,16 @@ PrivacyThreadImageIOStillItemTransactionOwner::resume(
             d->authenticatedTransactionUuid = transaction->uuid;
             d->authenticatedPassword = &password;
             d->freshAuthenticationConfirmed = freshAuthenticationConfirmed;
+            d->authenticatedVaultPlaintextRoot = vaultPlaintextRoot;
+            d->authenticatedStrongStoreUuid = strongStoreUuid;
             d->authenticatedResult = &result;
             const ScopeExit clearAuthenticatedContext([this]()
             {
                 d->authenticatedTransactionUuid.clear();
                 d->authenticatedPassword = nullptr;
                 d->freshAuthenticationConfirmed = false;
+                d->authenticatedVaultPlaintextRoot.clear();
+                d->authenticatedStrongStoreUuid.clear();
                 d->authenticatedResult = nullptr;
             });
 
@@ -3060,13 +3248,30 @@ PrivacyThreadImageIOStillItemTransactionOwner::resume(
     if ((transaction->type == PrivacyTransactionType::ProtectItem) &&
         sessions->ownsSecret(category->uuid))
     {
-        const PrivacyCategoryOperationStatus operation =
-            sessions->runWithUnlockedSecret(
+        PrivacyCategoryOperationStatus operation =
+            PrivacyCategoryOperationStatus::CategoryLocked;
+
+        if (!strongBackend)
+        {
+            operation = sessions->runWithUnlockedSecret(
                 category->uuid,
                 [&resumeWithPassword](const PrivacyPassword& password)
                 {
                     resumeWithPassword(password, false);
                 });
+        }
+        else
+        {
+            operation = sessions->runWithUnlockedStore(
+                category->uuid,
+                [&resumeWithPassword, strongStoreUuid]
+                (const PrivacyPassword& password,
+                 const QString& plaintextRoot)
+                {
+                    resumeWithPassword(password, false, plaintextRoot,
+                                       strongStoreUuid);
+                });
+        }
 
         if (operation != PrivacyCategoryOperationStatus::Completed)
         {
@@ -3080,13 +3285,25 @@ PrivacyThreadImageIOStillItemTransactionOwner::resume(
 
     const bool freshAuthenticationRequired =
         (transaction->type == PrivacyTransactionType::UnprotectItem);
+
+    if (strongBackend && !sessions->ownsSecret(category->uuid))
+    {
+        const PrivacyCategorySessionResult unlocked =
+            sessions->unlockCategory(category->uuid, passwordText);
+
+        if (!unlocked.succeeded())
+        {
+            return actionFailure(
+                categorySessionTransactionStatus(unlocked.status),
+                categorySessionFailureDetail(unlocked.status));
+        }
+    }
+
     const PrivacyCategorySessionResult authentication =
         sessions->runWithFreshlyAuthenticatedSecret(
             category->uuid, passwordText,
-            [&resumeWithPassword, freshAuthenticationRequired]
-            (const PrivacyPassword& password)
+            [](const PrivacyPassword&)
             {
-                resumeWithPassword(password, freshAuthenticationRequired);
             },
             transaction->uuid);
 
@@ -3095,6 +3312,46 @@ PrivacyThreadImageIOStillItemTransactionOwner::resume(
         result = actionFailure(
             categorySessionTransactionStatus(authentication.status),
             categorySessionFailureDetail(authentication.status));
+    }
+
+    PrivacyPassword verifiedPassword =
+        PrivacyPassword::fromUnicode(passwordText);
+
+    if (!verifiedPassword.isValid())
+    {
+        result = actionFailure(
+            PrivacyStillItemTransactionStatus::AuthenticationRequired,
+            QStringLiteral("Fresh category authentication is required"));
+        return result;
+    }
+
+    if (!strongBackend)
+    {
+        resumeWithPassword(verifiedPassword, freshAuthenticationRequired);
+        return result;
+    }
+
+    const PrivacyCategoryOperationStatus operation =
+        sessions->runWithUnlockedStore(
+            category->uuid,
+            [&resumeWithPassword, &verifiedPassword,
+             freshAuthenticationRequired, strongStoreUuid]
+            (const PrivacyPassword&, const QString& plaintextRoot)
+            {
+                resumeWithPassword(verifiedPassword,
+                                   freshAuthenticationRequired,
+                                   plaintextRoot, strongStoreUuid);
+            });
+
+    if (operation != PrivacyCategoryOperationStatus::Completed)
+    {
+        result = actionFailure(
+            PrivacyStillItemTransactionStatus::AuthenticationRequired,
+            (operation == PrivacyCategoryOperationStatus::CategoryLocked)
+                ? QStringLiteral(
+                      "The category must be authenticated again")
+                : QStringLiteral(
+                      "Another category operation is already active"));
     }
 
     return result;
@@ -3168,12 +3425,17 @@ PrivacyThreadImageIOStillItemTransactionOwner::recoverRoot(
     {
         result = d->engine.resumeAuthenticated(
             root, transaction.uuid, *d->authenticatedPassword,
-            d->freshAuthenticationConfirmed);
+            d->freshAuthenticationConfirmed,
+            d->authenticatedVaultPlaintextRoot,
+            d->authenticatedStrongStoreUuid);
         *d->authenticatedResult = result;
     }
     else
     {
-        result = d->engine.recover(root, transaction.uuid);
+        result = d->engine.recover(
+            root, transaction.uuid,
+            d->authenticatedVaultPlaintextRoot,
+            d->authenticatedStrongStoreUuid);
     }
 
     if (result.succeeded())

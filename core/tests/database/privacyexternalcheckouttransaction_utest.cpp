@@ -400,6 +400,7 @@ private Q_SLOTS:
 
     void testCreateAuthorizeAndUnchangedCleanup();
     void testStrongCategoryCheckoutRoundTrip();
+    void testStrongCategoryCheckoutLockedRestartRecovery();
     void testChangedAndUnexpectedContentArePreserved();
     void testPreserveForLaterAndConfirmedDiscard();
     void testPreserveMovePublicationFailureRepairs();
@@ -492,6 +493,65 @@ void PrivacyExternalCheckoutTransactionTest::testStrongCategoryCheckoutRoundTrip
                  PrivacyExternalCheckoutStatus::CompletedUnchanged,
              qPrintable(reconciled.detail));
     QVERIFY(!QFileInfo::exists(checkout));
+    QCOMPARE(readFile(fixture.proxyPath), ProxyBytes);
+}
+
+void PrivacyExternalCheckoutTransactionTest::
+    testStrongCategoryCheckoutLockedRestartRecovery()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    fixture.persistence.snapshot.categories.first().backend =
+        PrivacyBackend::Strong;
+
+    PrivacyStoreBinding originals;
+    originals.categoryUuid = CategoryUuid;
+    originals.role = PrivacyStoreRole::Originals;
+    originals.storeUuid = StoreUuid;
+    fixture.persistence.snapshot.storeBindings << originals;
+
+    PrivacyContainer strongContainer =
+        fixture.persistence.snapshot.containers.first();
+    strongContainer.kind = PrivacyContainerKind::StrongObject;
+    strongContainer.rootUuid.clear();
+    strongContainer.storeUuid = StoreUuid;
+    strongContainer.objectRelativePath =
+        QLatin1String("originals/") + ContainerUuid;
+    fixture.persistence.snapshot.containers.first() = strongContainer;
+
+    PrivacyAsset strongAsset = fixture.persistence.snapshot.assets.first();
+    strongAsset.protectedRelativePath =
+        QLatin1String("originals/") + ContainerUuid +
+        QLatin1String("/0-photo.jpg");
+    fixture.persistence.snapshot.assets.first() = strongAsset;
+    const QString vaultObject = QDir(fixture.plaintextRoot).filePath(
+        strongAsset.protectedRelativePath);
+    QVERIFY(QDir().mkpath(QFileInfo(vaultObject).absolutePath()));
+    QVERIFY(writeFile(vaultObject, OriginalBytes));
+
+    PrivacyExternalCheckoutTransactionEngine engine(fixture.persistence);
+    const PrivacyExternalCheckoutResult created = engine.create(fixture.request);
+    QVERIFY2(created.status == PrivacyExternalCheckoutStatus::Ready,
+             qPrintable(created.detail));
+    QCOMPARE(created.assets.size(), 1);
+    QCOMPARE(readFile(fixture.proxyPath), ProxyBytes);
+
+    fixture.persistence.snapshot.transactions[0] =
+        fixture.persistence.begunTransaction;
+    PrivacyExternalCheckoutTransactionEngine restarted(fixture.persistence);
+    QCOMPARE(restarted.recover(fixture.storeRoot, fixture.storeExpectation,
+                               TransactionUuid).status,
+             PrivacyExternalCheckoutStatus::AuthenticationRequired);
+    const PrivacyExternalCheckoutResult resumed =
+        restarted.resumeAuthenticatedCreate(fixture.request);
+    QVERIFY2(resumed.status == PrivacyExternalCheckoutStatus::Ready,
+             qPrintable(resumed.detail));
+    QVERIFY2(restarted.authorizeLaunch(fixture.storeAccess,
+                                       TransactionUuid).succeeded(),
+             "resumed Strong checkout could not be authorized");
+    QCOMPARE(restarted.reconcile(fixture.storeAccess, TransactionUuid).status,
+             PrivacyExternalCheckoutStatus::CompletedUnchanged);
+    QVERIFY(!QFileInfo::exists(created.assets.constFirst().checkoutUrl.toLocalFile()));
     QCOMPARE(readFile(fixture.proxyPath), ProxyBytes);
 }
 
