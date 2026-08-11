@@ -196,7 +196,6 @@ private:
                       PrivacyGocryptfsError* error) const;
     bool createSentinel(const QByteArray& expectedSentinel) const;
     bool syncConfigAndCipherDirectory() const;
-    bool validMasterKeyOutput(const QByteArray& output) const;
     bool sentinelMatches(const QByteArray& expectedSentinel) const;
     void cleanUpFailedMount(std::unique_ptr<PrivacyProcessHandle>& process) const;
     void setError(PrivacyGocryptfsError* error, PrivacyGocryptfsError value) const;

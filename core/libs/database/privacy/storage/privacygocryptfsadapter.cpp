@@ -22,7 +22,6 @@
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
-#include <QTemporaryFile>
 #include <QThread>
 
 #ifdef Q_OS_UNIX
@@ -453,16 +452,25 @@ bool PrivacyGocryptfsStoreHarness::validateEnvelope(
         return false;
     }
 
+    if ((envelope.m_opaqueConfig.size() <= 0) ||
+        (envelope.m_opaqueConfig.size() > MaximumEnvelopeBytes))
+    {
+        setError(error, PrivacyGocryptfsError::InvalidEnvelope);
+
+        return false;
+    }
+
     if (!prepareWorkspace(error))
     {
         return false;
     }
 
-    QTemporaryFile config(runtimeDirectory() + QLatin1String("/envelope-XXXXXX"));
-    config.setAutoRemove(true);
+    // Validate the password by mounting the envelope's configuration with
+    // gocryptfs itself and unmounting again. The plaintext master key stays
+    // confined to gocryptfs; it is never dumped or parsed by digiKam Private.
+    QFile config(configPath());
 
-    if (!config.open() ||
-        !config.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner) ||
+    if (!config.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
         (config.write(envelope.m_opaqueConfig) != envelope.m_opaqueConfig.size()) ||
         !config.flush())
     {
@@ -473,28 +481,33 @@ bool PrivacyGocryptfsStoreHarness::validateEnvelope(
 
     config.close();
 
-    const PrivacyProcessSpec spec = processSpec(
-        m_toolPaths.gocryptfsXray,
-        { QLatin1String("-dumpmasterkey"), config.fileName() }, true);
-    PrivacyProcessResult result;
-
-    if (!runWithPassword(spec, password, &result) || !result.succeeded())
+    if (!QFile::setPermissions(configPath(),
+                               QFileDevice::ReadOwner | QFileDevice::WriteOwner) ||
+        !configIsSafe())
     {
-        setError(error, PrivacyGocryptfsError::ProcessFailed);
+        setError(error, PrivacyGocryptfsError::FileOperationFailed);
 
         return false;
     }
 
-    if (!validMasterKeyOutput(result.standardOutput))
+    std::unique_ptr<PrivacyProcessHandle> process = startMount(password, error);
+
+    if (!process)
     {
-        setError(error, PrivacyGocryptfsError::InvalidMasterKeyOutput);
+        return false;
+    }
+
+    if (!waitForMount(*process, error))
+    {
+        cleanUpFailedMount(process);
 
         return false;
     }
 
-    result.clearOutput();
+    PrivacyGocryptfsMountLease lease(mountDirectory(), &m_mountProbe,
+                                     std::move(process));
 
-    return true;
+    return unmountStore(lease, error);
 }
 
 std::unique_ptr<PrivacyGocryptfsMountLease> PrivacyGocryptfsStoreHarness::mountStore(
@@ -842,27 +855,6 @@ bool PrivacyGocryptfsStoreHarness::syncConfigAndCipherDirectory() const
             (::fsync(config.handle()) == 0) &&
 #endif
             syncDirectory(cipherDirectory()));
-}
-
-bool PrivacyGocryptfsStoreHarness::validMasterKeyOutput(const QByteArray& output) const
-{
-    if ((output.size() != 65) || (output.at(64) != '\n'))
-    {
-        return false;
-    }
-
-    for (int i = 0 ; i < 64 ; ++i)
-    {
-        const char value = output.at(i);
-
-        if (!(((value >= '0') && (value <= '9')) ||
-              ((value >= 'a') && (value <= 'f'))))
-        {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 bool PrivacyGocryptfsStoreHarness::sentinelMatches(

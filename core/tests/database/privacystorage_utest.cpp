@@ -191,19 +191,6 @@ public:
                 return finished(QByteArray("gocryptfs-xray ") + xrayVersion + '\n', spec);
             }
 
-            if (spec.arguments.contains(QLatin1String("-dumpmasterkey")))
-            {
-                QFile config(spec.arguments.constLast());
-
-                if (!passwordMatches || !config.open(QIODevice::ReadOnly) ||
-                    (config.readAll() != opaqueConfig))
-                {
-                    return failed(spec);
-                }
-
-                return finished(validMasterKeyOutput ? (QByteArray(64, 'a') + '\n')
-                                                     : QByteArray("invalid\n"), spec);
-            }
         }
 
         if (spec.program == fusermountPath)
@@ -263,7 +250,6 @@ public:
     QByteArray                        xrayVersion          = QByteArray("2.6.1");
     QList<PrivacyProcessSpec>         specs;
     std::shared_ptr<FakeProcessState> foreground;
-    bool                              validMasterKeyOutput = true;
     PrivacyMountStateProbe::State      mountStateOnStart =
         PrivacyMountStateProbe::State::Mounted;
     bool                              sawPasswordInput     = false;
@@ -519,11 +505,7 @@ void PrivacyStorageTest::testSyntheticLifecycle()
     QVERIFY(harness->createStore(password, sentinel, &envelope, &error));
     QVERIFY(envelope.isValid());
     QVERIFY(harness->validateEnvelope(envelope, password, &error));
-
-    fixture.runner.validMasterKeyOutput = false;
-    QVERIFY(!harness->validateEnvelope(envelope, password, &error));
-    QVERIFY(error == PrivacyGocryptfsError::InvalidMasterKeyOutput);
-    fixture.runner.validMasterKeyOutput = true;
+    QVERIFY(fixture.runner.unmountCalls > 0);
 
     PrivacyPassword wrong = PrivacyPassword::fromUnicode(QLatin1String("wrong"));
     QVERIFY(!harness->validateEnvelope(envelope, wrong, &error));
