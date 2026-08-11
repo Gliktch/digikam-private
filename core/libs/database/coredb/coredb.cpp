@@ -2102,6 +2102,167 @@ bool CoreDB::beginPrivacyExternalCheckout(
     return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
 }
 
+bool CoreDB::beginPrivacyPasswordRewrap(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    if (!transaction.isValid() || !journal.isValid() ||
+        !transaction.itemUuid.isEmpty() ||
+        (transaction.type != PrivacyTransactionType::ChangePassword) ||
+        (transaction.state != PrivacyTransactionState::Created) ||
+        (transaction.generation != 0) ||
+        (transaction.fromCredentialGeneration < 0) ||
+        (transaction.toCredentialGeneration !=
+         transaction.fromCredentialGeneration + 1) ||
+        (journal.transactionUuid != transaction.uuid) ||
+        (journal.stage != static_cast<int>(PrivacyJournalStage::Created)) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList bindings;
+    bindings << transaction.categoryUuid
+             << static_cast<int>(PrivacyCategoryLifecycleState::Active)
+             << transaction.fromCredentialGeneration
+             << transaction.categoryUuid
+             << transaction.fromCredentialGeneration
+             << transaction.uuid
+             << transaction.categoryUuid
+             << static_cast<int>(PrivacyTransactionState::Complete);
+    QVariantList expected;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT "
+        "EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=? AND lifecycleState=? "
+        "AND currentCredentialGeneration=?), "
+        "EXISTS(SELECT 1 FROM PrivacyCredentials WHERE categoryUuid=? "
+        "AND generation=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE categoryUuid=? "
+        "AND state<>?);"),
+        bindings, &expected);
+
+    if ((expected.size() != 4) ||
+        std::any_of(expected.cbegin(), expected.cend(),
+                    [](const QVariant& value) { return !value.toBool(); }) ||
+        !insertPrivacyTransaction(transaction) ||
+        !insertPrivacyTransactionJournal(journal))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::publishPrivacyPasswordRewrap(
+    const QString& categoryUuid, qlonglong categoryGeneration,
+    const PrivacyCredential& credential, const QString& storeUuid,
+    qlonglong storeGeneration, const PrivacyTransaction& transaction,
+    PrivacyTransactionState expectedState,
+    qlonglong expectedGeneration) const
+{
+    if (!credential.isValid() || !transaction.isValid() ||
+        (credential.categoryUuid != categoryUuid) ||
+        (credential.generation != categoryGeneration) ||
+        (credential.generation != storeGeneration) ||
+        (transaction.categoryUuid != categoryUuid) ||
+        (transaction.type != PrivacyTransactionType::ChangePassword) ||
+        (transaction.state != PrivacyTransactionState::Complete) ||
+        (transaction.generation != expectedGeneration + 1) ||
+        ((expectedState != PrivacyTransactionState::Created) &&
+         (expectedState != PrivacyTransactionState::Applying)) ||
+        (expectedGeneration < 0) ||
+        (transaction.toCredentialGeneration != credential.generation) ||
+        (transaction.fromCredentialGeneration != credential.generation - 1) ||
+        d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList bindings;
+    bindings << categoryUuid
+             << static_cast<int>(PrivacyCategoryLifecycleState::Active)
+             << transaction.fromCredentialGeneration
+             << categoryUuid
+             << transaction.fromCredentialGeneration
+             << storeUuid
+             << categoryUuid
+             << static_cast<int>(PrivacyStoreLifecycleState::Active)
+             << transaction.fromCredentialGeneration
+             << transaction.uuid
+             << categoryUuid
+             << static_cast<int>(PrivacyTransactionType::ChangePassword)
+             << static_cast<int>(expectedState)
+             << expectedGeneration
+             << credential.categoryUuid
+             << credential.generation;
+    QVariantList expected;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT "
+        "EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=? AND lifecycleState=? "
+        "AND currentCredentialGeneration=?), "
+        "EXISTS(SELECT 1 FROM PrivacyCredentials WHERE categoryUuid=? "
+        "AND generation=?), "
+        "EXISTS(SELECT 1 FROM PrivacyStores WHERE uuid=? AND categoryUuid=? "
+        "AND lifecycleState=? AND configGeneration=?), "
+        "EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=? AND categoryUuid=? "
+        "AND type=? AND state=? AND generation=?), "
+        "NOT EXISTS(SELECT 1 FROM PrivacyCredentials WHERE categoryUuid=? "
+        "AND generation=?);"),
+        bindings, &expected);
+
+    if ((expected.size() != 5) ||
+        std::any_of(expected.cbegin(), expected.cend(),
+                    [](const QVariant& value) { return !value.toBool(); }) ||
+        !insertPrivacyCredential(credential))
+    {
+        return abort();
+    }
+
+    QVariantList categoryValues;
+    categoryValues << categoryGeneration << categoryUuid
+                   << static_cast<int>(PrivacyCategoryLifecycleState::Active)
+                   << transaction.fromCredentialGeneration;
+    const QSqlQuery categoryQuery = d->db->execQuery(QString::fromUtf8(
+        "UPDATE PrivacyCategories SET currentCredentialGeneration=? "
+        "WHERE uuid=? AND lifecycleState=? AND currentCredentialGeneration=?;"),
+        categoryValues);
+
+    QVariantList storeValues;
+    storeValues << storeGeneration << storeUuid << categoryUuid
+                << static_cast<int>(PrivacyStoreLifecycleState::Active)
+                << transaction.fromCredentialGeneration;
+    const QSqlQuery storeQuery = d->db->execQuery(QString::fromUtf8(
+        "UPDATE PrivacyStores SET configGeneration=? "
+        "WHERE uuid=? AND categoryUuid=? AND lifecycleState=? "
+        "AND configGeneration=?;"),
+        storeValues);
+
+    if (!categoryQuery.isActive() || (categoryQuery.numRowsAffected() != 1) ||
+        !storeQuery.isActive() || (storeQuery.numRowsAffected() != 1) ||
+        !compareAndUpdatePrivacyTransaction(transaction, expectedState,
+                                            expectedGeneration))
+    {
+        return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
 bool CoreDB::publishPrivacyItemUnprotection(
     qlonglong imageId, const QString& itemUuid, const QString& categoryUuid,
     qlonglong expectedItemGeneration,

@@ -691,6 +691,45 @@ bool PrivacyRepository::beginExternalCheckout(
                                                       normalizedJournal);
 }
 
+bool PrivacyRepository::beginPasswordRewrap(
+    const PrivacyTransaction& transaction,
+    const PrivacyTransactionJournal& journal) const
+{
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    PrivacyTransactionJournal normalizedJournal = journal;
+    normalizedJournal.transactionUuid = normalizedUuid(journal.transactionUuid);
+    normalizedJournal.rootUuid = normalizedUuid(journal.rootUuid);
+    CoreDbAccess access;
+
+    return access.db()->beginPrivacyPasswordRewrap(normalizedTransaction,
+                                                    normalizedJournal);
+}
+
+bool PrivacyRepository::publishPasswordRewrap(
+    const QString& categoryUuid, qlonglong categoryGeneration,
+    const PrivacyCredential& credential, const QString& storeUuid,
+    qlonglong storeGeneration, const PrivacyTransaction& transaction,
+    PrivacyTransactionState expectedState,
+    qlonglong expectedGeneration) const
+{
+    PrivacyCredential normalizedCredential = credential;
+    normalizedCredential.categoryUuid = normalizedUuid(credential.categoryUuid);
+    normalizedCredential.recoveryDocumentUuid =
+        credential.recoveryDocumentUuid.isEmpty()
+            ? QString() : normalizedUuid(credential.recoveryDocumentUuid);
+    PrivacyTransaction normalizedTransaction = transaction;
+    normalizedTransaction.uuid = normalizedUuid(transaction.uuid);
+    normalizedTransaction.categoryUuid = normalizedUuid(transaction.categoryUuid);
+    CoreDbAccess access;
+
+    return access.db()->publishPrivacyPasswordRewrap(
+        normalizedUuid(categoryUuid), categoryGeneration,
+        normalizedCredential, normalizedUuid(storeUuid), storeGeneration,
+        normalizedTransaction, expectedState, expectedGeneration);
+}
+
 bool PrivacyRepository::publishItemUnprotection(
     qlonglong imageId, const QString& itemUuid, const QString& categoryUuid,
     qlonglong expectedItemGeneration,

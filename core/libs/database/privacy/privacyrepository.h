@@ -105,6 +105,16 @@ public:
                                   const PrivacyTransactionJournal& journal) const;
     bool beginExternalCheckout(const PrivacyTransaction& transaction,
                                const PrivacyTransactionJournal& journal) const;
+    bool beginPasswordRewrap(const PrivacyTransaction& transaction,
+                             const PrivacyTransactionJournal& journal) const;
+    bool publishPasswordRewrap(const QString& categoryUuid,
+                               qlonglong categoryGeneration,
+                               const PrivacyCredential& credential,
+                               const QString& storeUuid,
+                               qlonglong storeGeneration,
+                               const PrivacyTransaction& transaction,
+                               PrivacyTransactionState expectedState,
+                               qlonglong expectedGeneration) const;
     bool publishItemUnprotection(qlonglong imageId,
                                  const QString& itemUuid,
                                  const QString& categoryUuid,
