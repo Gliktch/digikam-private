@@ -1442,7 +1442,7 @@
                 <statement mode="plain">CREATE INDEX imgtagprop_prop_tag_img_idx ON ImageTagProperties (property, tagid, imageid);</statement>
             </dbaction>
 
-            <dbaction name="UpdateSchemaFromV17ToV18" mode="transaction">
+            <dbaction name="UpdateSchemaFromV17ToP1" mode="transaction">
                 <statement mode="plain">CREATE TABLE PrivacyCategories
                     (uuid TEXT PRIMARY KEY NOT NULL,
                     name TEXT NOT NULL,
@@ -3830,7 +3830,7 @@
                 <statement mode="plain">SET FOREIGN_KEY_CHECKS=1;</statement>
             </dbaction>
 
-            <dbaction name="UpdateSchemaFromV17ToV18" mode="transaction">
+            <dbaction name="UpdateSchemaFromV17ToP1" mode="transaction">
                 <statement mode="plain">CREATE TABLE IF NOT EXISTS PrivacyCategories
                     (uuid VARCHAR(36) PRIMARY KEY NOT NULL,
                     name LONGTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL,

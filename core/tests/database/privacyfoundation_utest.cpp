@@ -46,6 +46,9 @@ private Q_SLOTS:
 
     void cleanup();
     void testSchemaActions();
+    void testFreshDatabaseCarriesP1Identity();
+    void testUnmarkedP1DatabaseIsRejected();
+    void testUnknownPostStockDatabaseIsRejected();
     void testSqliteSchemaActionsExecute();
     void testSqlitePrivacyCopyRoundTrip();
     void testCompatibilityTransactionExclusivity();
@@ -192,7 +195,7 @@ bool executeSqliteSchemaScenario(const QDomElement& database,
         }
 
         const QStringList actionNames = update
-                                      ? QStringList { QLatin1String("UpdateSchemaFromV17ToV18") }
+                                      ? QStringList { QLatin1String("UpdateSchemaFromV17ToP1") }
                                       : QStringList { QLatin1String("CreateDB"),
                                                       QLatin1String("CreateIndices"),
                                                       QLatin1String("CreateTriggers") };
@@ -529,7 +532,7 @@ void PrivacyFoundationTest::cleanup()
 
 void PrivacyFoundationTest::testSchemaActions()
 {
-    QCOMPARE(CoreDbSchemaUpdater::schemaVersion(), 18);
+    QCOMPARE(CoreDbSchemaUpdater::schemaVersion(), 101);
 
     QFile file(QString::fromUtf8(PRIVACY_DB_CONFIG_PATH));
     QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(file.errorString()));
@@ -558,7 +561,7 @@ void PrivacyFoundationTest::testSchemaActions()
     {
         const QDomElement database = databases.at(i).toElement();
         const QString createText   = actionText(database, QLatin1String("CreateDB"));
-        const QString updateText   = actionText(database, QLatin1String("UpdateSchemaFromV17ToV18"));
+        const QString updateText   = actionText(database, QLatin1String("UpdateSchemaFromV17ToP1"));
 
         QVERIFY2(!createText.isEmpty(), qPrintable(database.attribute(QLatin1String("name"))));
         QVERIFY2(!updateText.isEmpty(), qPrintable(database.attribute(QLatin1String("name"))));
@@ -612,6 +615,111 @@ void PrivacyFoundationTest::testSchemaActions()
             QVERIFY(updateText.contains(QLatin1String("CREATE TABLE IF NOT EXISTS PrivacyCategories")));
         }
     }
+}
+
+void PrivacyFoundationTest::testFreshDatabaseCarriesP1Identity()
+{
+    if (!QSqlDatabase::isDriverAvailable(DbEngineParameters::SQLiteDatabaseType()))
+    {
+        QSKIP("Qt SQLite driver is unavailable");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    DbEngineParameters parameters;
+    parameters.databaseType = DbEngineParameters::SQLiteDatabaseType();
+    parameters.setCoreDatabasePath(directory.filePath(QLatin1String("fresh-p1.db")));
+    parameters.legacyAndDefaultChecks();
+    CoreDbAccess::setParameters(parameters);
+    CoreDbAccess access;
+    QVERIFY2(CoreDbAccess::checkReadyForUse(), qPrintable(access.lastError()));
+    QCOMPARE(access.db()->getSetting(QLatin1String("DBVersion")), QLatin1String("101"));
+    QCOMPARE(access.db()->getSetting(QLatin1String("DBVersionRequired")), QLatin1String("101"));
+    QCOMPARE(access.db()->getSetting(QLatin1String("DBSchemaFlavor")),
+             QLatin1String("digikam-private"));
+    QCOMPARE(access.db()->getSetting(QLatin1String("DBSchemaFlavorVersion")),
+             QLatin1String("1"));
+    QCOMPARE(access.db()->getSetting(QLatin1String("DBSchemaBaseVersion")),
+             QLatin1String("17"));
+}
+
+void PrivacyFoundationTest::testUnmarkedP1DatabaseIsRejected()
+{
+    if (!QSqlDatabase::isDriverAvailable(DbEngineParameters::SQLiteDatabaseType()))
+    {
+        QSKIP("Qt SQLite driver is unavailable");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString databasePath = directory.filePath(QLatin1String("unmarked-p1.db"));
+    const QString connectionName = QLatin1String("privacy-unmarked-p1-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"), connectionName);
+        database.setDatabaseName(databasePath);
+        QVERIFY2(database.open(), qPrintable(database.lastError().text()));
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QLatin1String("CREATE TABLE Albums (id INTEGER PRIMARY KEY);")));
+        QVERIFY(query.exec(QLatin1String("CREATE TABLE Settings "
+                                         "(keyword TEXT NOT NULL UNIQUE, value TEXT);")));
+        QVERIFY(query.exec(QLatin1String("INSERT INTO Settings VALUES "
+                                         "('DBVersion', '101'), "
+                                         "('DBVersionRequired', '101');")));
+        database.close();
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
+
+    DbEngineParameters parameters;
+    parameters.databaseType = DbEngineParameters::SQLiteDatabaseType();
+    parameters.setCoreDatabasePath(databasePath);
+    parameters.legacyAndDefaultChecks();
+    CoreDbAccess::setParameters(parameters);
+    CoreDbAccess access;
+    QVERIFY(!CoreDbAccess::checkReadyForUse());
+    QVERIFY(access.lastError().contains(QLatin1String("schema identity")));
+}
+
+void PrivacyFoundationTest::testUnknownPostStockDatabaseIsRejected()
+{
+    if (!QSqlDatabase::isDriverAvailable(DbEngineParameters::SQLiteDatabaseType()))
+    {
+        QSKIP("Qt SQLite driver is unavailable");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString databasePath = directory.filePath(QLatin1String("unknown-v18.db"));
+    const QString connectionName = QLatin1String("privacy-unknown-v18-") +
+                                   QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"), connectionName);
+        database.setDatabaseName(databasePath);
+        QVERIFY2(database.open(), qPrintable(database.lastError().text()));
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QLatin1String("CREATE TABLE Albums (id INTEGER PRIMARY KEY);")));
+        QVERIFY(query.exec(QLatin1String("CREATE TABLE Settings "
+                                         "(keyword TEXT NOT NULL UNIQUE, value TEXT);")));
+        QVERIFY(query.exec(QLatin1String("INSERT INTO Settings VALUES "
+                                         "('DBVersion', '18'), "
+                                         "('DBVersionRequired', '18');")));
+        database.close();
+    }
+
+    QSqlDatabase::removeDatabase(connectionName);
+
+    DbEngineParameters parameters;
+    parameters.databaseType = DbEngineParameters::SQLiteDatabaseType();
+    parameters.setCoreDatabasePath(databasePath);
+    parameters.legacyAndDefaultChecks();
+    CoreDbAccess::setParameters(parameters);
+    CoreDbAccess access;
+    QVERIFY(!CoreDbAccess::checkReadyForUse());
+    QVERIFY(access.lastError().contains(QLatin1String("unknown or unsupported")));
 }
 
 void PrivacyFoundationTest::testManualTagQueryVisibility()

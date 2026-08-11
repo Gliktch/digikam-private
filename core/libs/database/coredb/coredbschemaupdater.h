@@ -59,6 +59,7 @@ private:
 
     bool startUpdates();
     bool makeUpdates();
+    bool performUpdateStep(int targetVersion);
     bool beginWrapSchemaUpdateStep();
     bool endWrapSchemaUpdateStep(bool stepOperationSuccess, const QString& errorMsg);
     void defaultFilterSettings(QStringList& defaultItemFilter,
@@ -78,6 +79,9 @@ private:
     void setLegacySettingEntries();
     void readVersionSettings();
     void setVersionSettings();
+    bool hasPrivateSchemaIdentity() const;
+    bool writePrivateSchemaIdentity();
+    bool abortWithError(const QString& errorMessage);
 
 private:
 

@@ -45,9 +45,17 @@
 namespace Digikam
 {
 
+namespace
+{
+
+constexpr int StockCoreDbSchemaVersion = 17;
+constexpr int PrivateCoreDbSchemaVersion = 101;
+
+} // namespace
+
 int CoreDbSchemaUpdater::schemaVersion()
 {
-    return 18;
+    return PrivateCoreDbSchemaVersion;
 }
 
 int CoreDbSchemaUpdater::filterSettingsVersion()
@@ -164,6 +172,41 @@ void CoreDbSchemaUpdater::setVersionSettings()
     }
 }
 
+bool CoreDbSchemaUpdater::hasPrivateSchemaIdentity() const
+{
+    return (d->albumDB->getSetting(QLatin1String("DBSchemaFlavor")) ==
+            QLatin1String("digikam-private")) &&
+           (d->albumDB->getSetting(QLatin1String("DBSchemaFlavorVersion")) ==
+            QLatin1String("1")) &&
+           (d->albumDB->getSetting(QLatin1String("DBSchemaBaseVersion")) ==
+            QString::number(StockCoreDbSchemaVersion));
+}
+
+bool CoreDbSchemaUpdater::writePrivateSchemaIdentity()
+{
+    d->albumDB->setSetting(QLatin1String("DBSchemaFlavor"),
+                           QLatin1String("digikam-private"));
+    d->albumDB->setSetting(QLatin1String("DBSchemaFlavorVersion"),
+                           QLatin1String("1"));
+    d->albumDB->setSetting(QLatin1String("DBSchemaBaseVersion"),
+                           QString::number(StockCoreDbSchemaVersion));
+
+    return hasPrivateSchemaIdentity();
+}
+
+bool CoreDbSchemaUpdater::abortWithError(const QString& errorMessage)
+{
+    d->lastErrorMessage = errorMessage;
+
+    if (d->observer)
+    {
+        d->observer->error(errorMessage);
+        d->observer->finishedSchemaUpdate(InitializationObserver::UpdateErrorMustAbort);
+    }
+
+    return false;
+}
+
 static QVariant safeToVariant(const QString& s)
 {
     if (s.isEmpty())
@@ -245,6 +288,27 @@ bool CoreDbSchemaUpdater::startUpdates()
             }
 
             return false;
+        }
+
+        if (d->currentVersion.toInt() == PrivateCoreDbSchemaVersion)
+        {
+            if (!hasPrivateSchemaIdentity())
+            {
+                return abortWithError(i18n("The database claims to use digiKam Private schema P1, "
+                                           "but its schema identity is missing or invalid. "
+                                           "The database will not be opened because its format "
+                                           "cannot be safely determined."));
+            }
+
+            return makeUpdates();
+        }
+
+        if (d->currentVersion.toInt() > StockCoreDbSchemaVersion)
+        {
+            return abortWithError(i18n("This database uses an unknown or unsupported schema version. "
+                                       "digiKam Private only upgrades stock digiKam databases through "
+                                       "version 17, or opens databases carrying a valid digiKam Private "
+                                       "schema identity."));
         }
 
         // Current version describes the current state of the schema in the db,
@@ -432,47 +496,60 @@ bool CoreDbSchemaUpdater::makeUpdates()
             setLegacySettingEntries();
         }
 
-        // Incremental updates, starting from version 5.
+        // Apply historical stock updates only as far as the pinned stock base.
 
-        for (int v = d->currentVersion.toInt() ; v < schemaVersion() ; ++v)
+        while (d->currentVersion.toInt() < StockCoreDbSchemaVersion)
         {
-            int targetVersion = v + 1;
-
-            if (!beginWrapSchemaUpdateStep())
+            if (!performUpdateStep(d->currentVersion.toInt() + 1))
             {
                 return false;
             }
-
-            QString errorMsg;
-
-            if (d->parameters.internalServer)
-            {
-                errorMsg = i18n("Failed to update the database schema from version %1 to version %2.\n"
-                                "The cause could be a missing upgrade of the database to the current "
-                                "server version. Now start digiKam again to perform a required "
-                                "upgrade of the database.",
-                                d->currentVersion.toInt(),
-                                targetVersion);
-            }
-            else
-            {
-                errorMsg = i18n("Failed to update the database schema from version %1 to version %2.\n"
-                                "Please read the error messages printed on the console and "
-                                "report this error as a bug at bugs.kde.org.",
-                                d->currentVersion.toInt(),
-                                targetVersion);
-            }
-
-            if (!endWrapSchemaUpdateStep(updateToVersion(targetVersion), errorMsg))
-            {
-                return false;
-            }
-
-            qCDebug(DIGIKAM_COREDB_LOG) << "Core database: success updating to version " << d->currentVersion.toInt();
         }
 
-        // NOTE: add future updates here.
+        if ((d->currentVersion.toInt() == StockCoreDbSchemaVersion) &&
+            !performUpdateStep(PrivateCoreDbSchemaVersion))
+        {
+            return false;
+        }
     }
+
+    return true;
+}
+
+bool CoreDbSchemaUpdater::performUpdateStep(int targetVersion)
+{
+    if (!beginWrapSchemaUpdateStep())
+    {
+        return false;
+    }
+
+    QString errorMsg;
+
+    if (d->parameters.internalServer)
+    {
+        errorMsg = i18n("Failed to update the database schema from version %1 to version %2.\n"
+                        "The cause could be a missing upgrade of the database to the current "
+                        "server version. Now start digiKam again to perform a required "
+                        "upgrade of the database.",
+                        d->currentVersion.toInt(),
+                        targetVersion);
+    }
+    else
+    {
+        errorMsg = i18n("Failed to update the database schema from version %1 to version %2.\n"
+                        "Please read the error messages printed on the console and "
+                        "report this error as a bug at bugs.kde.org.",
+                        d->currentVersion.toInt(),
+                        targetVersion);
+    }
+
+    if (!endWrapSchemaUpdateStep(updateToVersion(targetVersion), errorMsg))
+    {
+        return false;
+    }
+
+    qCDebug(DIGIKAM_COREDB_LOG) << "Core database: success updating to version "
+                                << d->currentVersion.toInt();
 
     return true;
 }
@@ -606,6 +683,11 @@ bool CoreDbSchemaUpdater::createDatabase()
 
         d->albumDB->setUniqueHashVersion(uniqueHashVersion());
         d->currentRequiredVersion = schemaVersion();
+
+        if (!writePrivateSchemaIdentity())
+        {
+            return false;
+        }
 /*
         // digiKam for database version 5 can work with version 6, though not using the new features.
 
@@ -731,7 +813,11 @@ bool CoreDbSchemaUpdater::performUpdateToVersion(const QString& actionName, int 
 
 bool CoreDbSchemaUpdater::updateToVersion(int targetVersion)
 {
-    if (d->currentVersion != targetVersion-1)
+    const bool isPrivateSchemaJump =
+        (d->currentVersion.toInt() == StockCoreDbSchemaVersion) &&
+        (targetVersion == PrivateCoreDbSchemaVersion);
+
+    if (!isPrivateSchemaJump && (d->currentVersion != targetVersion - 1))
     {
         qCDebug(DIGIKAM_COREDB_LOG) << "Core database: updateToVersion performs only incremental updates. "
                                        "Called to update from"
@@ -843,12 +929,19 @@ bool CoreDbSchemaUpdater::updateToVersion(int targetVersion)
             return performUpdateToVersion(QLatin1String("UpdateSchemaFromV16ToV17"), 17, 5);
         }
 
-        case 18:
+        case PrivateCoreDbSchemaVersion:
         {
             // Older digiKam versions are not privacy-aware. They must not open
             // this schema and replace logical-original facts with proxy facts.
 
-            return performUpdateToVersion(QLatin1String("UpdateSchemaFromV17ToV18"), 18, 18);
+            if (!performUpdateToVersion(QLatin1String("UpdateSchemaFromV17ToP1"),
+                                        PrivateCoreDbSchemaVersion,
+                                        PrivateCoreDbSchemaVersion))
+            {
+                return false;
+            }
+
+            return writePrivateSchemaIdentity();
         }
 
         default:
