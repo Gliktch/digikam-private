@@ -179,7 +179,9 @@ QString sessionFailureText(const PrivacyCategorySessionResult& result)
             return i18nc("@info", "The category conflicts with existing durable state.");
 
         case PrivacyCategorySessionStatus::StrongRecoveryRequired:
-            return i18nc("@info", "Strong privacy is unavailable until recovery-key export is implemented.");
+            return i18nc("@info",
+                         "The category store could not be recovered safely. "
+                         "Restore the complete store and configuration and try again.");
 
         default:
             break;
@@ -270,7 +272,8 @@ public:
             i18nc("@info",
                   "Privacy categories are independently password-gated. digiKam "
                   "always starts with every category locked. Casual Privacy is "
-                  "intentionally recoverable and is not secure encryption."), q);
+                  "intentionally recoverable and is not secure encryption; Strong "
+                  "Privacy uses a gocryptfs vault per category."), q);
         introduction->setWordWrap(true);
         layout->addWidget(introduction);
 
@@ -730,11 +733,13 @@ public:
         auto* const layout = new QVBoxLayout(&dialog);
         auto* const explanation = new QLabel(
             i18nc("@info",
-                  "Casual Privacy prevents ordinary viewing but deliberately uses "
-                  "a recoverable legacy ZIP format for protected originals. Choose "
-                  "an existing persistent folder for this category's encrypted "
-                  "credential and derivative store. Removable or network storage "
-                  "may leave the category unavailable while disconnected."), &dialog);
+                  "Privacy categories prevent ordinary viewing. Casual Privacy "
+                  "deliberately uses a recoverable legacy ZIP format for protected "
+                  "originals; Strong Privacy uses a gocryptfs vault per category. "
+                  "Choose an existing persistent folder for this category's "
+                  "encrypted credential and derivative store. Removable or network "
+                  "storage may leave the category unavailable while disconnected."),
+                 &dialog);
         explanation->setWordWrap(true);
         layout->addWidget(explanation);
 
@@ -750,6 +755,13 @@ public:
         rootLayout->setContentsMargins(0, 0, 0, 0);
         rootLayout->addWidget(rootEdit, 1);
         rootLayout->addWidget(browseButton);
+        auto* const backend = new QComboBox(&dialog);
+        backend->addItem(
+            i18nc("@item:inlistbox", "Casual Privacy (Recoverable)"),
+            static_cast<int>(PrivacyBackend::Casual));
+        backend->addItem(
+            i18nc("@item:inlistbox", "Strong Privacy (Encrypted Vault)"),
+            static_cast<int>(PrivacyBackend::Strong));
         auto* const presentation = new QComboBox(&dialog);
         presentation->addItem(presentationText(PrivacyPresentationMode::Generic),
                               static_cast<int>(PrivacyPresentationMode::Generic));
@@ -760,6 +772,7 @@ public:
         passwordEdit->setEchoMode(QLineEdit::Password);
         confirmationEdit->setEchoMode(QLineEdit::Password);
         form->addRow(i18nc("@label", "Name:"), nameEdit);
+        form->addRow(i18nc("@label", "Privacy type:"), backend);
         form->addRow(i18nc("@label", "Store folder:"), rootRow);
         form->addRow(i18nc("@label", "Locked presentation:"), presentation);
         form->addRow(i18nc("@label", "Password:"), passwordEdit);
@@ -883,7 +896,8 @@ public:
         request.storeUuid = uuidText();
         request.transactionUuid = uuidText();
         request.name = categoryName;
-        request.backend = PrivacyBackend::Casual;
+        request.backend = static_cast<PrivacyBackend>(
+            backend->currentData().toInt());
         request.presentationMode = presentationMode;
         request.unlockedThumbnailMode = PrivacyUnlockedThumbnailMode::FocusedClear;
         request.tagVisibilityMode = PrivacyTagVisibilityMode::UnlockedOnly;

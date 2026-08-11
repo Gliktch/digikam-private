@@ -631,12 +631,13 @@ class PrivacyCategorySessionTest : public QObject
 
 private Q_SLOTS:
 
-    void testStrongRejectedBeforeMutation();
+    void testStrongCreationPublishesOriginalsBinding();
     void testCreationJournalPrecedesMutationAndPublishesRuntimeState();
     void testCreationReverifiesPreexistingOfflineRuntimeRoot();
     void testRuntimeCreationPublicationRejectsExtraRolesAndDuplicateRoots();
     void testMismatchedCreationJournalReplayFailsClosed();
     void testCompletedDatabaseCreationReconcilesIdempotently();
+    void testStrongCompletedCreationReconcilesIdempotently();
     void testMissingJournalAfterDatabaseBeginResumesExactly();
     void testFilesystemCompleteBeforeDatabaseJournalCasResumesExactly();
     void testFilesystemCompleteRejectsMismatchedDatabasePredecessorHash();
@@ -658,25 +659,41 @@ private Q_SLOTS:
     void testDestructorForcesFailedLockTeardown();
 };
 
-void PrivacyCategorySessionTest::testStrongRejectedBeforeMutation()
+void PrivacyCategorySessionTest::testStrongCreationPublishesOriginalsBinding()
 {
     FakeRepository repository;
     FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
     QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
     PrivacyRuntimeCoordinator runtime;
     initializeRuntime(&runtime, {}, verifier);
     PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
-                                                  runtime);
+                                                  runtime, nullptr,
+                                                  &creationJournal);
     PrivacyCategoryCreateRequest request = makeCreateRequest();
     request.backend = PrivacyBackend::Strong;
 
     const PrivacyCategorySessionResult result =
         coordinator.createCategory(request, QLatin1String("secret"));
-    QCOMPARE(result.status, PrivacyCategorySessionStatus::StrongRecoveryRequired);
-    QCOMPARE(repository.beginCalls.load(), 0);
-    QCOMPARE(repository.publishCalls.load(), 0);
-    QCOMPARE(backend.createCalls.load(), 0);
-    QCOMPARE(verifier->calls.load(), 0);
+    QCOMPARE(result.status, PrivacyCategorySessionStatus::Created);
+    QCOMPARE(repository.beginCalls.load(), 1);
+    QCOMPARE(repository.publishCalls.load(), 1);
+    QCOMPARE(backend.createCalls.load(), 1);
+
+    QSet<PrivacyStoreRole> roles;
+
+    for (const PrivacyStoreBinding& binding : repository.snapshot.storeBindings)
+    {
+        QCOMPARE(binding.categoryUuid, CategoryUuid);
+        QCOMPARE(binding.storeUuid, StoreUuid);
+        roles.insert(binding.role);
+    }
+
+    QCOMPARE(roles.size(), 3);
+    QVERIFY(roles.contains(PrivacyStoreRole::CredentialAuthority));
+    QVERIFY(roles.contains(PrivacyStoreRole::Derivatives));
+    QVERIFY(roles.contains(PrivacyStoreRole::Originals));
+    QVERIFY(runtime.categoryEpoch(CategoryUuid) > 0);
 }
 
 void PrivacyCategorySessionTest::testCreationJournalPrecedesMutationAndPublishesRuntimeState()
@@ -813,6 +830,34 @@ void PrivacyCategorySessionTest::testCompletedDatabaseCreationReconcilesIdempote
     QCOMPARE(backend.createCalls.load(), 1);
     QCOMPARE(repository.snapshot.transactionJournals.first().stage,
              static_cast<int>(PrivacyJournalStage::Complete));
+    QVERIFY(runtime.categoryEpoch(CategoryUuid) > 0);
+}
+
+void PrivacyCategorySessionTest::testStrongCompletedCreationReconcilesIdempotently()
+{
+    FakeRepository repository;
+    FakeStoreBackend backend;
+    FakeCreationJournalPersistence creationJournal;
+    creationJournal.failUpdate = true;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, {}, verifier);
+    PrivacyCategorySessionCoordinator coordinator(repository, backend, *verifier,
+                                                  runtime, nullptr,
+                                                  &creationJournal);
+    PrivacyCategoryCreateRequest request = makeCreateRequest();
+    request.backend = PrivacyBackend::Strong;
+
+    QCOMPARE(coordinator.createCategory(request, QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired);
+    QCOMPARE(backend.createCalls.load(), 1);
+    creationJournal.failUpdate = false;
+    QCOMPARE(coordinator.createCategory(request, QLatin1String("secret")).status,
+             PrivacyCategorySessionStatus::Created);
+    QCOMPARE(backend.createCalls.load(), 1);
+    QCOMPARE(repository.snapshot.transactionJournals.first().stage,
+             static_cast<int>(PrivacyJournalStage::Complete));
+    QCOMPARE(repository.snapshot.storeBindings.size(), 3);
     QVERIFY(runtime.categoryEpoch(CategoryUuid) > 0);
 }
 

@@ -340,7 +340,11 @@ bool loadCompletedCreation(const PrivacyRepositorySnapshot& snapshot,
             (journal->expectedHashAlgorithm == QLatin1String("sha256")) &&
             (QByteArray::fromHex(journal->expectedJournalHash.toLatin1()).size() == 32) &&
             roles.contains(PrivacyStoreRole::CredentialAuthority) &&
-            roles.contains(PrivacyStoreRole::Derivatives) && (roles.size() == 2));
+            roles.contains(PrivacyStoreRole::Derivatives) &&
+            ((category->backend == PrivacyBackend::Casual)
+                 ? (roles.size() == 2)
+                 : (roles.contains(PrivacyStoreRole::Originals) &&
+                    (roles.size() == 3))));
 }
 
 bool findExactCreationJournal(const PrivacyRepositorySnapshot& snapshot,
@@ -923,15 +927,6 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
 {
     PrivacyCategorySessionResult result;
 
-    // Strong categories require the recovery-key export and acknowledgement
-    // workflow before any durable category/store mutation. That workflow is
-    // deliberately outside this casual-category slice.
-    if (request.backend == PrivacyBackend::Strong)
-    {
-        result.status = PrivacyCategorySessionStatus::StrongRecoveryRequired;
-        return result;
-    }
-
     PrivacyPassword password = PrivacyPassword::fromUnicode(passwordText,
                                                              &result.passwordError);
 
@@ -1292,10 +1287,18 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::createCategory(
     transaction.toCredentialGeneration = 1;
     transaction.updatedAt = QDateTime::currentDateTimeUtc();
 
+    QList<PrivacyStoreRole> roles;
+    roles << PrivacyStoreRole::CredentialAuthority
+          << PrivacyStoreRole::Derivatives;
+
+    if (request.backend == PrivacyBackend::Strong)
+    {
+        roles << PrivacyStoreRole::Originals;
+    }
+
     QList<PrivacyStoreBinding> bindings;
 
-    for (const PrivacyStoreRole role : { PrivacyStoreRole::CredentialAuthority,
-                                         PrivacyStoreRole::Derivatives })
+    for (const PrivacyStoreRole role : roles)
     {
         PrivacyStoreBinding binding;
         binding.categoryUuid = categoryUuid;

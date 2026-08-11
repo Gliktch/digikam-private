@@ -2426,7 +2426,6 @@ bool PrivacyRuntimeCoordinator::publishCategoryCreation(
 {
     if (!category.isValid() || !credential.isValid() || !root.isValid() ||
         !store.isValid() || bindings.isEmpty() ||
-        (category.backend != PrivacyBackend::Casual) ||
         (category.lifecycleState != PrivacyCategoryLifecycleState::Active) ||
         (category.currentCredentialGeneration != credential.generation) ||
         (credential.categoryUuid != category.uuid) ||
@@ -2451,9 +2450,15 @@ bool PrivacyRuntimeCoordinator::publishCategoryCreation(
         roles.insert(binding.role);
     }
 
-    if ((roles.size() != 2) ||
-        !roles.contains(PrivacyStoreRole::CredentialAuthority) ||
-        !roles.contains(PrivacyStoreRole::Derivatives))
+    const bool rolesComplete =
+        roles.contains(PrivacyStoreRole::CredentialAuthority) &&
+        roles.contains(PrivacyStoreRole::Derivatives) &&
+        ((category.backend == PrivacyBackend::Casual)
+             ? (roles.size() == 2)
+             : (roles.contains(PrivacyStoreRole::Originals) &&
+                (roles.size() == 3)));
+
+    if (!rolesComplete)
     {
         return false;
     }
