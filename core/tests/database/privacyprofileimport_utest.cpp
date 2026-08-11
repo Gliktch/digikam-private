@@ -24,6 +24,7 @@
 
 #include "privacyprofileinspector.h"
 #include "privacyprofileimportstager.h"
+#include "privacyprofilepreflight.h"
 #include "privacyprofilepublication.h"
 #include "privacysqlitesnapshot.h"
 #include "coredbaccess.h"
@@ -50,6 +51,13 @@ private Q_SLOTS:
     void testIncompletePreparationIsIgnored();
     void testConflictingDisplacedFileBlocksReplay();
     void testCompletedPublicationCanBeRestored();
+    void testProtectedStorePreflightPasses();
+    void testProtectedStorePreflightFailsOnMissingContainer();
+    void testProtectedStorePreflightFailsOnContainerSizeMismatch();
+    void testProtectedStorePreflightFailsOnMissingStore();
+    void testProtectedStorePreflightFailsOnMissingRootMarker();
+    void testProtectedStorePreflightFailsOnProxySizeMismatch();
+    void testP1WithProtectedItemsStagesOnlyAfterPreflight();
 };
 
 namespace
@@ -98,15 +106,26 @@ bool createSyntheticDatabase(const QString& path,
                   query.exec(QLatin1String(
                       "CREATE TABLE PrivacyItems (imageId INTEGER PRIMARY KEY);")) &&
                   query.exec(QLatin1String(
-                      "CREATE TABLE PrivacyCategories (uuid TEXT PRIMARY KEY);"));
+                      "CREATE TABLE PrivacyCategories (uuid TEXT PRIMARY KEY);")) &&
+                  query.exec(QLatin1String(
+                      "CREATE TABLE PrivacyStorageRoots "
+                      "(uuid TEXT PRIMARY KEY, configuredPath TEXT, markerUuid TEXT);")) &&
+                  query.exec(QLatin1String(
+                      "CREATE TABLE PrivacyStores "
+                      "(uuid TEXT PRIMARY KEY, rootUuid TEXT, cipherRelativePath TEXT, "
+                      "configRelativePath TEXT);")) &&
+                  query.exec(QLatin1String(
+                      "CREATE TABLE PrivacyContainers "
+                      "(uuid TEXT PRIMARY KEY, rootUuid TEXT, storeUuid TEXT, "
+                      "objectRelativePath TEXT, protectedSize INTEGER);")) &&
+                  query.exec(QLatin1String(
+                      "CREATE TABLE PrivacyAssets "
+                      "(itemUuid TEXT, publicRootUuid TEXT, publicRelativePath TEXT, "
+                      "proxySize INTEGER);"));
 
         const QStringList remainingTables = {
             QLatin1String("PrivacyCredentials"),
-            QLatin1String("PrivacyStorageRoots"),
-            QLatin1String("PrivacyStores"),
             QLatin1String("PrivacyStoreBindings"),
-            QLatin1String("PrivacyContainers"),
-            QLatin1String("PrivacyAssets"),
             QLatin1String("PrivacyDerivatives"),
             QLatin1String("PrivacyTransactions"),
             QLatin1String("PrivacyTransactionJournals")
@@ -256,6 +275,151 @@ bool writeTextFile(const QString& path, const QByteArray& contents)
 
     return file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
            (file.write(contents) == contents.size());
+}
+
+struct ProtectedFixture
+{
+    QString databasePath;
+    QString publicRoot;
+    QString managedRoot;
+    QString containerPublic;
+    QString containerStore;
+    QString proxyPath;
+    QString storeConfigPath;
+    QString markerPublic;
+    QString markerManaged;
+};
+
+bool buildProtectedFixture(const QString& directory, ProtectedFixture* const fixture)
+{
+    ProtectedFixture f;
+    f.publicRoot = QDir(directory).filePath(QLatin1String("public"));
+    f.managedRoot = QDir(directory).filePath(QLatin1String("managed"));
+    f.databasePath = QDir(directory).filePath(QLatin1String("protected-p1.db"));
+    f.containerPublic = QDir(f.publicRoot).filePath(
+        QLatin1String("photo.jpg.digikam-private.zip"));
+    f.containerStore = QDir(f.managedRoot).filePath(
+        QLatin1String(".digikam-private/stores/store-1/objects/cipher.bin"));
+    f.proxyPath = QDir(f.publicRoot).filePath(QLatin1String("photo.jpg"));
+    f.storeConfigPath = QDir(f.managedRoot).filePath(
+        QLatin1String(".digikam-private/stores/store-1/gocryptfs.conf"));
+    f.markerPublic = QDir(f.publicRoot).filePath(
+        QLatin1String(".digikam-private/root-marker-v1.json"));
+    f.markerManaged = QDir(f.managedRoot).filePath(
+        QLatin1String(".digikam-private/root-marker-v1.json"));
+
+    QString connectionName;
+
+    if (!createSyntheticDatabase(f.databasePath, 101, true, false, &connectionName))
+    {
+        return false;
+    }
+
+    const QString insertConnection = QLatin1String("privacy-preflight-insert-") +
+                                     QUuid::createUuid().toString(QUuid::WithoutBraces);
+    bool success = false;
+
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QLatin1String("QSQLITE"),
+                                                          insertConnection);
+        database.setDatabaseName(f.databasePath);
+
+        if (!database.open())
+        {
+            return false;
+        }
+
+        QSqlQuery query(database);
+        query.prepare(QLatin1String(
+            "INSERT INTO PrivacyStorageRoots VALUES (?, ?, ?);"));
+        query.addBindValue(QLatin1String("root-public"));
+        query.addBindValue(f.publicRoot);
+        query.addBindValue(QLatin1String("marker-public"));
+        success = query.exec();
+
+        if (success)
+        {
+            query.prepare(QLatin1String(
+                "INSERT INTO PrivacyStorageRoots VALUES (?, ?, ?);"));
+            query.addBindValue(QLatin1String("root-managed"));
+            query.addBindValue(f.managedRoot);
+            query.addBindValue(QLatin1String("marker-managed"));
+            success = query.exec();
+        }
+
+        if (success)
+        {
+            query.prepare(QLatin1String(
+                "INSERT INTO PrivacyStores VALUES (?, ?, ?, ?);"));
+            query.addBindValue(QLatin1String("store-1"));
+            query.addBindValue(QLatin1String("root-managed"));
+            query.addBindValue(QLatin1String(".digikam-private/stores/store-1"));
+            query.addBindValue(QLatin1String("gocryptfs.conf"));
+            success = query.exec();
+        }
+
+        if (success)
+        {
+            query.prepare(QLatin1String(
+                "INSERT INTO PrivacyContainers VALUES (?, ?, ?, ?, ?);"));
+            query.addBindValue(QLatin1String("container-public"));
+            query.addBindValue(QLatin1String("root-public"));
+            query.addBindValue(QVariant());
+            query.addBindValue(QLatin1String("photo.jpg.digikam-private.zip"));
+            query.addBindValue(23);
+            success = query.exec();
+        }
+
+        if (success)
+        {
+            query.prepare(QLatin1String(
+                "INSERT INTO PrivacyContainers VALUES (?, ?, ?, ?, ?);"));
+            query.addBindValue(QLatin1String("container-store"));
+            query.addBindValue(QVariant());
+            query.addBindValue(QLatin1String("store-1"));
+            query.addBindValue(QLatin1String("objects/cipher.bin"));
+            query.addBindValue(31);
+            success = query.exec();
+        }
+
+        if (success)
+        {
+            query.prepare(QLatin1String(
+                "INSERT INTO PrivacyAssets VALUES (?, ?, ?, ?);"));
+            query.addBindValue(QLatin1String("synthetic-item"));
+            query.addBindValue(QLatin1String("root-public"));
+            query.addBindValue(QLatin1String("photo.jpg"));
+            query.addBindValue(19);
+            success = query.exec();
+        }
+
+        database.close();
+    }
+
+    QSqlDatabase::removeDatabase(insertConnection);
+
+    if (!success)
+    {
+        return false;
+    }
+
+    const QByteArray markerPublic(
+        "{\"kind\":\"digikam-private-root-marker-v1\",\"markerUuid\":\"marker-public\"}");
+    const QByteArray markerManaged(
+        "{\"kind\":\"digikam-private-root-marker-v1\",\"markerUuid\":\"marker-managed\"}");
+    success = writeTextFile(f.markerPublic, markerPublic) &&
+              writeTextFile(f.markerManaged, markerManaged) &&
+              writeTextFile(f.storeConfigPath, QByteArray("config")) &&
+              writeTextFile(f.containerPublic, QByteArray(23, 'a')) &&
+              writeTextFile(f.containerStore, QByteArray(31, 'b')) &&
+              writeTextFile(f.proxyPath, QByteArray(19, 'c'));
+
+    if (success)
+    {
+        *fixture = f;
+    }
+
+    return success;
 }
 
 PrivacyProfilePaths fixtureProfilePaths(const QString& root)
@@ -603,6 +767,119 @@ void PrivacyProfileImportTest::testCompletedPublicationCanBeRestored()
     QVERIFY2(restore.success, qPrintable(restore.error));
     QVERIFY(PrivacyProfilePublication::applyPending(paths.transactionHome).success);
     QCOMPARE(databaseMarker(paths.coreDatabasePath), QLatin1String("original"));
+}
+
+void PrivacyProfileImportTest::testProtectedStorePreflightPasses()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ProtectedFixture fixture;
+    QVERIFY(buildProtectedFixture(directory.path(), &fixture));
+
+    const PrivacyProfilePreflightResult result =
+        PrivacyProfilePreflight::verify(fixture.databasePath);
+    QVERIFY2(result.success, qPrintable(result.error));
+    QCOMPARE(result.verifiedRootCount, 2);
+    QCOMPARE(result.verifiedStoreCount, 1);
+    QCOMPARE(result.failedRootCount, 0);
+    QCOMPARE(result.failedStoreCount, 0);
+    QCOMPARE(result.failedContainerCount, 0);
+    QVERIFY(result.verifiedContainerCount >= 3);
+}
+
+void PrivacyProfileImportTest::testProtectedStorePreflightFailsOnMissingContainer()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ProtectedFixture fixture;
+    QVERIFY(buildProtectedFixture(directory.path(), &fixture));
+    QVERIFY(QFile::remove(fixture.containerPublic));
+
+    const PrivacyProfilePreflightResult result =
+        PrivacyProfilePreflight::verify(fixture.databasePath);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(QLatin1String("missing protected object")));
+    QCOMPARE(result.failedContainerCount, 1);
+}
+
+void PrivacyProfileImportTest::testProtectedStorePreflightFailsOnContainerSizeMismatch()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ProtectedFixture fixture;
+    QVERIFY(buildProtectedFixture(directory.path(), &fixture));
+    QVERIFY(writeTextFile(fixture.containerPublic, QByteArray(24, 'a')));
+
+    const PrivacyProfilePreflightResult result =
+        PrivacyProfilePreflight::verify(fixture.databasePath);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(QLatin1String("protected object size mismatch")));
+}
+
+void PrivacyProfileImportTest::testProtectedStorePreflightFailsOnMissingStore()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ProtectedFixture fixture;
+    QVERIFY(buildProtectedFixture(directory.path(), &fixture));
+    QVERIFY(QFile::remove(fixture.storeConfigPath));
+
+    const PrivacyProfilePreflightResult result =
+        PrivacyProfilePreflight::verify(fixture.databasePath);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(QLatin1String("missing store configuration")));
+    QCOMPARE(result.failedStoreCount, 1);
+}
+
+void PrivacyProfileImportTest::testProtectedStorePreflightFailsOnMissingRootMarker()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ProtectedFixture fixture;
+    QVERIFY(buildProtectedFixture(directory.path(), &fixture));
+    QVERIFY(QFile::remove(fixture.markerManaged));
+
+    const PrivacyProfilePreflightResult result =
+        PrivacyProfilePreflight::verify(fixture.databasePath);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(QLatin1String("missing managed-root marker")));
+    QCOMPARE(result.failedRootCount, 1);
+}
+
+void PrivacyProfileImportTest::testProtectedStorePreflightFailsOnProxySizeMismatch()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ProtectedFixture fixture;
+    QVERIFY(buildProtectedFixture(directory.path(), &fixture));
+    QVERIFY(writeTextFile(fixture.proxyPath, QByteArray(20, 'c')));
+
+    const PrivacyProfilePreflightResult result =
+        PrivacyProfilePreflight::verify(fixture.databasePath);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(QLatin1String("public proxy size mismatch")));
+}
+
+void PrivacyProfileImportTest::testP1WithProtectedItemsStagesOnlyAfterPreflight()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ProtectedFixture fixture;
+    QVERIFY(buildProtectedFixture(directory.path(), &fixture));
+    const PrivacyProfileSummary source =
+        PrivacyProfileInspector::inspectCoreDatabase(fixture.databasePath);
+    QVERIFY(source.isPrivateProfile());
+    QCOMPARE(source.protectedItemCount, 1LL);
+
+    PrivacyProfileImportStageResult staged = PrivacyProfileImportStager::stage(
+        source, directory.filePath(QLatin1String("stage-ok")));
+    QVERIFY2(staged.success, qPrintable(staged.error));
+
+    QVERIFY(QFile::remove(fixture.containerPublic));
+    staged = PrivacyProfileImportStager::stage(
+        source, directory.filePath(QLatin1String("stage-fail")));
+    QVERIFY(!staged.success);
+    QVERIFY(staged.error.contains(QLatin1String("Protected-store validation failed")));
 }
 
 QTEST_GUILESS_MAIN(PrivacyProfileImportTest)

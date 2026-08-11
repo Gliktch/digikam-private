@@ -50,6 +50,7 @@
 
 #include "privacyprofileimportstager.h"
 #include "privacyprofileinspector.h"
+#include "privacyprofilepreflight.h"
 #include "privacyprofilepublication.h"
 
 namespace Digikam
@@ -360,9 +361,15 @@ public:
         }
         else if (source.isPrivateProfile() && (source.protectedItemCount > 0))
         {
-            unavailable = i18nc(
-                "@info",
-                "Protected-store validation is required before this private profile can replace the active one.");
+            const PrivacyProfilePreflightResult preflight =
+                PrivacyProfilePreflight::verify(source.databasePath);
+
+            if (!preflight.success)
+            {
+                unavailable = i18nc("@info",
+                                    "Protected-store validation failed: %1",
+                                    preflight.error);
+            }
         }
         else if (!source.isPrivateProfile() && target.isPrivateProfile() &&
                  (target.activeItemCount > 0))

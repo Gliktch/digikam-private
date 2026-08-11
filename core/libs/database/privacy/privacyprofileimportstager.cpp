@@ -24,6 +24,7 @@
 
 #include "coredbcopymanager.h"
 #include "dbengineparameters.h"
+#include "privacyprofilepreflight.h"
 #include "privacysqlitesnapshot.h"
 
 namespace Digikam
@@ -147,6 +148,19 @@ PrivacyProfileImportStageResult PrivacyProfileImportStager::stage(
     {
         result.error = QLatin1String("The captured source database did not match the inspected profile");
         return result;
+    }
+
+    if (captured.isPrivateProfile() && (captured.protectedItemCount > 0))
+    {
+        const PrivacyProfilePreflightResult preflight =
+            PrivacyProfilePreflight::verify(sourceSnapshotPath);
+
+        if (!preflight.success)
+        {
+            result.error = QLatin1String("Protected-store validation failed: ") +
+                           preflight.error;
+            return result;
+        }
     }
 
     if (isCanceled && isCanceled())
