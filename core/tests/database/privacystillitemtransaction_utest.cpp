@@ -28,6 +28,7 @@
 #include "privacyproxygenerator.h"
 #include "privacypublictransition.h"
 #include "privacystillitemtransaction.h"
+#include "privacystrongrecoverymanifest.h"
 #include "privacyvideoproxygenerator.h"
 
 using namespace Digikam;
@@ -2527,6 +2528,21 @@ void PrivacyStillItemTransactionTest::testStrongProtectUnprotectRoundTrip()
     QVERIFY(publicProxy.readAll() != originalBytes);
     publicProxy.close();
 
+    const QString manifestPath = QDir(vaultDirectory.path()).filePath(
+        PrivacyStrongRecoveryManifestCodec::relativePath());
+    QVERIFY(QFileInfo::exists(manifestPath));
+    PrivacyStrongRecoveryManifest manifest;
+    QVERIFY(PrivacyStrongRecoveryManifestStore::load(
+                vaultDirectory.path(), &manifest, nullptr));
+    QCOMPARE(manifest.categoryUuid, CategoryUuid);
+    QCOMPARE(manifest.storeUuid, StrongStoreUuid);
+    QCOMPARE(manifest.items.size(), 1);
+    QCOMPARE(manifest.items.constFirst().itemUuid, ItemUuid);
+    QCOMPARE(manifest.items.constFirst().members.size(), 1);
+    QCOMPARE(manifest.items.constFirst().members.constFirst().vaultRelativePath,
+             QLatin1String("originals/") + ContainerUuid +
+             QLatin1String("/0-synthetic.jpg"));
+
     PrivacyStillUnprotectRequest unprotect;
     unprotect.imageId = protect.imageId;
     unprotect.categoryUuid = CategoryUuid;
@@ -2549,6 +2565,11 @@ void PrivacyStillItemTransactionTest::testStrongProtectUnprotectRoundTrip()
         QLatin1String("originals/") + ContainerUuid)));
     QVERIFY(persistence.snapshot.containers.isEmpty());
     QVERIFY(persistence.snapshot.items.isEmpty());
+    QVERIFY(QFileInfo::exists(manifestPath));
+    PrivacyStrongRecoveryManifest manifestAfter;
+    QVERIFY(PrivacyStrongRecoveryManifestStore::load(
+                vaultDirectory.path(), &manifestAfter, nullptr));
+    QVERIFY(manifestAfter.items.isEmpty());
 }
 
 void PrivacyStillItemTransactionTest::testStrongCompatibilityUnlockRestoresExactOriginals()

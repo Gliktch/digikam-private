@@ -43,6 +43,7 @@
 
 #include "privacycasualarchive.h"
 #include "privacystrongobjectbackend.h"
+#include "privacystrongrecoverymanifest.h"
 #include "privacyprocessrunner.h"
 #include "privacyproxygenerator.h"
 #include "privacypublictransition.h"
@@ -966,6 +967,62 @@ bool decodePortableMode(const QByteArray& bytes, mode_t* const mode)
 
     *mode = static_cast<mode_t>(value);
     return true;
+}
+
+bool removeStrongRecoveryManifestItem(const QString& vaultPlaintextRoot,
+                                      const QString& itemUuid,
+                                      QString* const detail)
+{
+    PrivacyStrongRecoveryManifest manifest;
+    PrivacyStrongRecoveryManifestError manifestError =
+        PrivacyStrongRecoveryManifestError::Unavailable;
+
+    if (!PrivacyStrongRecoveryManifestStore::load(
+            vaultPlaintextRoot, &manifest, &manifestError))
+    {
+        if (manifestError == PrivacyStrongRecoveryManifestError::Unavailable)
+        {
+            return true;
+        }
+
+        if (detail)
+        {
+            *detail = QStringLiteral(
+                "Strong recovery manifest could not be loaded");
+        }
+
+        return false;
+    }
+
+    bool found = false;
+
+    for (int index = manifest.items.size() - 1 ; index >= 0 ; --index)
+    {
+        if (manifest.items.at(index).itemUuid == itemUuid)
+        {
+            manifest.items.removeAt(index);
+            found = true;
+        }
+    }
+
+    if (!found)
+    {
+        return true;
+    }
+
+    if (PrivacyStrongRecoveryManifestStore::commit(
+            vaultPlaintextRoot, manifest, &manifestError))
+    {
+        return true;
+    }
+
+    if (detail)
+    {
+        *detail = QStringLiteral(
+            "Strong recovery manifest could not be updated");
+    }
+
+    return false;
 }
 
 struct ProtectAssetMetadata
@@ -3175,6 +3232,105 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         publishedItem = *existingItem;
     }
 
+    if (strongBackend)
+    {
+        PrivacyStrongRecoveryManifest recoveryManifest;
+        PrivacyStrongRecoveryManifestError manifestError =
+            PrivacyStrongRecoveryManifestError::Unavailable;
+
+        if (!PrivacyStrongRecoveryManifestStore::load(
+                request.vaultPlaintextRoot, &recoveryManifest,
+                &manifestError) &&
+            (manifestError != PrivacyStrongRecoveryManifestError::Unavailable))
+        {
+            return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                        QStringLiteral(
+                            "Strong recovery manifest could not be loaded"));
+        }
+
+        if (manifestError == PrivacyStrongRecoveryManifestError::Unavailable)
+        {
+            recoveryManifest = PrivacyStrongRecoveryManifest();
+            recoveryManifest.categoryUuid = categoryValue.uuid;
+            recoveryManifest.categoryName = categoryValue.name;
+            recoveryManifest.presentationMode =
+                static_cast<int>(categoryValue.presentationMode);
+            recoveryManifest.unlockedThumbnailMode =
+                static_cast<int>(categoryValue.unlockedThumbnailMode);
+            recoveryManifest.tagVisibilityMode =
+                static_cast<int>(categoryValue.tagVisibilityMode);
+            recoveryManifest.currentCredentialGeneration =
+                categoryValue.currentCredentialGeneration;
+            recoveryManifest.storeUuid = request.strongStoreUuid;
+        }
+
+        PrivacyStrongRecoveryItem recoveryItem;
+        recoveryItem.itemUuid = itemUuid;
+        recoveryItem.containerUuid = containerUuid;
+        recoveryItem.generation = publishedItem.generation;
+
+        for (const PrivacyAsset& asset : assets)
+        {
+            mode_t portableMode = 0;
+
+            if (!decodePortableMode(asset.portableAttributes, &portableMode))
+            {
+                return fail(
+                    PrivacyStillItemTransactionStatus::RecoveryRequired,
+                    QStringLiteral(
+                        "Strong recovery member mode evidence is missing"));
+            }
+
+            PrivacyStrongRecoveryMember member;
+            member.vaultRelativePath = asset.protectedRelativePath;
+            member.publicRelativePath = asset.publicRelativePath;
+            member.originalName = asset.originalName;
+            member.role = asset.role;
+            member.ordinal = asset.ordinal;
+            member.hashAlgorithm = QLatin1String("sha256");
+            member.sha256Hex = asset.originalHash;
+            member.size = asset.originalSize;
+            member.creationTimeUtc = asset.originalCreationDate;
+            member.modificationTimeUtc = asset.originalModificationDate;
+            member.portableAttributes = asset.portableAttributes;
+            member.unixMode = static_cast<quint32>(0100000 | portableMode);
+            recoveryItem.members << member;
+        }
+
+        if (!recoveryItem.isValid())
+        {
+            return fail(PrivacyStillItemTransactionStatus::RecoveryRequired,
+                        QStringLiteral(
+                            "Strong recovery item evidence is invalid"));
+        }
+
+        bool replaced = false;
+
+        for (int index = 0 ; index < recoveryManifest.items.size() ; ++index)
+        {
+            if (recoveryManifest.items.at(index).itemUuid == itemUuid)
+            {
+                recoveryManifest.items[index] = recoveryItem;
+                replaced = true;
+                break;
+            }
+        }
+
+        if (!replaced)
+        {
+            recoveryManifest.items << recoveryItem;
+        }
+
+        if (!PrivacyStrongRecoveryManifestStore::commit(
+                request.vaultPlaintextRoot, recoveryManifest,
+                &manifestError))
+        {
+            return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                        QStringLiteral(
+                            "Strong recovery manifest could not be committed"));
+        }
+    }
+
     PrivacyTransaction completedTransaction = *existingTransaction;
 
     if (existingTransaction->state != PrivacyTransactionState::Complete)
@@ -3410,6 +3566,15 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
         if (strongBackend)
         {
             QString strongDetail;
+            QString manifestDetail;
+
+            if (!removeStrongRecoveryManifestItem(
+                    request.vaultPlaintextRoot, teardownItem.uuid,
+                    &manifestDetail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                            itemUuid, manifestDetail);
+            }
 
             if (!PrivacyStrongObjectBackend::removeObjects(
                     request.vaultPlaintextRoot,
@@ -4332,6 +4497,14 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     if (strongBackend)
     {
         QString strongDetail;
+        QString manifestDetail;
+
+        if (!removeStrongRecoveryManifestItem(
+                request.vaultPlaintextRoot, itemUuid, &manifestDetail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        itemUuid, manifestDetail);
+        }
 
         if (!PrivacyStrongObjectBackend::removeObjects(
                 request.vaultPlaintextRoot,

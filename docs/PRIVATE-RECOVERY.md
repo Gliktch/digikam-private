@@ -87,6 +87,14 @@ against the SHA-256 hashes recorded in the P1 catalogue before replacing any
 collection file, then copy the members to the restored location. Keep the
 ciphertext store read-only and do not edit it directly.
 
+Every Strong store also contains a versioned encrypted portable manifest at
+`digikam-private/recovery-v1.json` inside the mounted store. It records the
+category identity and settings, the store identity, and the complete
+item/asset mapping: vault paths, logical public paths, original names, roles,
+orders, hashes, sizes, timestamps and portable attributes. A copied complete
+store plus its manifest can be discovered, authenticated and reconstructed in
+a fresh digiKam Private profile without the original P1 database.
+
 A wrong password is rejected; there is no password reset or recovery-key
 dialog in normal category use. The emergency path exports the master key
 contained in `gocryptfs.conf` with the category password:
