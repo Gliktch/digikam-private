@@ -366,7 +366,9 @@ void PrivacyAnalysisWiringTest::testUnlockedOriginalsUseRevocableMemorySources()
     QVERIFY(albumManager.contains(QStringLiteral(
         "PrivacyCasualOriginalReader reader")));
     QVERIFY(albumManager.contains(QStringLiteral(
-        "m_sessions->runWithUnlockedSecret(")));
+        "m_sessions->runWithUnlockedStore(")));
+    QVERIFY(albumManager.contains(QStringLiteral(
+        "PrivacyStrongOriginalReader strongReader")));
     QVERIFY(albumManager.contains(QStringLiteral(
         "QLatin1String(\"/proc/self/fd/\")")));
     QVERIFY(albumManager.contains(QStringLiteral(

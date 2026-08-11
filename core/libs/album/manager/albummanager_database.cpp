@@ -56,6 +56,7 @@
 #include "privacycachetransition.h"
 #include "privacycasualoriginalreader.h"
 #include "privacycategorysessionowner.h"
+#include "privacystrongoriginalreader.h"
 #include "privacyderivativestore.h"
 #include "privacypreparedaccessregistry.h"
 #include "privacyrepository.h"
@@ -593,45 +594,122 @@ private:
         }
 
         PrivacyCasualOriginalSource prepared;
+        PrivacyStrongOriginalSource strongPrepared;
+        PrivacyStrongOriginalReader strongReader;
+        bool strongBackend = false;
+        QString sourceCategoryUuid;
+        QString sourceItemUuid;
+        QString sourceOriginalName;
+        QString sourceOriginalHash;
+        QString sourceRuntimePath;
+        qlonglong sourceItemGeneration = -1;
+        qlonglong sourceOriginalSize = -1;
         PrivacyLeaseCurrentState before;
         QSharedPointer<QTemporaryFile> backing;
         QString linkPath;
         bool restored = false;
         const PrivacyCategoryOperationStatus operation =
-            m_sessions->runWithUnlockedSecret(
+            m_sessions->runWithUnlockedStore(
                 actionState.categoryUuid,
-                [this, imageId, &logicalPath, &prepared, &before,
+                [this, imageId, &logicalPath, &prepared, &strongPrepared,
+                 &strongReader, &strongBackend, &sourceCategoryUuid,
+                 &sourceItemUuid, &sourceOriginalName, &sourceOriginalHash,
+                 &sourceRuntimePath, &sourceItemGeneration,
+                 &sourceOriginalSize, &before,
                  &backing, &linkPath, &restored,
                  assetRole, assetOrdinal,
                  retainInProviderCache,
-                 &isCancelled](const PrivacyPassword& password)
+                 &isCancelled](const PrivacyPassword& password,
+                               const QString& plaintextRoot)
                 {
                     PrivacyRepositorySnapshot snapshot;
                     PrivacyCasualOriginalReader reader;
 
                     if ((isCancelled && isCancelled()) ||
-                        !PrivacyRepository().loadRuntimeSnapshot(&snapshot) ||
-                        !reader.prepareAsset(snapshot, imageId, logicalPath,
-                                             assetRole, assetOrdinal,
-                                             &prepared) ||
-                        !m_runtime->currentState(prepared.itemUuid, &before) ||
+                        !PrivacyRepository().loadRuntimeSnapshot(&snapshot))
+                    {
+                        return;
+                    }
+
+                    strongBackend = false;
+
+                    for (const PrivacyItem& item : snapshot.items)
+                    {
+                        if (item.imageId != imageId)
+                        {
+                            continue;
+                        }
+
+                        for (const PrivacyCategory& candidate :
+                             snapshot.categories)
+                        {
+                            if (candidate.uuid == item.categoryUuid)
+                            {
+                                strongBackend =
+                                    (candidate.backend ==
+                                     PrivacyBackend::Strong);
+                                break;
+                            }
+                        }
+
+                        break;
+                    }
+
+                    const bool preparedOk =
+                        strongBackend
+                            ? strongReader.prepareAsset(
+                                  snapshot, imageId, logicalPath,
+                                  assetRole, assetOrdinal, &strongPrepared)
+                            : reader.prepareAsset(
+                                  snapshot, imageId, logicalPath,
+                                  assetRole, assetOrdinal, &prepared);
+
+                    if (!preparedOk)
+                    {
+                        return;
+                    }
+
+                    if (strongBackend)
+                    {
+                        strongPrepared.vaultPlaintextRoot = plaintextRoot;
+                        sourceCategoryUuid = strongPrepared.categoryUuid;
+                        sourceItemUuid = strongPrepared.itemUuid;
+                        sourceOriginalName = strongPrepared.originalName;
+                        sourceOriginalHash = strongPrepared.originalHash;
+                        sourceItemGeneration = strongPrepared.itemGeneration;
+                        sourceOriginalSize = strongPrepared.originalSize;
+                        sourceRuntimePath = plaintextRoot;
+                    }
+                    else
+                    {
+                        sourceCategoryUuid = prepared.categoryUuid;
+                        sourceItemUuid = prepared.itemUuid;
+                        sourceOriginalName = prepared.originalName;
+                        sourceOriginalHash = prepared.originalHash;
+                        sourceItemGeneration = prepared.itemGeneration;
+                        sourceOriginalSize = prepared.originalSize;
+                        sourceRuntimePath = QFileInfo(
+                            prepared.restore.archivePath).absolutePath();
+                    }
+
+                    if (!m_runtime->currentState(sourceItemUuid, &before) ||
                         !before.isValid() || !before.categoryUnlocked ||
                         !before.publicRootAvailable || !before.storeRootAvailable ||
                         before.unresolvedTransaction ||
-                        (before.itemGeneration != prepared.itemGeneration))
+                        (before.itemGeneration != sourceItemGeneration))
                     {
                         return;
                     }
 
                     const QString cacheNamespace =
-                        QLatin1String("privacy-original:v1:") + prepared.itemUuid +
-                        QLatin1Char(':') + QString::number(prepared.itemGeneration) +
+                        QLatin1String("privacy-original:v1:") + sourceItemUuid +
+                        QLatin1Char(':') + QString::number(sourceItemGeneration) +
                         QLatin1Char(':') + QString::number(before.categoryEpoch) +
                         QLatin1Char(':') + QString::number(before.publicRootEpoch) +
                         QLatin1Char(':') + QString::number(before.storeRootEpoch) +
                         QLatin1Char(':') + QString::number(assetRole) +
                         QLatin1Char(':') + QString::number(assetOrdinal) +
-                        QLatin1Char(':') + prepared.originalHash;
+                        QLatin1Char(':') + sourceOriginalHash;
 
                     {
                         QMutexLocker locker(&m_clearLock);
@@ -655,9 +733,9 @@ private:
                         }
 
                         if (retainInProviderCache &&
-                            ((prepared.originalSize > MaximumMaterializedOriginalBytes) ||
+                            ((sourceOriginalSize > MaximumMaterializedOriginalBytes) ||
                             (retainedBytes > (MaximumMaterializedOriginalBytes -
-                                              prepared.originalSize))))
+                                              sourceOriginalSize))))
                         {
                             return;
                         }
@@ -665,7 +743,7 @@ private:
 
                     const QString runtimePath = retainInProviderCache
                         ? originalRuntimePath()
-                        : QFileInfo(prepared.restore.archivePath).absolutePath();
+                        : sourceRuntimePath;
 
                     if (runtimePath.isEmpty())
                     {
@@ -681,8 +759,8 @@ private:
 
                         if (!storage.isValid() || !storage.isReady() ||
                             storage.isReadOnly() ||
-                            (prepared.originalSize > storage.bytesAvailable()) ||
-                            ((storage.bytesAvailable() - prepared.originalSize) <
+                            (sourceOriginalSize > storage.bytesAvailable()) ||
+                            ((storage.bytesAvailable() - sourceOriginalSize) <
                              reserve))
                         {
                             return;
@@ -716,11 +794,18 @@ private:
                     }
 
                     PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
+                    QString strongError;
+                    const bool restoredOk =
+                        strongBackend
+                            ? strongReader.restore(strongPrepared,
+                                                   backing.data(),
+                                                   &strongError, isCancelled)
+                            : reader.restore(prepared, password,
+                                             backing.data(), &error,
+                                             isCancelled);
 
-                    if (!reader.restore(prepared, password, backing.data(),
-                                        &error, isCancelled) ||
-                        !backing->flush() ||
-                        (backing->size() != prepared.originalSize) ||
+                    if (!restoredOk || !backing->flush() ||
+                        (backing->size() != sourceOriginalSize) ||
                         !backing->seek(0) ||
                         !backing->setPermissions(QFileDevice::ReadOwner) ||
                         (backing->handle() < 0))
@@ -729,7 +814,7 @@ private:
                         return;
                     }
 
-                    QString suffix = QFileInfo(prepared.originalName).suffix().toLower();
+                    QString suffix = QFileInfo(sourceOriginalName).suffix().toLower();
 
                     if (!QRegularExpression(QLatin1String("^[a-z0-9]{1,16}$"))
                              .match(suffix).hasMatch())
@@ -763,7 +848,7 @@ private:
                     }
 
                     PrivacyLeaseCurrentState after;
-                    restored = m_runtime->currentState(prepared.itemUuid, &after) &&
+                    restored = m_runtime->currentState(sourceItemUuid, &after) &&
                                sameLeaseState(before, after);
                 });
 
@@ -774,14 +859,14 @@ private:
         }
 
         const QString cacheNamespace =
-            QLatin1String("privacy-original:v1:") + prepared.itemUuid +
-            QLatin1Char(':') + QString::number(prepared.itemGeneration) +
+            QLatin1String("privacy-original:v1:") + sourceItemUuid +
+            QLatin1Char(':') + QString::number(sourceItemGeneration) +
             QLatin1Char(':') + QString::number(before.categoryEpoch) +
             QLatin1Char(':') + QString::number(before.publicRootEpoch) +
             QLatin1Char(':') + QString::number(before.storeRootEpoch) +
             QLatin1Char(':') + QString::number(assetRole) +
             QLatin1Char(':') + QString::number(assetOrdinal) +
-            QLatin1Char(':') + prepared.originalHash;
+            QLatin1Char(':') + sourceOriginalHash;
         QMutexLocker locker(&m_clearLock);
         const auto existing = m_originals.constFind(cacheNamespace);
 
@@ -793,7 +878,7 @@ private:
         }
 
         if (!backing || linkPath.isEmpty() || m_allPresentationBlocked ||
-            m_blockedCategories.contains(prepared.categoryUuid))
+            m_blockedCategories.contains(sourceCategoryUuid))
         {
             QFile::remove(linkPath);
             return {};
@@ -809,9 +894,9 @@ private:
         }
 
         if (retainInProviderCache &&
-            ((prepared.originalSize > MaximumMaterializedOriginalBytes) ||
+            ((sourceOriginalSize > MaximumMaterializedOriginalBytes) ||
             (retainedBytes > (MaximumMaterializedOriginalBytes -
-                              prepared.originalSize))))
+                              sourceOriginalSize))))
         {
             QFile::remove(linkPath);
             return {};
@@ -819,7 +904,7 @@ private:
 
         QSharedPointer<MaterializedOriginal> original(new MaterializedOriginal);
         original->imageId = imageId;
-        original->categoryUuid = prepared.categoryUuid;
+        original->categoryUuid = sourceCategoryUuid;
         original->logicalPath = QDir::cleanPath(logicalPath);
         original->physicalPath = linkPath;
         original->cacheNamespace = cacheNamespace;
