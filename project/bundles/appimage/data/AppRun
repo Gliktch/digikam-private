@@ -94,6 +94,42 @@ DIR="`( cd \"$DIR\" && readlink -f $(pwd) )`"
 echo "-- AppImage mounted directory: $DIR"
 export APPDIR=$DIR
 
+# Keep the fork's writable profile completely separate from stock digiKam.
+# Existing XDG_*_HOME values are intentionally not inherited: launching the
+# AppImage directly must be as isolated as launching it from a desktop entry.
+# Tests and deliberate portable setups may select an alternate private root
+# through the fork-specific variable below.
+
+if [ -n "${DIGIKAM_PRIVATE_PROFILE_ROOT:-}" ] ; then
+
+    PRIVATE_CONFIG_HOME="${DIGIKAM_PRIVATE_PROFILE_ROOT}/config"
+    PRIVATE_DATA_HOME="${DIGIKAM_PRIVATE_PROFILE_ROOT}/data"
+    PRIVATE_CACHE_HOME="${DIGIKAM_PRIVATE_PROFILE_ROOT}/cache"
+    PRIVATE_STATE_HOME="${DIGIKAM_PRIVATE_PROFILE_ROOT}/state"
+
+else
+
+    PRIVATE_CONFIG_HOME="${HOME}/.config/digikam-private"
+    PRIVATE_DATA_HOME="${HOME}/.local/share/digikam-private"
+    PRIVATE_CACHE_HOME="${HOME}/.cache/digikam-private"
+    PRIVATE_STATE_HOME="${HOME}/.local/state/digikam-private"
+
+fi
+
+install -d -m 700 \
+    "$PRIVATE_CONFIG_HOME" \
+    "$PRIVATE_DATA_HOME" \
+    "$PRIVATE_CACHE_HOME" \
+    "$PRIVATE_STATE_HOME" || exit 1
+
+export XDG_CONFIG_HOME="$PRIVATE_CONFIG_HOME"
+export XDG_DATA_HOME="$PRIVATE_DATA_HOME"
+export XDG_CACHE_HOME="$PRIVATE_CACHE_HOME"
+export XDG_STATE_HOME="$PRIVATE_STATE_HOME"
+export DIGIKAM_PRIVATE_DATABASE_HOME="$PRIVATE_DATA_HOME"
+
+unset PRIVATE_CONFIG_HOME PRIVATE_DATA_HOME PRIVATE_CACHE_HOME PRIVATE_STATE_HOME
+
 # Note: these variables are used in patched Qt to detect AppImage session.
 
 export APPIMAGE_ORIGINAL_LD_LIBRARY_PATH=$LD_LIBRARY_PATH

@@ -16,6 +16,8 @@
 
 // Qt includes
 
+#include <QDir>
+#include <QFile>
 #include <QPushButton>
 
 // Local includes
@@ -137,7 +139,18 @@ bool FirstRunDlg::validateCurrentPage()
         }
         else
         {
-            d->databasePage->setDatabasePath(firstAlbumPath());
+            const QString privateDatabaseHome =
+                QFile::decodeName(qgetenv("DIGIKAM_PRIVATE_DATABASE_HOME"));
+
+            if (!privateDatabaseHome.isEmpty())
+            {
+                QDir().mkpath(privateDatabaseHome);
+                d->databasePage->setDatabasePath(privateDatabaseHome);
+            }
+            else
+            {
+                d->databasePage->setDatabasePath(firstAlbumPath());
+            }
         }
     }
 
