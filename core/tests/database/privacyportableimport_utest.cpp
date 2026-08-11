@@ -75,6 +75,7 @@ bool createArchive(const QString& root, const ArchiveSpec& spec)
     const QString originalName = QFileInfo(proxyRelativePath).fileName();
     PrivacyCasualArchiveMember member;
     member.sourcePath = sourcePath;
+    member.publicRelativePath = proxyRelativePath;
     member.originalName = originalName;
     member.role = PrivacyAsset::PrimaryMediaRole;
     member.ordinal = 0;
@@ -195,6 +196,8 @@ void PrivacyPortableImportTest::testAuthenticatesCasualGroup()
     QCOMPARE(firstItem->proxyRelativePath,
              QLatin1String("album/photo.jpg"));
     QCOMPARE(firstItem->assets.size(), 1);
+    QCOMPARE(firstItem->assets.constFirst().publicRelativePath,
+             QLatin1String("album/photo.jpg"));
     QCOMPARE(firstItem->assets.constFirst().originalName,
              QLatin1String("photo.jpg"));
     QCOMPARE(firstItem->assets.constFirst().originalSha256,

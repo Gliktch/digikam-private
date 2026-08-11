@@ -15,6 +15,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QSet>
+#include <QStringList>
 #include <QUuid>
 
 // C++ includes
@@ -52,6 +53,29 @@ bool isSafeOriginalName(const QString& name)
     return true;
 }
 
+bool isSafePublicRelativePath(const QString& path)
+{
+    if (path.isEmpty() || QDir::isAbsolutePath(path) ||
+        path.contains(QLatin1Char('\0')) ||
+        path.contains(QLatin1Char('\\')))
+    {
+        return false;
+    }
+
+    const QStringList parts = path.split(QLatin1Char('/'));
+
+    for (const QString& part : parts)
+    {
+        if (part.isEmpty() || (part == QLatin1String(".")) ||
+            (part == QLatin1String("..")))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 PrivacyPortableImportAuthenticationResult failure(
     PrivacyPortableImportAuthenticationStatus status,
     const QString& detail)
@@ -68,6 +92,7 @@ bool PrivacyPortableImportAssetFact::isValid() const
 {
     return ((role > 0) && (ordinal >= 0) &&
             isSafeOriginalName(originalName) &&
+            isSafePublicRelativePath(publicRelativePath) &&
             (protectedRelativePath ==
              PrivacyCasualArchiveEngine::expectedMemberPath(
                  role, ordinal, originalName)) &&
@@ -206,6 +231,7 @@ PrivacyPortableImportAuthenticator::authenticateCasual(
             PrivacyPortableImportAssetFact asset;
             asset.role = member.role;
             asset.ordinal = member.ordinal;
+            asset.publicRelativePath = member.publicRelativePath;
             asset.originalName = member.originalName;
             asset.protectedRelativePath = member.protectedRelativePath;
             asset.hashAlgorithm = member.hashAlgorithm;

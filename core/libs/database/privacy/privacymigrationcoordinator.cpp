@@ -1310,6 +1310,8 @@ bool PrivacyMigrationCoordinator::publishTarget(
         {
             PrivacyCasualArchiveMember archiveMember;
             archiveMember.sourcePath = member.absolutePath;
+            archiveMember.publicRelativePath =
+                member.input.publicRelativePath;
             archiveMember.protectedRelativePath =
                 PrivacyCasualArchiveEngine::expectedMemberPath(
                     member.input.role, member.input.ordinal,

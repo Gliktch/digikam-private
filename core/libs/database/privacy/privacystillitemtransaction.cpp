@@ -2607,6 +2607,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
             PrivacyCasualArchiveMember member;
             member.sourcePath = candidatePath;
+            member.publicRelativePath = candidate.location.relativePath;
             member.protectedRelativePath = journalIt->protectedRelativePath;
             member.originalName = QFileInfo(
                 candidate.location.relativePath).fileName();

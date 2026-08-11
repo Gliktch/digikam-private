@@ -80,6 +80,10 @@ PrivacyCasualArchiveMember makeMember(const QString& sourcePath,
 {
     PrivacyCasualArchiveMember member;
     member.sourcePath            = sourcePath;
+    member.publicRelativePath    =
+        (role == PrivacyAsset::PrimaryMediaRole) && (ordinal == 0)
+            ? originalName
+            : QLatin1String("album/") + originalName;
     member.originalName          = originalName;
     member.role                  = role;
     member.ordinal               = ordinal;
@@ -572,6 +576,7 @@ void PrivacyCasualArchiveTest::testVerifiedManifestRead()
 
     QVERIFY(imageMember);
     QVERIFY(sidecarMember);
+    QCOMPARE(imageMember->publicRelativePath, QLatin1String("photo.jpg"));
     QCOMPARE(imageMember->originalName, QLatin1String("photo.jpg"));
     QCOMPARE(imageMember->protectedRelativePath,
              QLatin1String("digikam-private/assets/1/0/photo.jpg"));
@@ -581,6 +586,8 @@ void PrivacyCasualArchiveTest::testVerifiedManifestRead()
     QCOMPARE(imageMember->portableAttributes, image.portableAttributes);
     QVERIFY((imageMember->unixMode & 0170000) == 0100000);
     QVERIFY(imageMember->modificationTimeUtc.isValid());
+    QCOMPARE(sidecarMember->publicRelativePath,
+             QLatin1String("album/photo.xmp"));
     QCOMPARE(sidecarMember->originalName, QLatin1String("photo.xmp"));
     QCOMPARE(sidecarMember->size, qlonglong(sidecarBytes.size()));
 

@@ -70,6 +70,10 @@ bool createCasualArchive(const QString& root, const QString& relativePath,
 
     PrivacyCasualArchiveMember member;
     member.sourcePath = sourcePath;
+    member.publicRelativePath =
+        relativePath.left(
+            relativePath.size() -
+            QStringLiteral(".digikam-private.zip").size());
     member.originalName = QFileInfo(relativePath).fileName();
     member.role = PrivacyAsset::PrimaryMediaRole;
     member.ordinal = 0;

@@ -37,6 +37,7 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyPortableImportAssetFact
 
     int       role = 0;
     int       ordinal = -1;
+    QString   publicRelativePath;
     QString   originalName;
     QString   protectedRelativePath;
     QString   hashAlgorithm;

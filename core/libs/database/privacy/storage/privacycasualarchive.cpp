@@ -288,6 +288,7 @@ struct PreparedMember
 struct ExpectedMember
 {
     QString    archiveName;
+    QString    publicRelativePath;
     QString    originalName;
     int        role = 0;
     int        ordinal = -1;
@@ -379,6 +380,13 @@ bool isSafeArchiveMemberPath(const QString& path)
     }
 
     return true;
+}
+
+bool isSafePublicRelativePath(const QString& path)
+{
+    // The same confined relative-path rules apply to the logical public
+    // location recorded for recovery.
+    return isSafeArchiveMemberPath(path);
 }
 
 bool isSafeAbsoluteFilePath(const QString& path, bool mustExist)
@@ -587,6 +595,8 @@ QByteArray createManifest(const PrivacyCasualArchiveRequest& request,
 
         QJsonObject object;
         object.insert(QLatin1String("path"), member.input.protectedRelativePath);
+        object.insert(QLatin1String("publicRelativePath"),
+                      member.input.publicRelativePath);
         object.insert(QLatin1String("originalName"), member.input.originalName);
         object.insert(QLatin1String("role"), member.input.role);
         object.insert(QLatin1String("ordinal"), member.input.ordinal);
@@ -715,6 +725,8 @@ bool parseManifest(const QByteArray& bytes,
         const QJsonObject object = value.toObject();
         ExpectedMember member;
         member.archiveName = object.value(QLatin1String("path")).toString();
+        member.publicRelativePath =
+            object.value(QLatin1String("publicRelativePath")).toString();
         member.originalName = object.value(QLatin1String("originalName")).toString();
         qlonglong size      = -1;
         qlonglong mode      = -1;
@@ -723,6 +735,7 @@ bool parseManifest(const QByteArray& bytes,
             !jsonInteger(object.value(QLatin1String("ordinal")), &member.ordinal) ||
             !isSafeOriginalName(member.originalName) || (member.role <= 0) ||
             (member.ordinal < 0) ||
+            !isSafePublicRelativePath(member.publicRelativePath) ||
             (member.archiveName != PrivacyCasualArchiveEngine::expectedMemberPath(
                  member.role, member.ordinal, member.originalName)) ||
             !decimalString(object.value(QLatin1String("size")), &size) ||
@@ -841,6 +854,8 @@ bool parsePortableManifest(const QByteArray& bytes,
         PrivacyCasualArchiveManifestMember member;
         member.protectedRelativePath =
             object.value(QLatin1String("path")).toString();
+        member.publicRelativePath =
+            object.value(QLatin1String("publicRelativePath")).toString();
         member.originalName =
             object.value(QLatin1String("originalName")).toString();
         member.role = object.value(QLatin1String("role")).toInt();
@@ -921,6 +936,7 @@ bool prepareMember(const PrivacyCasualArchiveMember& input,
 {
     if (!prepared || !isSafeOriginalName(input.originalName) ||
         (input.role <= 0) || (input.ordinal < 0) ||
+        !isSafePublicRelativePath(input.publicRelativePath) ||
         (input.protectedRelativePath != PrivacyCasualArchiveEngine::expectedMemberPath(
              input.role, input.ordinal, input.originalName)))
     {
@@ -1839,6 +1855,7 @@ bool PrivacyCasualArchiveManifestMember::isValid() const
 {
     return (isSafeOriginalName(originalName) &&
             (role > 0) && (ordinal >= 0) &&
+            isSafePublicRelativePath(publicRelativePath) &&
             (hashAlgorithm == QLatin1String("sha256")) &&
             (sha256.size() == 32) && (size >= 0) &&
             (portableAttributes.size() <= MaximumPortableAttributes) &&

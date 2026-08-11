@@ -64,6 +64,10 @@ enum class PrivacyCasualArchiveError
 struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveMember
 {
     QString    sourcePath;
+    /** Public root-relative logical path of this original/associated member.
+     * Required by the engine; recorded in the recovery manifest so portable
+     * import restores the exact public layout. */
+    QString    publicRelativePath;
     QString    protectedRelativePath;
     QString    originalName;
     int        role = 0;
@@ -114,6 +118,7 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyCasualArchiveManifestMember
     bool isValid() const;
 
     QString   protectedRelativePath;
+    QString   publicRelativePath;
     QString   originalName;
     int       role = 0;
     int       ordinal = -1;

@@ -398,6 +398,7 @@ void createOldArchive(const QString& publicRoot,
 
     PrivacyCasualArchiveMember member;
     member.sourcePath = sourcePath;
+    member.publicRelativePath = QLatin1String("album/photo.jpg");
     member.originalName = QLatin1String("photo.jpg");
     member.role = PrivacyAsset::PrimaryMediaRole;
     member.ordinal = 0;
