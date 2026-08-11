@@ -623,7 +623,7 @@ ln -s ./Image-ExifTool/exiftool exiftool
 
 cd /
 
-APP=digiKam
+APP=digiKam-Private
 
 if [[ $DK_DEBUG = 1 ]] ; then
 
@@ -656,7 +656,7 @@ else
 
 fi
 
-APPIMAGE=$APP"-"$DK_RELEASEID$DK_SUBVER"$QT_SUF-x86-64$DEBUG_SUF.appimage"
+APPIMAGE=$APP"-"$DK_PRIVATE_VERSION"-digiKam-"$DK_RELEASEID$DK_SUBVER"$QT_SUF-x86-64$DEBUG_SUF.appimage"
 
 echo -e "------------- Create Bundle with AppImage SDK stage1\n"
 

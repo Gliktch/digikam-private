@@ -19,6 +19,10 @@ CheckSystemReleaseID
 DK_VERSION=master
 #DK_VERSION=work/michmill/8_7_0-bqm-autorotate
 
+# Release identifier for this privacy fork. The upstream digiKam version is
+# retained separately in the generated bundle filename.
+DK_PRIVATE_VERSION=v1.0.0
+
 # Absolute path where are installed all software components
 INSTALL_DIR="/usr"
 
@@ -53,7 +57,8 @@ DK_DEBUG=0
 DK_SIGN=0
 
 # Upload automatically bundle to files.kde.org (pre-release only).
-DK_UPLOAD=1
+# Never upload fork artifacts to digiKam's upstream release infrastructure.
+DK_UPLOAD=0
 DK_UPLOADURL="digikam@tinami.kde.org"
 
 # KDE frameworks version + Upload URL.
@@ -104,4 +109,3 @@ else
     DK_UPLOADDIR="/srv/archives/files/digikam/"
 
 fi
-
