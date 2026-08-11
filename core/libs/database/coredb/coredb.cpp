@@ -2096,11 +2096,13 @@ bool CoreDB::beginPrivacyCompatibilityUnlock(
     QVariantList bindings;
     bindings << transaction.itemUuid << transaction.categoryUuid
              << transaction.uuid << transaction.itemUuid
-             << static_cast<int>(PrivacyTransactionState::Complete);
+             << static_cast<int>(PrivacyTransactionState::Complete)
+             << static_cast<int>(PrivacyTransactionType::MigrateBackend);
     d->db->execSql(QString::fromUtf8(
         "SELECT EXISTS(SELECT 1 FROM PrivacyItems WHERE uuid=? AND categoryUuid=?), "
         "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
-        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE itemUuid=? AND state<>?);"),
+        "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE itemUuid=? AND state<>? "
+        "AND type<>?);"),
         bindings, &expected);
 
     if ((expected.size() != 3) ||
@@ -2245,12 +2247,14 @@ bool CoreDB::beginPrivacyMigration(
 
     QVariantList bindings;
     bindings << transaction.uuid << transaction.itemUuid
-             << static_cast<int>(PrivacyTransactionState::Complete);
+             << static_cast<int>(PrivacyTransactionState::Complete)
+             << static_cast<int>(
+                    PrivacyTransactionType::CompatibilityUnlock);
     QVariantList expected;
     d->db->execSql(QString::fromUtf8(
         "SELECT NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE uuid=?), "
         "NOT EXISTS(SELECT 1 FROM PrivacyTransactions WHERE itemUuid=? "
-        "AND state<>?);"),
+        "AND state<>? AND type<>?);"),
         bindings, &expected);
 
     if ((expected.size() != 2) ||

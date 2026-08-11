@@ -367,7 +367,8 @@ PrivacyMigrationBatchResult PrivacyMigrationCoordinator::migrateBatch(
     return batch;
 }
 
-PrivacyMigrationBatchResult PrivacyMigrationCoordinator::recover()
+PrivacyMigrationBatchResult PrivacyMigrationCoordinator::recover(
+    const QList<PrivacyMigrationRequest>& requests)
 {
     PrivacyRepositorySnapshot snapshot;
 
@@ -386,43 +387,32 @@ PrivacyMigrationBatchResult PrivacyMigrationCoordinator::recover()
             continue;
         }
 
-        PrivacyMigrationRequest request;
-        request.itemUuid = transaction.itemUuid;
-        request.imageId = -1;
+        const PrivacyMigrationRequest* request = nullptr;
 
-        for (const PrivacyItem& item : snapshot.items)
+        for (const PrivacyMigrationRequest& candidate : requests)
         {
-            if (item.uuid == transaction.itemUuid)
+            if (candidate.itemUuid == transaction.itemUuid)
             {
-                request.imageId = item.imageId;
+                request = &candidate;
                 break;
             }
         }
 
-        QJsonParseError parseError;
-        const QJsonDocument document =
-            QJsonDocument::fromJson(transaction.payloadData, &parseError);
-
-        if ((parseError.error != QJsonParseError::NoError) ||
-            !document.isObject())
+        if (!request)
         {
+            PrivacyMigrationItemResult unavailable = itemFailure(
+                PrivacyMigrationStatus::InvalidRequest,
+                transaction.itemUuid,
+                QStringLiteral(
+                    "the migration request is required for recovery"),
+                transaction.uuid);
+            batch.items << unavailable;
+            ++batch.processedCount;
+            ++batch.remainingCount;
             continue;
         }
 
-        const QJsonObject object = document.object();
-        request.sourceCategoryUuid =
-            object.value(QLatin1String("sourceCategoryUuid")).toString();
-        request.targetCategoryUuid =
-            object.value(QLatin1String("targetCategoryUuid")).toString();
-        const QString kind =
-            object.value(QLatin1String("kind")).toString();
-
-        if (kind == QLatin1String("protected-to-protected"))
-        {
-            request.targetBackend = PrivacyBackend::Strong;
-        }
-
-        PrivacyMigrationItemResult item = migrateOne(request, true);
+        PrivacyMigrationItemResult item = migrateOne(*request, true);
         batch.items << item;
         ++batch.processedCount;
 

@@ -175,7 +175,8 @@ public:
     PrivacyMigrationBatchResult migrateBatch(
         const QList<PrivacyMigrationRequest>& requests,
         const BatchProgress& progress = {});
-    PrivacyMigrationBatchResult recover();
+    PrivacyMigrationBatchResult recover(
+        const QList<PrivacyMigrationRequest>& requests = {});
 
 private:
 
