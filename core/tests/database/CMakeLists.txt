@@ -260,6 +260,23 @@ ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyportablediscovery_utest.cpp
 
 #------------------------------------------------------------------------
 
+ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyportableimport_utest.cpp
+
+              NAME_PREFIX
+
+              "digikam-"
+
+              LINK_LIBRARIES
+
+              digikamcore
+              digikamdatabase
+              libzip::zip
+
+              ${COMMON_TEST_LINK}
+)
+
+#------------------------------------------------------------------------
+
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacycasualpasswordrewrite_utest.cpp
 
               NAME_PREFIX
