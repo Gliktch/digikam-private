@@ -3167,11 +3167,25 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
 
     const PrivacyCategory* category = categoryFor(snapshot, request.categoryUuid);
 
-    if (!category || (category->backend != PrivacyBackend::Casual) ||
+    if (!category ||
+        ((category->backend != PrivacyBackend::Casual) &&
+         (category->backend != PrivacyBackend::Strong)) ||
         (category->lifecycleState != PrivacyCategoryLifecycleState::Active))
     {
         return fail(PrivacyStillItemTransactionStatus::CategoryUnavailable, {},
-                    QStringLiteral("Casual category is not active"));
+                    QStringLiteral("privacy category is not active"));
+    }
+
+    const bool strongBackend = (category->backend == PrivacyBackend::Strong);
+
+    if (strongBackend &&
+        (request.vaultPlaintextRoot.isEmpty() ||
+         !QFileInfo(request.vaultPlaintextRoot).isDir() ||
+         !canonicalUuid(request.strongStoreUuid)))
+    {
+        return fail(PrivacyStillItemTransactionStatus::CategoryUnavailable, {},
+                    QStringLiteral(
+                        "Strong unprotect requires the mounted Originals vault"));
     }
 
     const PrivacyTransaction* transaction = transactionFor(snapshot,
@@ -3292,9 +3306,25 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                         QStringLiteral("cannot finish replayed unprotect cache transition"));
         }
 
-        if (!removeExactFile(request.publicRoot, request.rootExpectation,
-                             primaryJournalAsset.containerRelativePath,
-                             primaryJournalAsset.container, true))
+        if (strongBackend)
+        {
+            QString strongDetail;
+
+            if (!PrivacyStrongObjectBackend::removeObjects(
+                    request.vaultPlaintextRoot,
+                    primaryJournalAsset.containerRelativePath,
+                    &strongDetail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                            itemUuid,
+                            strongDetail.isEmpty()
+                                ? QStringLiteral("Strong vault cleanup is pending")
+                                : strongDetail);
+            }
+        }
+        else if (!removeExactFile(request.publicRoot, request.rootExpectation,
+                                  primaryJournalAsset.containerRelativePath,
+                                  primaryJournalAsset.container, true))
         {
             return fail(PrivacyStillItemTransactionStatus::CleanupPending,
                         itemUuid,
@@ -3357,15 +3387,26 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     const QString itemUuid = item.uuid;
     const PrivacyContainer* containerPointer = containerForItem(snapshot, itemUuid);
     const QList<PrivacyAsset> assets = assetsForItem(snapshot, itemUuid);
+    const bool containerMatches =
+        (strongBackend
+             ? ((containerPointer &&
+                 (containerPointer->kind ==
+                  PrivacyContainerKind::StrongObject)) &&
+                (containerPointer->storeUuid == request.strongStoreUuid) &&
+                containerPointer->rootUuid.isEmpty())
+             : ((containerPointer &&
+                 (containerPointer->kind ==
+                  PrivacyContainerKind::CasualArchive)) &&
+                !containerPointer->rootUuid.isEmpty()));
 
     if (!containerPointer || assets.isEmpty() ||
         (assets.size() > PrivacyTransactionJournalCodec::MaximumAssetCount) ||
-        (containerPointer->kind != PrivacyContainerKind::CasualArchive) ||
+        !containerMatches ||
         (containerPointer->state != PrivacyContainerState::Verified))
     {
         return fail(PrivacyStillItemTransactionStatus::AssociatedAssetSetUnsupported,
                     itemUuid,
-                    QStringLiteral("mapping is not a bounded Casual asset set"));
+                    QStringLiteral("mapping is not a bounded protected asset set"));
     }
 
     const PrivacyContainer container = *containerPointer;
@@ -3420,7 +3461,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
     const QString archivePath = absolutePath(request.publicRoot,
                                              container.objectRelativePath);
 
-    if (publicPath.isEmpty() || archivePath.isEmpty())
+    if (publicPath.isEmpty() || (!strongBackend && archivePath.isEmpty()))
     {
         return fail(PrivacyStillItemTransactionStatus::InvalidRequest, itemUuid,
                     QStringLiteral("stored public/archive path is unsafe"));
@@ -3428,10 +3469,18 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
 
     PrivacyJournalObjectFact archiveFact;
 
-    if (!stableFileFact(archivePath, nullptr, &archiveFact) ||
-        (QString::fromLatin1(archiveFact.sha256.toHex()) !=
-         container.protectedHash) ||
-        (archiveFact.size != container.protectedSize))
+    if (strongBackend)
+    {
+        archiveFact.presence = PrivacyJournalExpectedPresence::Present;
+        archiveFact.size = container.protectedSize;
+        archiveFact.linkCount = 1;
+        archiveFact.sha256 = QByteArray::fromHex(
+            container.protectedHash.toLatin1());
+    }
+    else if (!stableFileFact(archivePath, nullptr, &archiveFact) ||
+             (QString::fromLatin1(archiveFact.sha256.toHex()) !=
+              container.protectedHash) ||
+             (archiveFact.size != container.protectedSize))
     {
         return fail(PrivacyStillItemTransactionStatus::SourceChanged, itemUuid,
                     QStringLiteral("proxy/archive no longer match stored facts"));
@@ -3579,7 +3628,38 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
             created.assets << journalAsset;
         }
 
-        if (!verifyArchiveMember(d->archive, created, archivePath, password))
+        if (strongBackend)
+        {
+            QList<PrivacyStrongObjectMember> strongMembers;
+
+            for (const PrivacyJournalAsset& journalAsset : created.assets)
+            {
+                PrivacyStrongObjectMember strongMember;
+                strongMember.sourcePath.clear();
+                strongMember.protectedRelativePath =
+                    journalAsset.protectedRelativePath;
+                strongMember.originalName = QFileInfo(
+                    journalAsset.publicRelativePath).fileName();
+                strongMember.expectedSize = journalAsset.original.size;
+                strongMember.expectedSha256 = journalAsset.original.sha256;
+                strongMembers << strongMember;
+            }
+
+            QString strongDetail;
+
+            if (!PrivacyStrongObjectBackend::verifyObjects(
+                    request.vaultPlaintextRoot,
+                    container.objectRelativePath, strongMembers,
+                    container.protectedSize,
+                    QByteArray::fromHex(container.protectedHash.toLatin1()),
+                    &strongDetail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                            itemUuid, strongDetail);
+            }
+        }
+        else if (!verifyArchiveMember(d->archive, created, archivePath,
+                                      password))
         {
             return fail(PrivacyStillItemTransactionStatus::ArchiveFailure, itemUuid,
                         QStringLiteral("archive/member/password verification failed"));
@@ -3780,19 +3860,24 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
             }
 
             PrivacyCasualArchiveRestoreRequest restore;
-            restore.archivePath = archivePath;
-            restore.categoryUuid = request.categoryUuid;
-            restore.containerUuid = container.uuid;
-            restore.itemUuid = itemUuid;
-            restore.protectedRelativePath = mappedIt->protectedRelativePath;
-            restore.originalName = mappedIt->originalName;
-            restore.role = mappedIt->role;
-            restore.ordinal = mappedIt->ordinal;
-            restore.expectedArchiveSize = archiveFact.size;
-            restore.expectedArchiveSha256 = archiveFact.sha256;
-            restore.expectedMemberSize = mappedIt->originalSize;
-            restore.expectedMemberSha256 = QByteArray::fromHex(
-                mappedIt->originalHash.toLatin1());
+
+            if (!strongBackend)
+            {
+                restore.archivePath = archivePath;
+                restore.categoryUuid = request.categoryUuid;
+                restore.containerUuid = container.uuid;
+                restore.itemUuid = itemUuid;
+                restore.protectedRelativePath = mappedIt->protectedRelativePath;
+                restore.originalName = mappedIt->originalName;
+                restore.role = mappedIt->role;
+                restore.ordinal = mappedIt->ordinal;
+                restore.expectedArchiveSize = archiveFact.size;
+                restore.expectedArchiveSha256 = archiveFact.sha256;
+                restore.expectedMemberSize = mappedIt->originalSize;
+                restore.expectedMemberSha256 = QByteArray::fromHex(
+                    mappedIt->originalHash.toLatin1());
+            }
+
             const PrivacyPublicReplacementStageResult stageResult =
                 d->transition.stageReplacement(
                     stageRequest,
@@ -3812,14 +3897,56 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                             return false;
                         }
 
-                        const bool restored = d->archive.restoreMember(
-                            restore, password, &destination);
-                        destination.close();
-
-                        if (!restored)
+                        if (strongBackend)
                         {
-                            return false;
+                            const QString vaultObjectPath = QDir(
+                                request.vaultPlaintextRoot).filePath(
+                                mappedIt->protectedRelativePath);
+                            QFile vaultObject(vaultObjectPath);
+
+                            if (!vaultObject.open(QIODevice::ReadOnly) ||
+                                (vaultObject.size() != mappedIt->originalSize))
+                            {
+                                destination.close();
+
+                                if (producerDetail)
+                                {
+                                    *producerDetail = QStringLiteral(
+                                        "cannot open exact Strong vault object");
+                                }
+
+                                return false;
+                            }
+
+                            const QByteArray bytes = vaultObject.readAll();
+
+                            if ((bytes.size() != mappedIt->originalSize) ||
+                                (destination.write(bytes) != bytes.size()))
+                            {
+                                destination.close();
+
+                                if (producerDetail)
+                                {
+                                    *producerDetail = QStringLiteral(
+                                        "cannot restore Strong vault object bytes");
+                                }
+
+                                return false;
+                            }
                         }
+                        else
+                        {
+                            const bool restored = d->archive.restoreMember(
+                                restore, password, &destination);
+
+                            if (!restored)
+                            {
+                                destination.close();
+                                return false;
+                            }
+                        }
+
+                        destination.close();
 
                         const qint64 milliseconds =
                             mappedIt->originalModificationDate.toMSecsSinceEpoch();
@@ -4101,8 +4228,23 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                     QStringLiteral("cannot finish Unprotect cache transition"));
     }
 
-    if (!removeExactFile(request.publicRoot, request.rootExpectation,
-                         container.objectRelativePath, archiveFact, true))
+    if (strongBackend)
+    {
+        QString strongDetail;
+
+        if (!PrivacyStrongObjectBackend::removeObjects(
+                request.vaultPlaintextRoot,
+                container.objectRelativePath, &strongDetail))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CleanupPending,
+                        itemUuid,
+                        strongDetail.isEmpty()
+                            ? QStringLiteral("Strong vault cleanup is pending")
+                            : strongDetail);
+        }
+    }
+    else if (!removeExactFile(request.publicRoot, request.rootExpectation,
+                              container.objectRelativePath, archiveFact, true))
     {
         return fail(PrivacyStillItemTransactionStatus::CleanupPending, itemUuid,
                     QStringLiteral("exact archive cleanup is pending"));

@@ -141,6 +141,10 @@ public:
     // password. This authorizes Unprotect without retaining or publishing an
     // unlocked category session.
     bool freshAuthenticationConfirmed = false;
+    // Strong categories only: mounted Originals vault context supplied by the
+    // authenticated category session.
+    QString vaultPlaintextRoot;
+    QString strongStoreUuid;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyCompatibilityUnlockRequest

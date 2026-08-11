@@ -565,7 +565,7 @@ private Q_SLOTS:
     void protectUnprotectAndReplayFinalCleanup_data();
     void protectUnprotectAndReplayFinalCleanup();
     void associatedAssetsProtectUnprotectRoundTrip();
-    void testStrongProtectPublishesVaultObjects();
+    void testStrongProtectUnprotectRoundTrip();
     void videoPreparedReplayRetainsExactProxy();
     void compatibilityGuardRelock();
     void compatibilityGuardArmFailureCancels();
@@ -2418,7 +2418,7 @@ void PrivacyStillItemTransactionTest::rejectsUnsafeReplayInputs()
     }
 }
 
-void PrivacyStillItemTransactionTest::testStrongProtectPublishesVaultObjects()
+void PrivacyStillItemTransactionTest::testStrongProtectUnprotectRoundTrip()
 {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -2523,6 +2523,29 @@ void PrivacyStillItemTransactionTest::testStrongProtectPublishesVaultObjects()
     QVERIFY(publicProxy.open(QIODevice::ReadOnly));
     QVERIFY(publicProxy.readAll() != originalBytes);
     publicProxy.close();
+
+    PrivacyStillUnprotectRequest unprotect;
+    unprotect.imageId = protect.imageId;
+    unprotect.categoryUuid = CategoryUuid;
+    unprotect.transactionUuid = QUuid::createUuid().toString(
+        QUuid::WithoutBraces);
+    unprotect.publicRoot = publicRoot;
+    unprotect.rootExpectation = expectation;
+    unprotect.freshAuthenticationConfirmed = true;
+    unprotect.vaultPlaintextRoot = vaultDirectory.path();
+    unprotect.strongStoreUuid = StrongStoreUuid;
+    const PrivacyStillItemTransactionResult restored =
+        engine.unprotect(unprotect, password);
+    QCOMPARE(restored.status, PrivacyStillItemTransactionStatus::Unprotected);
+
+    QFile restoredSource(sourcePath);
+    QVERIFY(restoredSource.open(QIODevice::ReadOnly));
+    QCOMPARE(restoredSource.readAll(), originalBytes);
+    restoredSource.close();
+    QVERIFY(!QFileInfo::exists(QDir(vaultDirectory.path()).filePath(
+        QLatin1String("originals/") + ContainerUuid)));
+    QVERIFY(persistence.snapshot.containers.isEmpty());
+    QVERIFY(persistence.snapshot.items.isEmpty());
 }
 
 QTEST_MAIN(PrivacyStillItemTransactionTest)
