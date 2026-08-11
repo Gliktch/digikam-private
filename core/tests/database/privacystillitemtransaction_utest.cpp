@@ -40,6 +40,8 @@ const QString RootUuid = QLatin1String("20000000-0000-0000-0000-000000000001");
 const QString ItemUuid = QLatin1String("30000000-0000-0000-0000-000000000001");
 const QString ContainerUuid = QLatin1String("40000000-0000-0000-0000-000000000001");
 const QString ProtectUuid = QLatin1String("50000000-0000-0000-0000-000000000001");
+const QString StrongStoreUuid = QLatin1String("60000000-0000-0000-0000-000000000001");
+const QString ManagedRootUuid = QLatin1String("70000000-0000-0000-0000-000000000001");
 const QString UnprotectUuid = QLatin1String("60000000-0000-0000-0000-000000000001");
 const QString CompatibilityUnlockUuid =
     QLatin1String("70000000-0000-0000-0000-000000000001");
@@ -563,6 +565,7 @@ private Q_SLOTS:
     void protectUnprotectAndReplayFinalCleanup_data();
     void protectUnprotectAndReplayFinalCleanup();
     void associatedAssetsProtectUnprotectRoundTrip();
+    void testStrongProtectPublishesVaultObjects();
     void videoPreparedReplayRetainsExactProxy();
     void compatibilityGuardRelock();
     void compatibilityGuardArmFailureCancels();
@@ -2413,6 +2416,113 @@ void PrivacyStillItemTransactionTest::rejectsUnsafeReplayInputs()
         QVERIFY(!QFileInfo::exists(
             sourcePath + QLatin1String(".digikam-private.zip")));
     }
+}
+
+void PrivacyStillItemTransactionTest::testStrongProtectPublishesVaultObjects()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QTemporaryDir vaultDirectory;
+    QVERIFY(vaultDirectory.isValid());
+    QString sourcePath;
+    PrivacyStorageRoot publicRoot;
+    PrivacyJournalRootExpectation expectation;
+    PrivacyStillProtectRequest protect;
+    QVERIFY(prepareSyntheticStill(directory, &sourcePath, &publicRoot,
+                                  &expectation, &protect));
+
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = source.readAll();
+    source.close();
+
+    PrivacyCategory strong = category();
+    strong.backend = PrivacyBackend::Strong;
+    PrivacyStorageRoot managedRoot;
+    managedRoot.uuid = ManagedRootUuid;
+    managedRoot.kind = PrivacyStorageRootKind::ManagedStoreRoot;
+    managedRoot.configuredPath = vaultDirectory.path();
+    managedRoot.identityVersion = 1;
+    managedRoot.identityData = QByteArray("synthetic-managed-root");
+    managedRoot.markerUuid = QLatin1String("marker-strong");
+    managedRoot.createdAt = QDateTime::currentDateTimeUtc();
+    PrivacyStore store;
+    store.uuid = StrongStoreUuid;
+    store.categoryUuid = CategoryUuid;
+    store.rootUuid = ManagedRootUuid;
+    store.format = QLatin1String("gocryptfs");
+    store.formatVersion = 2;
+    store.cipherRelativePath = QLatin1String(".digikam-private/stores/") +
+                               StrongStoreUuid;
+    store.configRelativePath = store.cipherRelativePath +
+                               QLatin1String("/gocryptfs.conf");
+    store.configGeneration = 1;
+    store.lifecycleState = PrivacyStoreLifecycleState::Active;
+    store.createdAt = QDateTime::currentDateTimeUtc();
+    PrivacyCredential credential;
+    credential.categoryUuid = CategoryUuid;
+    credential.generation = 1;
+    credential.encodingVersion = QLatin1String("utf8-nfc-v1");
+    credential.envelopeFormat = QLatin1String("gocryptfs-config-v2");
+    credential.envelopeBlob = QByteArray("synthetic opaque gocryptfs config");
+    credential.envelopeHashAlgorithm = QLatin1String("sha256");
+    credential.envelopeHash = QString::fromLatin1(
+        QCryptographicHash::hash(credential.envelopeBlob,
+                                 QCryptographicHash::Sha256).toHex());
+    credential.createdAt = QDateTime::currentDateTimeUtc();
+
+    FakePersistence persistence;
+    persistence.snapshot.categories << strong;
+    persistence.snapshot.credentials << credential;
+    persistence.snapshot.storageRoots << publicRoot << managedRoot;
+    persistence.snapshot.stores << store;
+
+    for (const PrivacyStoreRole role : { PrivacyStoreRole::CredentialAuthority,
+                                         PrivacyStoreRole::Derivatives,
+                                         PrivacyStoreRole::Originals })
+    {
+        PrivacyStoreBinding binding;
+        binding.categoryUuid = CategoryUuid;
+        binding.role = role;
+        binding.storeUuid = StrongStoreUuid;
+        persistence.snapshot.storeBindings << binding;
+    }
+
+    QSharedPointer<VerifiedRoot> verifier(new VerifiedRoot);
+    QSharedPointer<VerifiedIntegrity> inspector(new VerifiedIntegrity);
+    PrivacyRuntimeCoordinator runtime;
+    QCOMPARE(runtime.initialize(persistence.snapshot, verifier, {},
+                                inspector).state,
+             PrivacyStartupState::Ready);
+    QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, true));
+    FakeCache cache;
+    PrivacyStillItemTransactionEngine engine(persistence, runtime, cache);
+    protect.vaultPlaintextRoot = vaultDirectory.path();
+    protect.strongStoreUuid = StrongStoreUuid;
+    const PrivacyPassword password = PrivacyPassword::fromUnicode(
+        QLatin1String("synthetic-secret"));
+    const PrivacyStillItemTransactionResult result =
+        engine.protect(protect, password);
+    QCOMPARE(result.status, PrivacyStillItemTransactionStatus::Protected);
+
+    QCOMPARE(persistence.snapshot.containers.size(), 1);
+    const PrivacyContainer container = persistence.snapshot.containers.first();
+    QCOMPARE(container.kind, PrivacyContainerKind::StrongObject);
+    QCOMPARE(container.storeUuid, StrongStoreUuid);
+    QCOMPARE(container.objectRelativePath,
+             QLatin1String("originals/") + ContainerUuid);
+
+    QFile protectedObject(QDir(vaultDirectory.path()).filePath(
+        QLatin1String("originals/") + ContainerUuid +
+        QLatin1String("/0-synthetic.jpg")));
+    QVERIFY(protectedObject.open(QIODevice::ReadOnly));
+    QCOMPARE(protectedObject.readAll(), originalBytes);
+    protectedObject.close();
+
+    QFile publicProxy(sourcePath);
+    QVERIFY(publicProxy.open(QIODevice::ReadOnly));
+    QVERIFY(publicProxy.readAll() != originalBytes);
+    publicProxy.close();
 }
 
 QTEST_MAIN(PrivacyStillItemTransactionTest)

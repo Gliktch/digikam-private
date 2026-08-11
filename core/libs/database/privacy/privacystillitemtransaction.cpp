@@ -42,6 +42,7 @@
 // Local includes
 
 #include "privacycasualarchive.h"
+#include "privacystrongobjectbackend.h"
 #include "privacyprocessrunner.h"
 #include "privacyproxygenerator.h"
 #include "privacypublictransition.h"
@@ -2071,15 +2072,60 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
 
     const PrivacyCategory* category = categoryFor(snapshot, request.categoryUuid);
 
-    if (!category || (category->backend != PrivacyBackend::Casual) ||
+    if (!category ||
+        ((category->backend != PrivacyBackend::Casual) &&
+         (category->backend != PrivacyBackend::Strong)) ||
         (category->lifecycleState != PrivacyCategoryLifecycleState::Active) ||
         (!d->durableReplay && !d->runtime.isCategoryUnlocked(category->uuid)))
     {
         return fail(PrivacyStillItemTransactionStatus::CategoryUnavailable,
-                    QStringLiteral("Casual category is not active and unlocked"));
+                    QStringLiteral("privacy category is not active and unlocked"));
     }
 
     const PrivacyCategory categoryValue = *category;
+    const bool strongBackend = (categoryValue.backend == PrivacyBackend::Strong);
+    PrivacyStore strongStore;
+
+    if (strongBackend)
+    {
+        if (!canonicalUuid(request.strongStoreUuid) ||
+            request.vaultPlaintextRoot.isEmpty() ||
+            !QFileInfo(request.vaultPlaintextRoot).isDir())
+        {
+            return fail(PrivacyStillItemTransactionStatus::CategoryUnavailable,
+                        QStringLiteral(
+                            "Strong protect requires the mounted Originals vault"));
+        }
+
+        const PrivacyStoreBinding* originalsBinding = nullptr;
+
+        for (const PrivacyStoreBinding& binding : snapshot.storeBindings)
+        {
+            if ((binding.categoryUuid == categoryValue.uuid) &&
+                (binding.role == PrivacyStoreRole::Originals))
+            {
+                originalsBinding = &binding;
+                break;
+            }
+        }
+
+        for (const PrivacyStore& candidate : snapshot.stores)
+        {
+            if (candidate.uuid == request.strongStoreUuid)
+            {
+                strongStore = candidate;
+            }
+        }
+
+        if (!originalsBinding ||
+            (originalsBinding->storeUuid != request.strongStoreUuid) ||
+            (strongStore.categoryUuid != categoryValue.uuid) ||
+            (strongStore.lifecycleState != PrivacyStoreLifecycleState::Active))
+        {
+            return fail(PrivacyStillItemTransactionStatus::CategoryUnavailable,
+                        QStringLiteral("Strong Originals store binding is invalid"));
+        }
+    }
 
     const QString publicRelativePath = sourceAsset->location.relativePath;
     const QString sourcePath = absolutePath(request.publicRoot, publicRelativePath);
@@ -2096,6 +2142,12 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         (parentPath(publicRelativePath).isEmpty() ? QString() : QLatin1String("/")) +
         PrivacyPublicTransitionEngine::expectedStageFileName(
             transactionUuid, PrivacyAsset::PrimaryMediaRole, 0);
+    const QString strongStagedRelative =
+        QLatin1String("originals/.staging-") + transactionUuid;
+    const QString strongFinalRelative =
+        QLatin1String("originals/") + containerUuid;
+    const QString payloadStageRelative =
+        strongBackend ? strongStagedRelative : archiveStageRelativePath;
     QDateTime originalModificationDate;
     mode_t originalMode = 0;
 
@@ -2116,6 +2168,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     QByteArray protectMetadata;
     QByteArray preparedProxyBytes;
     QList<ProtectAssetMetadata> sourceMetadata;
+    QList<PrivacyStrongObjectMember> strongMembers;
 
     if (!existingTransaction)
     {
@@ -2170,10 +2223,17 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                 PrivacyPublicTransitionEngine::expectedStageFileName(
                     transactionUuid, journalAsset.role, journalAsset.ordinal);
             journalAsset.protectedRelativePath =
-                PrivacyCasualArchiveEngine::expectedMemberPath(
-                    journalAsset.role, journalAsset.ordinal,
-                    QFileInfo(candidate.location.relativePath).fileName());
-            journalAsset.containerRelativePath = archiveRelativePath;
+                strongBackend
+                    ? QString::fromLatin1("originals/%1/%2-%3")
+                          .arg(containerUuid)
+                          .arg(journalAsset.ordinal)
+                          .arg(QFileInfo(
+                              candidate.location.relativePath).fileName())
+                    : PrivacyCasualArchiveEngine::expectedMemberPath(
+                        journalAsset.role, journalAsset.ordinal,
+                        QFileInfo(candidate.location.relativePath).fileName());
+            journalAsset.containerRelativePath =
+                strongBackend ? strongFinalRelative : archiveRelativePath;
             journalAsset.original = originalFact;
             created.assets << journalAsset;
 
@@ -2233,7 +2293,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         transaction.toCredentialGeneration = categoryValue.currentCredentialGeneration;
         transaction.payloadFormatVersion = 1;
         transaction.payloadData = encodePreparedPayload(
-            created, archiveStageRelativePath, originalModificationDate,
+            created, payloadStageRelative, originalModificationDate,
             protectMetadata);
         transaction.createdAt = QDateTime::currentDateTimeUtc();
         transaction.updatedAt = transaction.createdAt;
@@ -2286,7 +2346,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                                &preparedProxyBytes) ||
         !decodeProtectAssetMetadata(protectMetadata, created,
                                     &sourceMetadata) ||
-        (storedArchiveStage != archiveStageRelativePath) ||
+        (storedArchiveStage != payloadStageRelative) ||
         ((existingTransaction->state == PrivacyTransactionState::Created) &&
          !preparedProxyBytes.isEmpty()))
     {
@@ -2399,27 +2459,65 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
             member.expectedSize = originalFact.size;
             member.expectedSha256 = originalFact.sha256;
             archiveRequest.members << member;
+
+            if (strongBackend)
+            {
+                PrivacyStrongObjectMember strongMember;
+                strongMember.sourcePath = candidatePath;
+                strongMember.protectedRelativePath =
+                    journalIt->protectedRelativePath;
+                strongMember.originalName = QFileInfo(
+                    candidate.location.relativePath).fileName();
+                strongMember.expectedSize = originalFact.size;
+                strongMember.expectedSha256 = originalFact.sha256;
+                strongMembers << strongMember;
+            }
         }
 
-        PrivacyJournalObjectFact existingArchiveStageFact;
-        PrivacyCasualArchiveStage archiveStage = [&]()
+        PrivacyStrongObjectStageResult strongStage;
+        std::unique_ptr<PrivacyCasualArchiveStage> archiveStage;
+
+        if (strongBackend)
         {
+            QString stageDetail;
+            strongStage = PrivacyStrongObjectBackend::stageObjects(
+                request.vaultPlaintextRoot, strongStagedRelative,
+                strongMembers, &stageDetail);
+
+            if (!strongStage.valid)
+            {
+                return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                            stageDetail.isEmpty()
+                                ? QStringLiteral(
+                                    "cannot stage Strong vault objects")
+                                : stageDetail);
+            }
+        }
+        else
+        {
+            PrivacyJournalObjectFact existingArchiveStageFact;
+
             if (stableFileFact(archiveStagePath, nullptr,
                                &existingArchiveStageFact))
             {
-                return d->archive.resumeStagedArchive(
-                    archiveStagePath, archivePath,
-                    existingArchiveStageFact.size,
-                    existingArchiveStageFact.sha256, password);
+                archiveStage = std::make_unique<PrivacyCasualArchiveStage>(
+                    d->archive.resumeStagedArchive(
+                        archiveStagePath, archivePath,
+                        existingArchiveStageFact.size,
+                        existingArchiveStageFact.sha256, password));
+            }
+            else
+            {
+                archiveStage = std::make_unique<PrivacyCasualArchiveStage>(
+                    d->archive.stageArchive(archiveRequest, password));
             }
 
-            return d->archive.stageArchive(archiveRequest, password);
-        }();
-
-        if (!archiveStage.isValid())
-        {
-            return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
-                        QStringLiteral("cannot create or resume verified archive stage"));
+            if (!archiveStage || !archiveStage->isValid())
+            {
+                return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                            QStringLiteral(
+                                "cannot create or resume verified archive stage"));
+            }
         }
 
         prepared = created;
@@ -2441,16 +2539,20 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
             }
 
             asset.container.presence = PrivacyJournalExpectedPresence::Present;
-            asset.container.size = archiveStage.archiveSize();
+            asset.container.size = strongBackend
+                                 ? strongStage.totalSize
+                                 : archiveStage->archiveSize();
             asset.container.linkCount = 1;
-            asset.container.sha256 = archiveStage.archiveSha256();
+            asset.container.sha256 = strongBackend
+                                   ? strongStage.totalSha256
+                                   : archiveStage->archiveSha256();
         }
 
         PrivacyTransaction next = *existingTransaction;
         next.state = PrivacyTransactionState::Prepared;
         next.generation = 1;
         next.payloadData = encodePreparedPayload(
-            prepared, archiveStageRelativePath, originalModificationDate,
+            prepared, payloadStageRelative, originalModificationDate,
             protectMetadata, proxyResult.encodedBytes);
         next.updatedAt = QDateTime::currentDateTimeUtc();
 
@@ -2539,6 +2641,23 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                     QStringLiteral("Prepared primary asset is missing"));
     }
 
+    if (strongBackend && strongMembers.isEmpty() &&
+        !prepared.assets.isEmpty())
+    {
+        for (const PrivacyJournalAsset& journalAsset : prepared.assets)
+        {
+            PrivacyStrongObjectMember strongMember;
+            strongMember.sourcePath.clear();
+            strongMember.protectedRelativePath =
+                journalAsset.protectedRelativePath;
+            strongMember.originalName = QFileInfo(
+                journalAsset.publicRelativePath).fileName();
+            strongMember.expectedSize = journalAsset.original.size;
+            strongMember.expectedSha256 = journalAsset.original.sha256;
+            strongMembers << strongMember;
+        }
+    }
+
     const PrivacyTransactionJournal* dbJournal = databaseJournalFor(
         snapshot, transactionUuid, request.publicRoot.uuid);
 
@@ -2602,50 +2721,97 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         }
     }
 
-    PrivacyJournalObjectFact finalArchiveFact;
-
-    if (!stableFileFact(archivePath, nullptr, &finalArchiveFact))
+    if (strongBackend)
     {
-        bool published = false;
+        QString strongDetail;
 
-        if (d->durableReplay)
+        if (!PrivacyStrongObjectBackend::verifyObjects(
+                request.vaultPlaintextRoot, strongFinalRelative,
+                strongMembers,
+                prepared.assets.constFirst().container.size,
+                prepared.assets.constFirst().container.sha256,
+                &strongDetail))
         {
-            if (!QFileInfo::exists(archiveStagePath))
+            if (d->durableReplay)
             {
                 return fail(
                     PrivacyStillItemTransactionStatus::AuthenticationRequired,
-                    QStringLiteral("Prepared Protect archive stage must be recreated"));
+                    QStringLiteral(
+                        "Strong vault objects must be re-staged through an "
+                        "unlocked category"));
             }
 
-            published = d->archive.publishExactPreparedStage(
-                archiveStagePath, archivePath,
-                prepared.assets.constFirst().container.size,
-                prepared.assets.constFirst().container.sha256);
-        }
-        else
-        {
-            PrivacyCasualArchiveStage archiveStage = d->archive.resumeStagedArchive(
-                archiveStagePath, archivePath,
-                prepared.assets.constFirst().container.size,
-                prepared.assets.constFirst().container.sha256, password);
-            published = archiveStage.isValid() &&
-                        d->archive.publishNew(&archiveStage);
-        }
-
-        if (!published)
-        {
-            return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
-                        QStringLiteral("cannot publish verified archive"));
+            if (!PrivacyStrongObjectBackend::publishObjects(
+                    request.vaultPlaintextRoot, strongStagedRelative,
+                    strongFinalRelative, strongMembers,
+                    prepared.assets.constFirst().container.size,
+                    prepared.assets.constFirst().container.sha256,
+                    &strongDetail) ||
+                !PrivacyStrongObjectBackend::verifyObjects(
+                    request.vaultPlaintextRoot, strongFinalRelative,
+                    strongMembers,
+                    prepared.assets.constFirst().container.size,
+                    prepared.assets.constFirst().container.sha256,
+                    &strongDetail))
+            {
+                return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                            strongDetail);
+            }
         }
     }
-
-    if (!stableFileFact(archivePath, nullptr, &finalArchiveFact) ||
-        !sameFact(finalArchiveFact, prepared.assets.constFirst().container) ||
-        (!d->durableReplay &&
-         !verifyArchiveMember(d->archive, prepared, archivePath, password)))
+    else
     {
-        return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
-                    QStringLiteral("published archive fails exact verification"));
+        PrivacyJournalObjectFact finalArchiveFact;
+
+        if (!stableFileFact(archivePath, nullptr, &finalArchiveFact))
+        {
+            bool published = false;
+
+            if (d->durableReplay)
+            {
+                if (!QFileInfo::exists(archiveStagePath))
+                {
+                    return fail(
+                        PrivacyStillItemTransactionStatus::AuthenticationRequired,
+                        QStringLiteral(
+                            "Prepared Protect archive stage must be recreated"));
+                }
+
+                published = d->archive.publishExactPreparedStage(
+                    archiveStagePath, archivePath,
+                    prepared.assets.constFirst().container.size,
+                    prepared.assets.constFirst().container.sha256);
+            }
+            else
+            {
+                PrivacyCasualArchiveStage archiveStage =
+                    d->archive.resumeStagedArchive(
+                        archiveStagePath, archivePath,
+                        prepared.assets.constFirst().container.size,
+                        prepared.assets.constFirst().container.sha256,
+                        password);
+                published = archiveStage.isValid() &&
+                            d->archive.publishNew(&archiveStage);
+            }
+
+            if (!published)
+            {
+                return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                            QStringLiteral("cannot publish verified archive"));
+            }
+        }
+
+        if (!stableFileFact(archivePath, nullptr, &finalArchiveFact) ||
+            !sameFact(finalArchiveFact,
+                      prepared.assets.constFirst().container) ||
+            (!d->durableReplay &&
+             !verifyArchiveMember(d->archive, prepared, archivePath,
+                                  password)))
+        {
+            return fail(PrivacyStillItemTransactionStatus::ArchiveFailure,
+                        QStringLiteral(
+                            "published archive fails exact verification"));
+        }
     }
 
     if (d->fault(PrivacyStillItemFaultPoint::AfterArchivePublished))
@@ -2830,9 +2996,14 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
     PrivacyContainer container;
     container.uuid = containerUuid;
     container.itemUuid = itemUuid;
-    container.kind = PrivacyContainerKind::CasualArchive;
-    container.rootUuid = request.publicRoot.uuid;
-    container.objectRelativePath = archiveRelativePath;
+    container.kind = strongBackend ? PrivacyContainerKind::StrongObject
+                                   : PrivacyContainerKind::CasualArchive;
+    container.rootUuid = strongBackend ? QString()
+                                       : request.publicRoot.uuid;
+    container.storeUuid = strongBackend ? request.strongStoreUuid
+                                        : QString();
+    container.objectRelativePath = strongBackend ? strongFinalRelative
+                                                 : archiveRelativePath;
     container.protectedSize = prepared.assets.constFirst().container.size;
     container.protectedHashAlgorithm = QLatin1String("sha256");
     container.protectedHash = QString::fromLatin1(
@@ -2910,7 +3081,7 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
         completedTransaction.state = PrivacyTransactionState::Complete;
         completedTransaction.generation = 2;
         completedTransaction.payloadData = encodePreparedPayload(
-            prepared, archiveStageRelativePath, originalModificationDate,
+            prepared, payloadStageRelative, originalModificationDate,
             protectMetadata);
         completedTransaction.updatedAt = QDateTime::currentDateTimeUtc();
 

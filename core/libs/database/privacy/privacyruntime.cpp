@@ -925,14 +925,62 @@ bool validateProtectedItemFacts(
         return false;
     }
 
-    if ((category.backend != PrivacyBackend::Casual) ||
-        (container.kind != PrivacyContainerKind::CasualArchive) ||
-        container.rootUuid.isEmpty())
+    QString originalRootUuid;
+
+    if (category.backend == PrivacyBackend::Casual)
+    {
+        if ((container.kind != PrivacyContainerKind::CasualArchive) ||
+            container.rootUuid.isEmpty())
+        {
+            return false;
+        }
+
+        originalRootUuid = container.rootUuid;
+    }
+    else if (category.backend == PrivacyBackend::Strong)
+    {
+        if ((container.kind != PrivacyContainerKind::StrongObject) ||
+            !container.rootUuid.isEmpty() || container.storeUuid.isEmpty())
+        {
+            return false;
+        }
+
+        bool originalsBindingFound = false;
+
+        for (const PrivacyStoreBinding& binding : snapshot.storeBindings)
+        {
+            if ((binding.categoryUuid == category.uuid) &&
+                (binding.role == PrivacyStoreRole::Originals) &&
+                (binding.storeUuid == container.storeUuid))
+            {
+                originalsBindingFound = true;
+                break;
+            }
+        }
+
+        if (!originalsBindingFound)
+        {
+            return false;
+        }
+
+        for (const PrivacyStore& store : snapshot.stores)
+        {
+            if (store.uuid == container.storeUuid)
+            {
+                originalRootUuid = store.rootUuid;
+                break;
+            }
+        }
+
+        if (originalRootUuid.isEmpty())
+        {
+            return false;
+        }
+    }
+    else
     {
         return false;
     }
-
-    const QString originalRootUuid = container.rootUuid;
 
     QSet<QString> assetIdentities;
     QSet<QString> publicRootUuids;
@@ -999,7 +1047,8 @@ bool validateProtectedItemFacts(
     facts->publicRelativePath = primary.publicRelativePath;
     facts->originalRootUuid = originalRootUuid;
     facts->expectedProxySize = primary.proxySize;
-    facts->originalInspectable = true;
+    facts->originalInspectable =
+        (category.backend == PrivacyBackend::Casual);
     facts->rootUuids = requiredRootUuids;
 
     return true;

@@ -122,6 +122,10 @@ public:
     PrivacyJournalRootExpectation rootExpectation;
     QSize originalPixelSize;
     QDateTime originalCreationDate;
+    // Strong categories only: mounted Originals vault context supplied by the
+    // authenticated category session.
+    QString vaultPlaintextRoot;
+    QString strongStoreUuid;
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyStillUnprotectRequest
