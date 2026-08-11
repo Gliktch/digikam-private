@@ -123,6 +123,9 @@ public:
         PrivacyUnlockedThumbnailMode mode)                                                                        const;
     bool updatePrivacyCategoryTagVisibilityMode(const QString& uuid,
                                                 PrivacyTagVisibilityMode mode)                                     const;
+    bool updatePrivacyContainerCredentialGeneration(const QString& containerUuid,
+                                                    qlonglong generation,
+                                                    qlonglong expectedGeneration)                                const;
 
     bool insertPrivacyItem(const PrivacyItem& item)                                                                const;
     bool getPrivacyItems(QList<PrivacyItem>* items)                                                                const;

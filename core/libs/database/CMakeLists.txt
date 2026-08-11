@@ -109,6 +109,7 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycasualoriginalreader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacystrongoriginalreader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacystrongpasswordrewrap.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycasualpasswordrewrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyexternalcheckouttransaction.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycontracts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacymanagedrootprovisioner.cpp

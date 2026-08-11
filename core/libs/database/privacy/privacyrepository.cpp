@@ -145,6 +145,16 @@ bool PrivacyRepository::setCategoryTagVisibilityMode(
     return access.db()->updatePrivacyCategoryTagVisibilityMode(normalized, mode);
 }
 
+bool PrivacyRepository::updateContainerCredentialGeneration(
+    const QString& containerUuid, qlonglong generation,
+    qlonglong expectedGeneration) const
+{
+    CoreDbAccess access;
+
+    return access.db()->updatePrivacyContainerCredentialGeneration(
+        normalizedUuid(containerUuid), generation, expectedGeneration);
+}
+
 bool PrivacyRepository::addCredential(const PrivacyCredential& credential) const
 {
     PrivacyCredential normalized = credential;

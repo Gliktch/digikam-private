@@ -340,6 +340,28 @@ bool CoreDB::updatePrivacyCategoryTagVisibilityMode(
     return (query.isActive() && (query.numRowsAffected() == 1));
 }
 
+bool CoreDB::updatePrivacyContainerCredentialGeneration(
+    const QString& containerUuid, qlonglong generation,
+    qlonglong expectedGeneration) const
+{
+    if (containerUuid.isEmpty() || (generation < 0) ||
+        (expectedGeneration < 0) || (generation <= expectedGeneration))
+    {
+        return false;
+    }
+
+    QVariantList values;
+    values << generation << containerUuid << expectedGeneration;
+
+    const QSqlQuery query = d->db->execQuery(
+        QString::fromUtf8(
+            "UPDATE PrivacyContainers SET credentialGeneration=? "
+            "WHERE uuid=? AND credentialGeneration=?;"),
+        values);
+
+    return (query.isActive() && (query.numRowsAffected() == 1));
+}
+
 bool CoreDB::insertPrivacyItem(const PrivacyItem& item) const
 {
     if (!item.isValid())

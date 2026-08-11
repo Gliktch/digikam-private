@@ -56,6 +56,9 @@ public:
     bool setCategoryTagVisibilityMode(const QString& uuid,
                                       PrivacyTagVisibilityMode mode,
                                       bool categoryAuthenticationVerified) const;
+    bool updateContainerCredentialGeneration(const QString& containerUuid,
+                                             qlonglong generation,
+                                             qlonglong expectedGeneration) const;
 
     bool addCredential(const PrivacyCredential& credential) const;
     bool addStorageRoot(const PrivacyStorageRoot& root) const;
