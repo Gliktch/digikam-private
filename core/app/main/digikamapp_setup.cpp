@@ -216,6 +216,24 @@ void DigikamApp::setupActions()
             this, &DigikamApp::slotPrivacyCategories);
     ac->addAction(QLatin1String("privacy_categories"), privacyCategoriesAction);
 
+    QAction* const importProfileAction = new QAction(
+        QIcon::fromTheme(QLatin1String("document-import")),
+        i18nc("@action: setup", "Import digiKam Profile..."), this);
+    importProfileAction->setWhatsThis(
+        i18nc("@info: setup", "Import a stock or digiKam Private profile into this isolated application profile."));
+    connect(importProfileAction, &QAction::triggered,
+            this, &DigikamApp::slotImportProfile);
+    ac->addAction(QLatin1String("privacy_import_profile"), importProfileAction);
+
+    QAction* const restoreProfileAction = new QAction(
+        QIcon::fromTheme(QLatin1String("edit-undo")),
+        i18nc("@action: setup", "Restore Previous Profile..."), this);
+    restoreProfileAction->setWhatsThis(
+        i18nc("@info: setup", "Restore a verified profile backup retained before an earlier import."));
+    connect(restoreProfileAction, &QAction::triggered,
+            this, &DigikamApp::slotRestorePreviousProfile);
+    ac->addAction(QLatin1String("privacy_restore_profile"), restoreProfileAction);
+
     d->solidCameraActionGroup   = new QActionGroup(this);
     connect(d->solidCameraActionGroup, SIGNAL(triggered(QAction*)),
             this, SLOT(slotOpenSolidCamera(QAction*)));

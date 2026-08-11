@@ -17,6 +17,7 @@
 // Local includes
 
 #include "privacycategorysettingsdialog.h"
+#include "privacyprofileimportdialog.h"
 
 namespace Digikam
 {
@@ -40,6 +41,25 @@ void DigikamApp::slotPrivacyCategories()
 {
     PrivacyCategorySettingsDialog dialog(this);
     dialog.exec();
+}
+
+void DigikamApp::slotImportProfile()
+{
+    PrivacyProfileImportDialog dialog(false, this);
+    dialog.exec();
+
+    if (dialog.publicationPrepared())
+    {
+        QTimer::singleShot(0, qApp, &QCoreApplication::quit);
+    }
+}
+
+void DigikamApp::slotRestorePreviousProfile()
+{
+    if (PrivacyProfileImportDialog::restorePreviousProfile(this))
+    {
+        QTimer::singleShot(0, qApp, &QCoreApplication::quit);
+    }
 }
 
 void DigikamApp::slotSetupChanged()

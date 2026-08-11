@@ -16,6 +16,8 @@
 
 // Qt includes
 
+#include <QDateTime>
+#include <QList>
 #include <QString>
 
 // Local includes
@@ -49,6 +51,18 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyProfilePublicationResult
     QString error;
 };
 
+struct DIGIKAM_DATABASE_EXPORT PrivacyProfileBackup
+{
+    QString               transactionUuid;
+    QString               transactionDirectory;
+    QString               backupDirectory;
+    QString               configFilePath;
+    QString               coreDatabasePath;
+    QString               thumbnailDatabasePath;
+    QDateTime             createdAt;
+    PrivacyProfileSummary summary;
+};
+
 class DIGIKAM_DATABASE_EXPORT PrivacyProfilePublication
 {
 public:
@@ -63,6 +77,11 @@ public:
 
     static PrivacyProfilePublicationResult applyPending(const QString& transactionHome);
     static PrivacyProfilePublicationResult applyPendingFromEnvironment();
+    static QList<PrivacyProfileBackup> restorableBackups(const QString& transactionHome);
+    static PrivacyProfilePublicationResult prepareRestore(
+        const PrivacyProfileBackup& backup,
+        const PrivacyProfilePaths& target,
+        const Progress& progress = Progress());
 };
 
 } // namespace Digikam

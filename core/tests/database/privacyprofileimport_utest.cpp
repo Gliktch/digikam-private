@@ -49,6 +49,7 @@ private Q_SLOTS:
     void testInterruptedPublicationReplays();
     void testIncompletePreparationIsIgnored();
     void testConflictingDisplacedFileBlocksReplay();
+    void testCompletedPublicationCanBeRestored();
 };
 
 namespace
@@ -569,6 +570,39 @@ void PrivacyProfileImportTest::testConflictingDisplacedFileBlocksReplay()
     QVERIFY(!result.success);
     QVERIFY(result.error.contains(QLatin1String("conflicting displaced")));
     QCOMPARE(databaseMarker(paths.coreDatabasePath), QLatin1String("target"));
+}
+
+void PrivacyProfileImportTest::testCompletedPublicationCanBeRestored()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const PrivacyProfilePaths paths = fixtureProfilePaths(directory.path());
+    QVERIFY(QDir().mkpath(paths.configHome));
+    QVERIFY(QDir().mkpath(paths.dataHome));
+    QVERIFY(createFullP1Database(paths.coreDatabasePath));
+    QVERIFY(setDatabaseMarker(paths.coreDatabasePath, QLatin1String("original")));
+    QVERIFY(writeTextFile(paths.configFilePath,
+                          QByteArray("[General Settings]\nVersion=original\n")));
+    const QString candidatePath = directory.filePath(QLatin1String("candidate.db"));
+    QVERIFY(createFullP1Database(candidatePath));
+    QVERIFY(setDatabaseMarker(candidatePath, QLatin1String("replacement")));
+
+    const PrivacyProfilePublicationResult prepared = PrivacyProfilePublication::prepare(
+        fixtureStage(candidatePath), paths);
+    QVERIFY2(prepared.success, qPrintable(prepared.error));
+    QVERIFY(PrivacyProfilePublication::applyPending(paths.transactionHome).success);
+    QCOMPARE(databaseMarker(paths.coreDatabasePath), QLatin1String("replacement"));
+
+    const QList<PrivacyProfileBackup> backups =
+        PrivacyProfilePublication::restorableBackups(paths.transactionHome);
+    QCOMPARE(backups.size(), 1);
+    QCOMPARE(databaseMarker(backups.constFirst().coreDatabasePath),
+             QLatin1String("original"));
+    const PrivacyProfilePublicationResult restore =
+        PrivacyProfilePublication::prepareRestore(backups.constFirst(), paths);
+    QVERIFY2(restore.success, qPrintable(restore.error));
+    QVERIFY(PrivacyProfilePublication::applyPending(paths.transactionHome).success);
+    QCOMPARE(databaseMarker(paths.coreDatabasePath), QLatin1String("original"));
 }
 
 QTEST_GUILESS_MAIN(PrivacyProfileImportTest)

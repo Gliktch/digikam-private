@@ -471,7 +471,10 @@ bool prepareCandidateConfig(const QString& sourceSettingsPath,
     group.writePathEntry(QLatin1String("Database Name Face"), target.dataHome);
     group.writePathEntry(QLatin1String("Database Name Similarity"), target.dataHome);
     group.writeEntry(QLatin1String("Database WAL Mode"), true);
+    KConfigGroup importGroup(config, QLatin1String("Private Profile Import"));
+    importGroup.writeEntry(QLatin1String("ShowOnStartup"), false);
     group.sync();
+    importGroup.sync();
     config->sync();
 
     return true;
@@ -632,6 +635,10 @@ PrivacyProfilePublicationResult PrivacyProfilePublication::prepare(
         target.thumbnailDatabasePath, target.dataHome,
         QDir(result.backupDirectory).filePath(QLatin1String("data")),
         QLatin1String("thumbnails-digikam.db"));
+    const QString backupConfig = backupPathFor(
+        target.configFilePath, target.configHome,
+        QDir(result.backupDirectory).filePath(QLatin1String("config")),
+        QLatin1String("digikamrc"));
 
     if (QFileInfo::exists(target.coreDatabasePath))
     {
@@ -661,6 +668,8 @@ PrivacyProfilePublicationResult PrivacyProfilePublication::prepare(
         { QLatin1String("format"), QLatin1String(ManifestFormat) },
         { QLatin1String("version"), ManifestVersion },
         { QLatin1String("uuid"), result.transactionUuid },
+        { QLatin1String("createdAt"),
+          QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) },
         { QLatin1String("phase"), QLatin1String("ready") },
         { QLatin1String("candidateCore"), candidateCore },
         { QLatin1String("candidateThumbs"),
@@ -671,6 +680,7 @@ PrivacyProfilePublicationResult PrivacyProfilePublication::prepare(
         { QLatin1String("targetConfig"), target.configFilePath },
         { QLatin1String("targetDataHome"), target.dataHome },
         { QLatin1String("backupDirectory"), result.backupDirectory },
+        { QLatin1String("backupConfig"), backupConfig },
         { QLatin1String("backupCore"), backupCore },
         { QLatin1String("backupThumbs"), backupThumbs }
     };
@@ -833,6 +843,81 @@ PrivacyProfilePublicationResult PrivacyProfilePublication::applyPendingFromEnvir
     }
 
     return applyPending(transactionHome);
+}
+
+QList<PrivacyProfileBackup> PrivacyProfilePublication::restorableBackups(
+    const QString& transactionHome)
+{
+    QList<PrivacyProfileBackup> backups;
+    const QDir home(transactionHome);
+    const QStringList transactions = home.entryList(
+        QStringList { QLatin1String("pending-*") }, QDir::Dirs | QDir::NoDotAndDotDot,
+        QDir::Time | QDir::Reversed);
+
+    for (const QString& name : transactions)
+    {
+        const QString transactionDirectory = home.filePath(name);
+        QJsonObject manifest;
+        QString error;
+
+        if (!readManifest(QDir(transactionDirectory).filePath(
+                              QLatin1String(ManifestFileName)),
+                          &manifest, &error) ||
+            (manifest.value(QLatin1String("phase")).toString() !=
+             QLatin1String("complete")))
+        {
+            continue;
+        }
+
+        PrivacyProfileBackup backup;
+        backup.transactionUuid = manifest.value(QLatin1String("uuid")).toString();
+        backup.transactionDirectory = transactionDirectory;
+        backup.backupDirectory = manifest.value(QLatin1String("backupDirectory")).toString();
+        backup.configFilePath = manifest.value(QLatin1String("backupConfig")).toString();
+        backup.coreDatabasePath = manifest.value(QLatin1String("backupCore")).toString();
+        backup.thumbnailDatabasePath = manifest.value(QLatin1String("backupThumbs")).toString();
+        backup.createdAt = QDateTime::fromString(
+            manifest.value(QLatin1String("createdAt")).toString(), Qt::ISODateWithMs);
+        backup.summary = PrivacyProfileInspector::inspectCoreDatabase(
+            backup.coreDatabasePath, backup.configFilePath,
+            backup.thumbnailDatabasePath);
+
+        if (backup.summary.isPrivateProfile() && backup.summary.integrityOk &&
+            (backup.summary.incompletePrivacyTransactionCount == 0) &&
+            QFileInfo::exists(backup.configFilePath))
+        {
+            backups << backup;
+        }
+    }
+
+    return backups;
+}
+
+PrivacyProfilePublicationResult PrivacyProfilePublication::prepareRestore(
+    const PrivacyProfileBackup& backup,
+    const PrivacyProfilePaths& target,
+    const Progress& progress)
+{
+    PrivacyProfileImportStageResult staged;
+    staged.success = backup.summary.isPrivateProfile() && backup.summary.integrityOk &&
+                     (backup.summary.incompletePrivacyTransactionCount == 0) &&
+                     QFileInfo::exists(backup.coreDatabasePath) &&
+                     QFileInfo::exists(backup.configFilePath);
+    staged.candidateCoreDatabasePath = backup.coreDatabasePath;
+    staged.candidateSummary = backup.summary;
+    staged.thumbnailDatabaseIncluded = QFileInfo::exists(backup.thumbnailDatabasePath);
+    staged.candidateThumbnailDatabasePath = staged.thumbnailDatabaseIncluded
+                                          ? backup.thumbnailDatabasePath
+                                          : QString();
+
+    if (!staged.success)
+    {
+        PrivacyProfilePublicationResult result;
+        result.error = QLatin1String("The selected profile backup is not restorable");
+        return result;
+    }
+
+    return prepare(staged, target, backup.configFilePath, progress);
 }
 
 } // namespace Digikam

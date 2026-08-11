@@ -116,6 +116,7 @@ using namespace Magick;
 #include "dfileoperations.h"
 #include "privacyruntime.h"
 #include "privacyprofilepublication.h"
+#include "privacyprofileimportdialog.h"
 #include "privacythreadimagestillitemtransactionowner.h"
 
 #ifdef Q_OS_WIN
@@ -808,6 +809,14 @@ MAIN_EXPORT int MAIN_FN(int argc, char** argv)
 
     QString            firstAlbumPath;
     DbEngineParameters params;
+
+    const PrivacyProfileImportOfferResult importOffer =
+        PrivacyProfileImportDialog::offerAtStartup();
+
+    if (importOffer == PrivacyProfileImportOfferResult::PublicationPrepared)
+    {
+        return 0;
+    }
 
     // Run the first run assistant if we have no or very old config
 

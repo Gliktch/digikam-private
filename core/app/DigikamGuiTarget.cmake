@@ -25,6 +25,7 @@ set(libdigikamgui_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/main/privacythreadimagestillitemcachegate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/main/privacythreadimagestillitemtransactionowner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/main/privacycategorysettingsdialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/main/privacyprofileimportdialog.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/date/dpopupframe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/date/ddateedit.cpp
