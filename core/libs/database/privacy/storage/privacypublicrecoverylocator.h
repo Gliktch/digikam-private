@@ -68,4 +68,50 @@ public:
         PrivacyPublicRecoveryLocatorError* error = nullptr);
 };
 
+/**
+ * Best-effort, non-authoritative persistence of the root recovery locator.
+ * Missing file means no hints; writes are atomic (temp + rename) and refuse
+ * symlinked metadata paths. Callers must never treat a failure here as a
+ * data-safety failure: archives/vaults and the encrypted manifests remain the
+ * authoritative recovery evidence.
+ */
+class DIGIKAM_DATABASE_EXPORT PrivacyPublicRecoveryLocatorStore
+{
+public:
+
+    static bool load(
+        const QString& collectionRoot,
+        QList<PrivacyPublicRecoveryLocatorEntry>* entries,
+        PrivacyPublicRecoveryLocatorError* error = nullptr);
+    static bool commit(
+        const QString& collectionRoot,
+        const QList<PrivacyPublicRecoveryLocatorEntry>& entries,
+        PrivacyPublicRecoveryLocatorError* error = nullptr);
+};
+
+/** Convenience maintenance helpers for protect/unprotect/migration seams. */
+class DIGIKAM_DATABASE_EXPORT PrivacyPublicRecoveryLocatorMaintenance
+{
+public:
+
+    static bool recordProtectedProxy(
+        const PrivacyStorageRoot& publicRoot,
+        const PrivacyItem& item,
+        const PrivacyCategory& category,
+        const PrivacyAsset& primaryAsset,
+        QString* error = nullptr);
+
+    static bool removePublicPaths(
+        const PrivacyStorageRoot& publicRoot,
+        const QStringList& publicRelativePaths,
+        QString* error = nullptr);
+
+    static bool retargetProxy(
+        const PrivacyStorageRoot& publicRoot,
+        const QString& publicRelativePath,
+        const QString& newRecoverySetUuid,
+        PrivacyBackend newBackend,
+        QString* error = nullptr);
+};
+
 } // namespace Digikam

@@ -34,6 +34,7 @@
 // Local includes
 
 #include "privacymigrationcoordinator.h"
+#include "privacypublicrecoverylocator.h"
 
 using namespace Digikam;
 
@@ -754,6 +755,16 @@ void PrivacyMigrationCoordinatorTest::testCasualToStrongRetiresSource()
                                   QLatin1String(".digikam-private.zip");
     QVERIFY(QFileInfo::exists(sourceArchive));
 
+    QList<PrivacyPublicRecoveryLocatorEntry> locatorEntries;
+    PrivacyPublicRecoveryLocatorError locatorError =
+        PrivacyPublicRecoveryLocatorError::None;
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        directory.path(), &locatorEntries, &locatorError));
+    QCOMPARE(locatorEntries.size(), 1);
+    const QString sourceRecoverySetUuid =
+        locatorEntries.constFirst().recoverySetUuid;
+    QCOMPARE(locatorEntries.constFirst().backend, PrivacyBackend::Casual);
+
     PrivacyCasualArchiveEngine archiveEngine;
     PrivacyMigrationCoordinator coordinator(
         persistence, stillEngine, runtime, archiveEngine);
@@ -793,6 +804,28 @@ void PrivacyMigrationCoordinatorTest::testCasualToStrongRetiresSource()
     vaultObject.close();
     QCOMPARE(persistence.snapshot.transactions.constFirst().state,
              PrivacyTransactionState::Complete);
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        directory.path(), &locatorEntries, &locatorError));
+    QCOMPARE(locatorEntries.size(), 1);
+    QVERIFY(locatorEntries.constFirst().recoverySetUuid !=
+            sourceRecoverySetUuid);
+    QCOMPARE(locatorEntries.constFirst().backend, PrivacyBackend::Strong);
+
+    QString targetRecoverySetUuid;
+
+    for (const PrivacyCategory& candidate :
+         std::as_const(persistence.snapshot.categories))
+    {
+        if (candidate.uuid == TargetCategoryUuid)
+        {
+            targetRecoverySetUuid = candidate.recoverySetUuid;
+            break;
+        }
+    }
+
+    QVERIFY(!targetRecoverySetUuid.isEmpty());
+    QCOMPARE(locatorEntries.constFirst().recoverySetUuid,
+             targetRecoverySetUuid);
 }
 
 void PrivacyMigrationCoordinatorTest::

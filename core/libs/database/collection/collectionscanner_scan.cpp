@@ -937,6 +937,13 @@ void CollectionScanner::scanAlbum(const CollectionLocation& location, const QStr
 
 #endif
 
+            // Privacy metadata (recovery locators, markers, stores) is never
+            // ordinary media and must not be scanned as an album.
+            if (info.fileName() == QLatin1String(".digikam-private"))
+            {
+                continue;
+            }
+
             if (d->checkIgnoreDirectory(info.fileName()))
             {
                 continue;

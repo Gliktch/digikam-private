@@ -40,6 +40,7 @@
 
 #include "privacyrepository.h"
 #include "privacyproxygenerator.h"
+#include "privacypublicrecoverylocator.h"
 #include "privacystrongobjectbackend.h"
 
 namespace Digikam
@@ -1558,6 +1559,8 @@ bool PrivacyMigrationCoordinator::installTargetProxy(
         return false;
     }
 
+    QString primaryPublicRelativePath;
+
     for (const PrivacyMigrationAssetInput& input : request.assets)
     {
         const QString path = QDir(
@@ -1567,6 +1570,8 @@ bool PrivacyMigrationCoordinator::installTargetProxy(
         if ((input.role == PrivacyAsset::PrimaryMediaRole) &&
             (input.ordinal == 0))
         {
+            primaryPublicRelativePath = input.publicRelativePath;
+
             if (!writeFileAtomic(path, m_pendingProxyBytes))
             {
                 *detail = QStringLiteral(
@@ -1583,6 +1588,28 @@ bool PrivacyMigrationCoordinator::installTargetProxy(
         else
         {
             fsyncDirectory(QFileInfo(path).absolutePath());
+        }
+    }
+
+    if (!primaryPublicRelativePath.isEmpty())
+    {
+        PrivacyRepositorySnapshot targetSnapshot;
+
+        if (m_persistence.loadSnapshot(&targetSnapshot))
+        {
+            for (const PrivacyCategory& candidate :
+                 std::as_const(targetSnapshot.categories))
+            {
+                if (candidate.uuid == request.targetCategoryUuid)
+                {
+                    QString locatorDetail;
+                    PrivacyPublicRecoveryLocatorMaintenance::retargetProxy(
+                        request.publicRoot, primaryPublicRelativePath,
+                        candidate.recoverySetUuid, candidate.backend,
+                        &locatorDetail);
+                    break;
+                }
+            }
         }
     }
 

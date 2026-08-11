@@ -11,8 +11,14 @@
 // Qt includes
 
 #include <QCryptographicHash>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStringList>
+#include <QTemporaryDir>
 #include <QTest>
 
 // Local includes
@@ -56,6 +62,8 @@ private Q_SLOTS:
     void testEmptyRoundTrip();
     void testRejectsInvalidEntries();
     void testRejectsTamperedDocument();
+    void testStoreCommitLoadRoundTrip();
+    void testMaintenanceHelpers();
 };
 
 void PrivacyPublicRecoveryLocatorTest::testRoundTrip()
@@ -185,6 +193,144 @@ void PrivacyPublicRecoveryLocatorTest::testRejectsTamperedDocument()
     QVERIFY(!PrivacyPublicRecoveryLocatorCodec::decode(
         tampered, &decoded, &error));
     QCOMPARE(error, PrivacyPublicRecoveryLocatorError::Invalid);
+}
+
+void PrivacyPublicRecoveryLocatorTest::testStoreCommitLoadRoundTrip()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QList<PrivacyPublicRecoveryLocatorEntry> input = {
+        makeEntry(),
+        makeEntry(QLatin1String("album/clip.mp4"), PrivacyBackend::Strong)
+    };
+    PrivacyPublicRecoveryLocatorError error =
+        PrivacyPublicRecoveryLocatorError::None;
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::commit(
+        directory.path(), input, &error));
+    QCOMPARE(error, PrivacyPublicRecoveryLocatorError::None);
+
+    QList<PrivacyPublicRecoveryLocatorEntry> loaded;
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        directory.path(), &loaded, &error));
+    QCOMPARE(error, PrivacyPublicRecoveryLocatorError::None);
+    QCOMPARE(loaded.size(), input.size());
+    QCOMPARE(loaded.constFirst().publicRelativePath,
+             QLatin1String("album/photo.jpg"));
+    QCOMPARE(loaded.constLast().backend, PrivacyBackend::Strong);
+
+    const QString locatorPath = QDir(directory.path()).filePath(
+        PrivacyPublicRecoveryLocatorCodec::relativePath());
+    QVERIFY(QFileInfo::exists(locatorPath));
+
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::commit(
+        directory.path(), {}, &error));
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        directory.path(), &loaded, &error));
+    QCOMPARE(error, PrivacyPublicRecoveryLocatorError::None);
+    QVERIFY(loaded.isEmpty());
+
+    QTemporaryDir empty;
+    QVERIFY(empty.isValid());
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        empty.path(), &loaded, &error));
+    QCOMPARE(error, PrivacyPublicRecoveryLocatorError::None);
+    QVERIFY(loaded.isEmpty());
+}
+
+void PrivacyPublicRecoveryLocatorTest::testMaintenanceHelpers()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+
+    PrivacyStorageRoot root;
+    root.uuid = QLatin1String("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    root.kind = PrivacyStorageRootKind::AlbumRoot;
+    root.albumRootId = 7;
+    root.configuredPath = directory.path();
+    root.identityVersion = 1;
+    root.identityData = QByteArray("synthetic root identity");
+    root.createdAt = now;
+
+    PrivacyCategory category;
+    category.uuid = QLatin1String("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    category.name = QLatin1String("Synthetic");
+    category.recoverySetUuid =
+        QLatin1String("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+    category.backend = PrivacyBackend::Casual;
+    category.presentationMode = PrivacyPresentationMode::Generic;
+    category.lifecycleState = PrivacyCategoryLifecycleState::Active;
+    category.currentCredentialGeneration = 1;
+    category.createdAt = now;
+
+    PrivacyItem item;
+    item.imageId = 42;
+    item.uuid = QLatin1String("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    item.categoryUuid = category.uuid;
+    item.expectedProxySize = 321;
+    item.expectedProxyHash = QString::fromLatin1(
+        digest(QByteArray("proxy")).toHex());
+    item.presentationVersion = 1;
+    item.generation = 1;
+    item.transactionState = static_cast<int>(PrivacyTransactionState::Complete);
+
+    PrivacyAsset primary;
+    primary.itemUuid = item.uuid;
+    primary.role = PrivacyAsset::PrimaryMediaRole;
+    primary.ordinal = 0;
+    primary.originalName = QLatin1String("photo.jpg");
+    primary.publicRootUuid = root.uuid;
+    primary.publicRelativePath = QLatin1String("album/photo.jpg");
+    primary.containerUuid = QLatin1String("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+    primary.protectedRelativePath =
+        QLatin1String("digikam-private/assets/1/0/photo.jpg");
+    primary.hashAlgorithm = QLatin1String("sha256");
+    primary.originalHash = QString::fromLatin1(
+        digest(QByteArray("original")).toHex());
+    primary.originalSize = 100;
+    primary.proxyHashAlgorithm = QLatin1String("sha256");
+    primary.proxyHash = item.expectedProxyHash;
+    primary.proxySize = item.expectedProxySize;
+    primary.proxyPresentationVersion = 1;
+    primary.proxyGeneration = 1;
+
+    QString detail;
+    QVERIFY(PrivacyPublicRecoveryLocatorMaintenance::recordProtectedProxy(
+        root, item, category, primary, &detail));
+
+    QList<PrivacyPublicRecoveryLocatorEntry> entries;
+    PrivacyPublicRecoveryLocatorError error =
+        PrivacyPublicRecoveryLocatorError::None;
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        root.configuredPath, &entries, &error));
+    QCOMPARE(entries.size(), 1);
+    QCOMPARE(entries.constFirst().recoverySetUuid,
+             category.recoverySetUuid);
+    QCOMPARE(entries.constFirst().backend, PrivacyBackend::Casual);
+    QCOMPARE(entries.constFirst().placeholderIdentity,
+             QLatin1String("generic-v1"));
+    QCOMPARE(entries.constFirst().expectedPlaceholderSize,
+             item.expectedProxySize);
+
+    QVERIFY(PrivacyPublicRecoveryLocatorMaintenance::removePublicPaths(
+        root, { primary.publicRelativePath }, &detail));
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        root.configuredPath, &entries, &error));
+    QVERIFY(entries.isEmpty());
+
+    QVERIFY(PrivacyPublicRecoveryLocatorMaintenance::recordProtectedProxy(
+        root, item, category, primary, &detail));
+    QVERIFY(PrivacyPublicRecoveryLocatorMaintenance::retargetProxy(
+        root, primary.publicRelativePath,
+        QLatin1String("ffffffff-ffff-4fff-8fff-ffffffffffff"),
+        PrivacyBackend::Strong, &detail));
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        root.configuredPath, &entries, &error));
+    QCOMPARE(entries.size(), 1);
+    QCOMPARE(entries.constFirst().recoverySetUuid,
+             QLatin1String("ffffffff-ffff-4fff-8fff-ffffffffffff"));
+    QCOMPARE(entries.constFirst().backend, PrivacyBackend::Strong);
 }
 
 QTEST_GUILESS_MAIN(PrivacyPublicRecoveryLocatorTest)

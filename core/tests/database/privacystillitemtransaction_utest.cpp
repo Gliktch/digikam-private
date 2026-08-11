@@ -28,6 +28,7 @@
 #include "privacyprocessrunner.h"
 #include "privacyproxygenerator.h"
 #include "privacypublictransition.h"
+#include "privacypublicrecoverylocator.h"
 #include "privacystillitemtransaction.h"
 #include "privacystrongrecoverymanifest.h"
 #include "privacyvideoproxygenerator.h"
@@ -1014,6 +1015,8 @@ void PrivacyStillItemTransactionTest::associatedAssetsProtectUnprotectRoundTrip(
 
     FakePersistence persistence;
     persistence.snapshot.categories << category();
+    const PrivacyCategory protectedCategory =
+        persistence.snapshot.categories.constFirst();
     persistence.snapshot.storageRoots << root;
     QSharedPointer<VerifiedRoot> verifier(new VerifiedRoot);
     QSharedPointer<VerifiedIntegrity> inspector(new VerifiedIntegrity);
@@ -1110,6 +1113,19 @@ void PrivacyStillItemTransactionTest::associatedAssetsProtectUnprotectRoundTrip(
 
     QVERIFY(foundPrimary);
     QVERIFY(foundSidecar);
+
+    QList<PrivacyPublicRecoveryLocatorEntry> locatorEntries;
+    PrivacyPublicRecoveryLocatorError locatorError =
+        PrivacyPublicRecoveryLocatorError::None;
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        directory.path(), &locatorEntries, &locatorError));
+    QCOMPARE(locatorEntries.size(), 1);
+    QCOMPARE(locatorEntries.constFirst().publicRelativePath,
+             QDir(directory.path()).relativeFilePath(sourcePath));
+    QCOMPARE(locatorEntries.constFirst().recoverySetUuid,
+             protectedCategory.recoverySetUuid);
+    QCOMPARE(locatorEntries.constFirst().backend, PrivacyBackend::Casual);
+
     QVERIFY(runtime.setCategoryUnlocked(CategoryUuid, false));
 
     PrivacyStillUnprotectRequest unprotect;
@@ -1140,6 +1156,9 @@ void PrivacyStillItemTransactionTest::associatedAssetsProtectUnprotectRoundTrip(
     QVERIFY(persistence.snapshot.assets.isEmpty());
     QVERIFY(persistence.snapshot.containers.isEmpty());
     QVERIFY(persistence.snapshot.transactions.isEmpty());
+    QVERIFY(PrivacyPublicRecoveryLocatorStore::load(
+        directory.path(), &locatorEntries, &locatorError));
+    QVERIFY(locatorEntries.isEmpty());
 
     struct stat restoredPrimary = {};
     struct stat restoredSidecar = {};

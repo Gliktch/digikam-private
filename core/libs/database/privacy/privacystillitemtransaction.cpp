@@ -47,6 +47,7 @@
 #include "privacyprocessrunner.h"
 #include "privacyproxygenerator.h"
 #include "privacypublictransition.h"
+#include "privacypublicrecoverylocator.h"
 #include "privacyrepository.h"
 #include "privacyvideoproxygenerator.h"
 #include "privacyposixstorage_p.h"
@@ -3378,6 +3379,27 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::protect(
                     QStringLiteral("fault after runtime publication"));
     }
 
+    const PrivacyAsset* locatorPrimary = nullptr;
+
+    for (const PrivacyAsset& candidate : assets)
+    {
+        if ((candidate.role == PrivacyAsset::PrimaryMediaRole) &&
+            (candidate.ordinal == 0) &&
+            (candidate.publicRootUuid == request.publicRoot.uuid))
+        {
+            locatorPrimary = &candidate;
+            break;
+        }
+    }
+
+    if (locatorPrimary)
+    {
+        QString locatorDetail;
+        PrivacyPublicRecoveryLocatorMaintenance::recordProtectedProxy(
+            request.publicRoot, publishedItem, categoryValue,
+            *locatorPrimary, &locatorDetail);
+    }
+
     dbJournal = databaseJournalFor(snapshot, transactionUuid,
                                    request.publicRoot.uuid);
 
@@ -3630,6 +3652,17 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                         itemUuid,
                         QStringLiteral("cannot delete final detached DB evidence"));
         }
+
+        QStringList removedPublicPaths;
+
+        for (const PrivacyAsset& teardown : teardownAssets)
+        {
+            removedPublicPaths << teardown.publicRelativePath;
+        }
+
+        QString locatorDetail;
+        PrivacyPublicRecoveryLocatorMaintenance::removePublicPaths(
+            request.publicRoot, removedPublicPaths, &locatorDetail);
 
         PrivacyStillItemTransactionResult result;
         result.status = PrivacyStillItemTransactionStatus::Unprotected;
@@ -4564,6 +4597,17 @@ PrivacyStillItemTransactionResult PrivacyStillItemTransactionEngine::unprotect(
                     itemUuid,
                     QStringLiteral("cannot delete final detached DB evidence"));
     }
+
+    QStringList removedPublicPaths;
+
+    for (const PrivacyAsset& candidate : assets)
+    {
+        removedPublicPaths << candidate.publicRelativePath;
+    }
+
+    QString locatorDetail;
+    PrivacyPublicRecoveryLocatorMaintenance::removePublicPaths(
+        request.publicRoot, removedPublicPaths, &locatorDetail);
 
     PrivacyStillItemTransactionResult result;
     result.status = PrivacyStillItemTransactionStatus::Unprotected;
