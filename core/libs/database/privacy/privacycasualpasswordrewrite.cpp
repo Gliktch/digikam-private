@@ -27,6 +27,7 @@
 #ifdef Q_OS_UNIX
 
 #   include <fcntl.h>
+#   include <sys/statvfs.h>
 #   include <unistd.h>
 
 #endif
@@ -42,6 +43,7 @@ namespace
 {
 
 constexpr qsizetype MaximumConfigBytes = 1024 * 1024;
+constexpr qlonglong SpaceMarginBytes = 64LL * 1024 * 1024;
 
 PrivacyCasualPasswordRewriteResult failure(
     PrivacyCasualPasswordRewriteStatus status, const QString& detail,
@@ -272,6 +274,129 @@ PrivacyCasualPasswordRewriteEngine::PrivacyCasualPasswordRewriteEngine(
       m_storeBackend(storeBackend),
       m_archiveEngine(archiveEngine)
 {
+}
+
+qlonglong PrivacyCasualPasswordRewriteEngine::requiredSpaceForLargestArchive(
+    qlonglong largestArchiveBytes)
+{
+    if (largestArchiveBytes <= 0)
+    {
+        return 0;
+    }
+
+    return (largestArchiveBytes * 2) + SpaceMarginBytes;
+}
+
+PrivacyCasualPasswordRewriteSpaceCheck
+PrivacyCasualPasswordRewriteEngine::checkSpace(
+    const QString& categoryUuid) const
+{
+    PrivacyCasualPasswordRewriteSpaceCheck check;
+    PrivacyRepositorySnapshot snapshot;
+
+    if (!m_persistence.loadSnapshot(&snapshot))
+    {
+        check.detail = QStringLiteral(
+            "the privacy catalogue could not be read");
+        return check;
+    }
+
+    Bundle bundle;
+    PrivacyCasualPasswordRewriteResult bundleResult;
+
+    if (!loadBundle(snapshot, categoryUuid, &bundle, &bundleResult))
+    {
+        check.detail = bundleResult.detail;
+        return check;
+    }
+
+    const QList<PendingContainer> containers =
+        pendingContainers(snapshot, bundle);
+
+    if (containers.isEmpty())
+    {
+        check.valid = true;
+        check.requiredBytes = 0;
+        check.availableBytes = 0;
+        check.insufficient = false;
+        return check;
+    }
+
+    QString largestDirectory;
+    qlonglong largestSize = -1;
+
+    for (const PendingContainer& pending : containers)
+    {
+        const PrivacyStorageRoot* publicRoot = nullptr;
+
+        for (const PrivacyStorageRoot& candidate :
+             std::as_const(snapshot.storageRoots))
+        {
+            if (candidate.uuid == pending.container.rootUuid)
+            {
+                publicRoot = &candidate;
+                break;
+            }
+        }
+
+        if (!publicRoot)
+        {
+            continue;
+        }
+
+        const QString archivePath = QDir(
+            publicRoot->configuredPath).filePath(
+                pending.container.objectRelativePath);
+        const QFileInfo info(archivePath);
+
+        if (!info.isFile())
+        {
+            check.detail = QStringLiteral(
+                "a pending Casual archive is missing");
+            return check;
+        }
+
+        if (info.size() > largestSize)
+        {
+            largestSize = info.size();
+            largestDirectory = info.absolutePath();
+        }
+    }
+
+    if (largestSize < 0)
+    {
+        check.detail = QStringLiteral(
+            "no pending Casual archives were found");
+        return check;
+    }
+
+    check.largestArchiveBytes = largestSize;
+    check.requiredBytes =
+        requiredSpaceForLargestArchive(largestSize);
+
+#ifdef Q_OS_UNIX
+    struct statvfs volume = {};
+
+    if (::statvfs(QFile::encodeName(largestDirectory).constData(),
+                  &volume) != 0)
+    {
+        check.detail = QStringLiteral(
+            "the archive volume could not be queried");
+        return check;
+    }
+
+    check.availableBytes =
+        static_cast<qlonglong>(volume.f_bavail) *
+        static_cast<qlonglong>(volume.f_frsize);
+#else
+    check.availableBytes = -1;
+#endif
+
+    check.valid = true;
+    check.insufficient =
+        (check.availableBytes >= 0) &&
+        (check.availableBytes < check.requiredBytes);
+    return check;
 }
 
 bool PrivacyCasualPasswordRewriteEngine::loadBundle(

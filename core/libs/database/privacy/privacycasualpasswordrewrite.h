@@ -50,6 +50,16 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyCasualPasswordRewriteResult
     QString detail;
 };
 
+struct DIGIKAM_DATABASE_EXPORT PrivacyCasualPasswordRewriteSpaceCheck
+{
+    bool     valid = false;
+    qlonglong largestArchiveBytes = -1;
+    qlonglong requiredBytes = -1;
+    qlonglong availableBytes = -1;
+    bool     insufficient = false;
+    QString  detail;
+};
+
 /**
  * Durable seams for one atomic Casual category password rewrite. The
  * ChangePassword transaction is begun before any archive changes; every
@@ -131,6 +141,15 @@ public:
         const QString& categoryUuid,
         const PrivacyPassword& oldPassword,
         const PrivacyPassword& newPassword);
+
+    /** Non-blocking preflight for the archive rewrite phase. The rewrite
+     * keeps the old archive until the atomic exchange, so the required free
+     * space is about twice the largest pending archive plus a small margin. */
+    PrivacyCasualPasswordRewriteSpaceCheck checkSpace(
+        const QString& categoryUuid) const;
+
+    static qlonglong requiredSpaceForLargestArchive(
+        qlonglong largestArchiveBytes);
 
 private:
 

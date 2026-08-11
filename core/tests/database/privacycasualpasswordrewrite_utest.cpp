@@ -428,6 +428,7 @@ private Q_SLOTS:
     void testRewritesAllArchivesAndPublishesCredential();
     void testInterruptedApplyingResumesRemainingArchives();
     void testMissingArchiveLeavesRecoverableTransaction();
+    void testSpacePreflight();
 };
 
 void PrivacyCasualPasswordRewriteTest::
@@ -551,6 +552,44 @@ void PrivacyCasualPasswordRewriteTest::
     QVERIFY2(recovered.succeeded(), qPrintable(recovered.detail));
     QCOMPARE(persistence.snapshot.containers.constFirst()
                  .credentialGeneration, 2);
+}
+
+void PrivacyCasualPasswordRewriteTest::testSpacePreflight()
+{
+    QTemporaryDir publicRoot;
+    QTemporaryDir managedRoot;
+    QVERIFY(publicRoot.isValid());
+    QVERIFY(managedRoot.isValid());
+    const PrivacyPassword oldPassword =
+        PrivacyPassword::fromUnicode(QLatin1String("old-pass"));
+    createOldArchive(publicRoot.path(), oldPassword);
+    const QString archivePath = QDir(publicRoot.path()).filePath(
+        QLatin1String("album/photo.jpg.digikam-private.zip"));
+    const qlonglong archiveSize = QFileInfo(archivePath).size();
+
+    FakePersistence persistence;
+    FakeStoreBackend backend;
+    seedBundle(&persistence, publicRoot.path(), managedRoot.path(),
+               makeContainer());
+    PrivacyCasualArchiveEngine archiveEngine;
+    PrivacyCasualPasswordRewriteEngine engine(
+        persistence, backend, archiveEngine);
+
+    const PrivacyCasualPasswordRewriteSpaceCheck check =
+        engine.checkSpace(CategoryUuid);
+    QVERIFY2(check.valid, qPrintable(check.detail));
+    QCOMPARE(check.largestArchiveBytes, archiveSize);
+    QCOMPARE(check.requiredBytes,
+             PrivacyCasualPasswordRewriteEngine::
+                 requiredSpaceForLargestArchive(archiveSize));
+    QVERIFY(check.availableBytes > 0);
+    QVERIFY(!check.insufficient);
+
+    QCOMPARE(PrivacyCasualPasswordRewriteEngine::
+                 requiredSpaceForLargestArchive(0), 0);
+    QCOMPARE(PrivacyCasualPasswordRewriteEngine::
+                 requiredSpaceForLargestArchive(1000),
+             2000LL + (64LL * 1024 * 1024));
 }
 
 QTEST_GUILESS_MAIN(PrivacyCasualPasswordRewriteTest)
