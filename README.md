@@ -1,20 +1,38 @@
 # digiKam Private
 
-This repository contains the unreleased v1.0.0 candidate of a privacy-focused
-digiKam fork. It replaces protected collection files with safe display proxies
-while retaining recoverable encrypted originals. See
+This repository contains a privacy-focused digiKam fork. It replaces protected
+collection files with safe display proxies while retaining recoverable
+encrypted originals. See
 [backup and recovery](docs/PRIVATE-RECOVERY.md) before testing it with valuable
 media.
 
 The fork is based on digiKam's 9.2 development branch. It is not an official
-digiKam release. The first candidate targets Linux AppImage delivery and should
-be tested with disposable or fully backed-up collections before wider use.
+digiKam release. The initial v1 release targets Linux x86-64 AppImage delivery
+and should be tested with disposable or fully backed-up collections before
+wider use.
 
 V1 intentionally exposes only **Casual Privacy** categories. Their ZipCrypto
 archives are designed to remain externally recoverable and are not strong
 encryption against a determined attacker. Strong categories, several optional
 external plug-ins and broader platform/UI automation remain v1.1 work; there is
 no forgotten-password cracking or recovery UI.
+
+## Download and run
+
+Download the AppImage and its checksum from this repository's
+[Releases](https://github.com/gliktch/digikam-private/releases), verify the
+checksum, make the AppImage executable, and run it:
+
+```sh
+sha256sum --check sha256_release.sum
+chmod +x digiKam-Private-*.appimage
+./digiKam-Private-*.appimage
+```
+
+Fork-specific bugs belong in this repository's
+[issue tracker](https://github.com/gliktch/digikam-private/issues). The original
+digiKam project and source repository remain at
+[invent.kde.org](https://invent.kde.org/graphics/digikam).
 
 ---
 
@@ -24,8 +42,6 @@ no forgotten-password cracking or recovery UI.
 |---------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Gitlab Builds | [![Gitlab Builds Status](https://invent.kde.org/graphics/digikam/badges/master/pipeline.svg)](https://invent.kde.org/graphics/digikam/-/pipelines)                                                      |
 | Coverity Scan | [![Coverity Scan Status](https://scan.coverity.com/projects/285/badge.svg)](https://scan.coverity.com/projects/digikam)                                                                                 |
-
-If you are reading this on Github, be aware that this is an out-dated mirror. Our real code repository [is located here](https://invent.kde.org/graphics/digikam)
 
 Developers, if you want to contribute, see the project [Contribute Page](https://www.digikam.org/contribute/)
 
@@ -93,6 +109,11 @@ See [AUTHORS](AUTHORS) file for details.
 If you have questions, comments, and suggestions see the project [Support Page](https://www.digikam.org/support/).
 
 # Bug reports
+
+Report digiKam Private bugs to the fork's
+[GitHub issue tracker](https://github.com/gliktch/digikam-private/issues).
+Use the upstream channels below only for issues reproducible in unmodified
+digiKam.
 
 IMPORTANT: the bug reports and wishlist entries are hosted by the Bugzilla
 system which can be reached from the standard Help menu of digiKam.
