@@ -441,6 +441,8 @@ private Q_SLOTS:
 
     void testPasswordBoundary();
     void testOpaqueEnvelopeBoundary();
+    void testSentinelCodec();
+    void testInspectionMount();
     void testCapabilitiesFailClosed();
     void testSyntheticLifecycle();
     void testMountFailuresFailClosed();
@@ -497,6 +499,81 @@ void PrivacyStorageTest::testOpaqueEnvelopeBoundary()
     QVERIFY(!PrivacyGocryptfsEnvelope::fromOpaqueConfig(
         QLatin1String("gocryptfs-config-v2"), QByteArray((1024 * 1024) + 1, 'x'),
         &error).isValid());
+}
+
+void PrivacyStorageTest::testSentinelCodec()
+{
+    const QString category =
+        QLatin1String("11111111-1111-4111-8111-111111111111");
+    const QString store =
+        QLatin1String("22222222-2222-4222-8222-222222222222");
+    const QByteArray bytes =
+        PrivacyGocryptfsSentinelCodec::encode(category, store);
+    QVERIFY(!bytes.isEmpty());
+
+    QString categoryOut;
+    QString storeOut;
+    QVERIFY(PrivacyGocryptfsSentinelCodec::decode(
+        bytes, &categoryOut, &storeOut));
+    QCOMPARE(categoryOut, category);
+    QCOMPARE(storeOut, store);
+
+    QByteArray tampered = bytes;
+    tampered.replace(QLatin1String("digikam-private-store-sentinel-v1"),
+                     QLatin1String("other"));
+    QVERIFY(!PrivacyGocryptfsSentinelCodec::decode(
+        tampered, &categoryOut, &storeOut));
+
+    QJsonObject invalid;
+    invalid.insert(QLatin1String("kind"),
+                   QLatin1String("digikam-private-store-sentinel-v1"));
+    invalid.insert(QLatin1String("formatVersion"), 1);
+    invalid.insert(QLatin1String("categoryUuid"), QLatin1String("not-a-uuid"));
+    invalid.insert(QLatin1String("storeUuid"), store);
+    QVERIFY(!PrivacyGocryptfsSentinelCodec::decode(
+        QJsonDocument(invalid).toJson(QJsonDocument::Compact),
+        &categoryOut, &storeOut));
+    QVERIFY(!PrivacyGocryptfsSentinelCodec::decode(
+        QByteArray("garbage"), &categoryOut, &storeOut));
+    QVERIFY(!PrivacyGocryptfsSentinelCodec::decode(
+        QByteArray(), &categoryOut, &storeOut));
+}
+
+void PrivacyStorageTest::testInspectionMount()
+{
+    HarnessFixture fixture;
+    QVERIFY(fixture.valid);
+    auto harness = fixture.harness();
+    PrivacyGocryptfsError error = PrivacyGocryptfsError::None;
+    QVERIFY(harness->checkCapabilities(&error));
+    const QString category =
+        QLatin1String("11111111-1111-4111-8111-111111111111");
+    const QString store =
+        QLatin1String("22222222-2222-4222-8222-222222222222");
+    const QByteArray sentinel =
+        PrivacyGocryptfsSentinelCodec::encode(category, store);
+    PrivacyGocryptfsEnvelope envelope;
+    QVERIFY(harness->createStore(testPassword(), sentinel,
+                                 &envelope, &error));
+
+    auto lease = harness->mountStoreForInspection(testPassword(), &error);
+    QVERIFY(lease);
+    QCOMPARE(error, PrivacyGocryptfsError::None);
+    QFile sentinelFile(harness->sentinelPath());
+    QVERIFY(sentinelFile.open(QIODevice::ReadOnly));
+    const QByteArray observed = sentinelFile.readAll();
+    QString categoryOut;
+    QString storeOut;
+    QVERIFY(PrivacyGocryptfsSentinelCodec::decode(
+        observed, &categoryOut, &storeOut));
+    QCOMPARE(categoryOut, category);
+    QCOMPARE(storeOut, store);
+    QVERIFY(harness->unmountStore(*lease, &error));
+
+    const PrivacyPassword wrong =
+        PrivacyPassword::fromUnicode(QLatin1String("wrong"));
+    QVERIFY(!harness->mountStoreForInspection(wrong, &error));
+    QVERIFY(error != PrivacyGocryptfsError::None);
 }
 
 void PrivacyStorageTest::testCapabilitiesFailClosed()

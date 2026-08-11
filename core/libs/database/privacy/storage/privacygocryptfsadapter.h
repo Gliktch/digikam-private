@@ -46,6 +46,19 @@ enum class PrivacyGocryptfsError
     UnmountFailed
 };
 
+/** Canonical encrypted-store sentinel codec (kind, category UUID, store
+ * UUID, format version). Used by category creation and portable import. */
+class DIGIKAM_DATABASE_EXPORT PrivacyGocryptfsSentinelCodec
+{
+public:
+
+    static QByteArray encode(const QString& categoryUuid,
+                             const QString& storeUuid);
+    static bool decode(const QByteArray& bytes,
+                       QString* categoryUuid,
+                       QString* storeUuid);
+};
+
 class DIGIKAM_DATABASE_EXPORT PrivacyGocryptfsEnvelope
 {
 public:
@@ -164,6 +177,14 @@ public:
     std::unique_ptr<PrivacyGocryptfsMountLease> mountStore(
         const PrivacyPassword& password,
         const QByteArray& expectedSentinel,
+        PrivacyGocryptfsError* error = nullptr);
+
+    /** Mounts without sentinel matching so portable import can inspect an
+     * external store before its identity is known. The caller must read and
+     * validate the sentinel (or another authoritative plaintext marker) and
+     * unmount the lease. */
+    std::unique_ptr<PrivacyGocryptfsMountLease> mountStoreForInspection(
+        const PrivacyPassword& password,
         PrivacyGocryptfsError* error = nullptr);
 
     bool unmountStore(PrivacyGocryptfsMountLease& lease,

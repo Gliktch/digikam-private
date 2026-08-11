@@ -20,9 +20,12 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QThread>
+#include <QUuid>
 
 #ifdef Q_OS_UNIX
 #   include <fcntl.h>
@@ -42,6 +45,14 @@ constexpr int MountPollIntervalMs         = 20;
 
 const QString EnvelopeFormat = QStringLiteral("gocryptfs-config-v2");
 const QString SentinelName   = QStringLiteral(".digikam-private-store-v1");
+
+bool canonicalUuid(const QString& uuid)
+{
+    const QUuid parsed(uuid);
+
+    return (!parsed.isNull() &&
+            (uuid == parsed.toString(QUuid::WithoutBraces)));
+}
 
 QString decodeMountInfoPath(QByteArray path)
 {
@@ -100,6 +111,58 @@ bool syncDirectory(const QString& path)
 }
 
 } // namespace
+
+QByteArray PrivacyGocryptfsSentinelCodec::encode(
+    const QString& categoryUuid, const QString& storeUuid)
+{
+    QJsonObject object;
+    object.insert(QLatin1String("categoryUuid"), categoryUuid);
+    object.insert(QLatin1String("formatVersion"), 1);
+    object.insert(QLatin1String("kind"),
+                  QLatin1String("digikam-private-store-sentinel-v1"));
+    object.insert(QLatin1String("storeUuid"), storeUuid);
+
+    return QJsonDocument(object).toJson(QJsonDocument::Compact);
+}
+
+bool PrivacyGocryptfsSentinelCodec::decode(
+    const QByteArray& bytes, QString* const categoryUuid,
+    QString* const storeUuid)
+{
+    if (!categoryUuid || !storeUuid || bytes.isEmpty() ||
+        (bytes.size() > MaximumSentinelBytes))
+    {
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(bytes, &parseError);
+
+    if ((parseError.error != QJsonParseError::NoError) ||
+        !document.isObject())
+    {
+        return false;
+    }
+
+    const QJsonObject object = document.object();
+    const QString kind = object.value(QLatin1String("kind")).toString();
+    const QString category = object.value(
+        QLatin1String("categoryUuid")).toString();
+    const QString store = object.value(
+        QLatin1String("storeUuid")).toString();
+
+    if ((kind != QLatin1String("digikam-private-store-sentinel-v1")) ||
+        (object.value(QLatin1String("formatVersion")).toInt() != 1) ||
+        !canonicalUuid(category) || !canonicalUuid(store))
+    {
+        return false;
+    }
+
+    *categoryUuid = category;
+    *storeUuid = store;
+    return true;
+}
 
 PrivacyGocryptfsEnvelope PrivacyGocryptfsEnvelope::fromOpaqueConfig(
     const QString& format, const QByteArray& opaqueConfig,
@@ -557,6 +620,46 @@ std::unique_ptr<PrivacyGocryptfsMountLease> PrivacyGocryptfsStoreHarness::mountS
         cleanUpFailedMount(process);
         setError(error, PrivacyGocryptfsError::SentinelMismatch);
 
+        return {};
+    }
+
+    return std::unique_ptr<PrivacyGocryptfsMountLease>(
+        new PrivacyGocryptfsMountLease(mountDirectory(), &m_mountProbe,
+                                       std::move(process)));
+}
+
+std::unique_ptr<PrivacyGocryptfsMountLease>
+PrivacyGocryptfsStoreHarness::mountStoreForInspection(
+    const PrivacyPassword& password,
+    PrivacyGocryptfsError* const error)
+{
+    setError(error, PrivacyGocryptfsError::None);
+
+    if (!m_capabilitiesVerified || !password.isValid())
+    {
+        setError(error, PrivacyGocryptfsError::ProcessFailed);
+        return {};
+    }
+
+    if (!prepareWorkspace(error) || !configIsSafe() ||
+        (m_mountProbe.state(mountDirectory()) !=
+         PrivacyMountStateProbe::State::NotMounted))
+    {
+        setError(error, PrivacyGocryptfsError::UnsafeWorkspace);
+        return {};
+    }
+
+    std::unique_ptr<PrivacyProcessHandle> process =
+        startMount(password, error);
+
+    if (!process)
+    {
+        return {};
+    }
+
+    if (!waitForMount(*process, error))
+    {
+        cleanUpFailedMount(process);
         return {};
     }
 

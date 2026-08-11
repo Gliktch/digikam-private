@@ -79,13 +79,7 @@ QString temporaryStoreRelativePath(const QString& storeUuid)
 
 QByteArray sentinelBytes(const QString& categoryUuid, const QString& storeUuid)
 {
-    QJsonObject object;
-    object.insert(QLatin1String("categoryUuid"), categoryUuid);
-    object.insert(QLatin1String("formatVersion"), 1);
-    object.insert(QLatin1String("kind"), QLatin1String("digikam-private-store-sentinel-v1"));
-    object.insert(QLatin1String("storeUuid"), storeUuid);
-
-    return QJsonDocument(object).toJson(QJsonDocument::Compact);
+    return PrivacyGocryptfsSentinelCodec::encode(categoryUuid, storeUuid);
 }
 
 QString sha256(const QByteArray& bytes)
