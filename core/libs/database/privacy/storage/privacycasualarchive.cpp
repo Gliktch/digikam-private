@@ -18,7 +18,9 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <utility>
+#include <vector>
 
 // Qt includes
 
@@ -73,6 +75,155 @@ const QString ArchiveSuffix = QStringLiteral(".digikam-private.zip");
 const QString ArchiveComment =
     QStringLiteral("digiKam Private casual-v1; password=utf8-nfc-v1");
 const QString ManifestName = QStringLiteral("digikam-private/recovery-v1.json");
+
+struct RewriteSource
+{
+    zip_file_t*  file = nullptr;
+    zip_uint64_t size = 0;
+    zip_uint64_t offset = 0;
+    bool         failed = false;
+};
+
+zip_int64_t rewriteSourceCallback(void* state, void* data, zip_uint64_t len,
+                                  zip_source_cmd_t cmd)
+{
+    RewriteSource* const source = static_cast<RewriteSource*>(state);
+
+    switch (cmd)
+    {
+        case ZIP_SOURCE_OPEN:
+        {
+            return 0;
+        }
+
+        case ZIP_SOURCE_READ:
+        {
+            if (source->failed || (len == 0))
+            {
+                return 0;
+            }
+
+            const zip_int64_t count = zip_fread(source->file, data, len);
+
+            if (count < 0)
+            {
+                source->failed = true;
+                return -1;
+            }
+
+            source->offset += static_cast<zip_uint64_t>(count);
+            return count;
+        }
+
+        case ZIP_SOURCE_CLOSE:
+        {
+            return 0;
+        }
+
+        case ZIP_SOURCE_STAT:
+        {
+            zip_stat_t* const stat = static_cast<zip_stat_t*>(data);
+            zip_stat_init(stat);
+            stat->valid = ZIP_STAT_SIZE;
+            stat->size  = source->size;
+            return 0;
+        }
+
+        case ZIP_SOURCE_TELL:
+        {
+            return static_cast<zip_int64_t>(source->offset);
+        }
+
+        case ZIP_SOURCE_SEEK:
+        {
+            const zip_source_args_seek* const args =
+                static_cast<const zip_source_args_seek*>(data);
+            zip_uint64_t target = 0;
+
+            switch (args->whence)
+            {
+                case SEEK_SET:
+                {
+                    target = static_cast<zip_uint64_t>(args->offset);
+                    break;
+                }
+
+                case SEEK_CUR:
+                {
+                    if (args->offset < 0)
+                    {
+                        return -1;
+                    }
+
+                    target = source->offset +
+                             static_cast<zip_uint64_t>(args->offset);
+                    break;
+                }
+
+                case SEEK_END:
+                {
+                    if (args->offset < 0)
+                    {
+                        return -1;
+                    }
+
+                    target = source->size +
+                             static_cast<zip_uint64_t>(args->offset);
+                    break;
+                }
+
+                default:
+                {
+                    return -1;
+                }
+            }
+
+            if (target < source->offset)
+            {
+                return -1;
+            }
+
+            QByteArray discardBuffer(64 * 1024, Qt::Uninitialized);
+            zip_uint64_t remaining = target - source->offset;
+
+            while (remaining > 0)
+            {
+                const zip_uint64_t wanted = static_cast<zip_uint64_t>(
+                    qMin<qsizetype>(discardBuffer.size(),
+                                    static_cast<qsizetype>(remaining)));
+                const zip_int64_t count =
+                    zip_fread(source->file, discardBuffer.data(), wanted);
+
+                if (count <= 0)
+                {
+                    source->failed = true;
+                    return -1;
+                }
+
+                source->offset += static_cast<zip_uint64_t>(count);
+                remaining -= static_cast<zip_uint64_t>(count);
+            }
+
+            return 0;
+        }
+
+        case ZIP_SOURCE_SUPPORTS:
+        {
+            return ZIP_SOURCE_SUPPORTS_SEEKABLE;
+        }
+
+        case ZIP_SOURCE_ERROR:
+        case ZIP_SOURCE_FREE:
+        {
+            return 0;
+        }
+
+        default:
+        {
+            return -1;
+        }
+    }
+}
 
 struct PreparedMember
 {
@@ -1747,6 +1898,304 @@ PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::stageArchive(
     stage.m_archiveSize      = archiveSize;
     stage.m_archiveSha256    = archiveHash;
     stage.m_expectedManifest = manifest;
+
+    return stage;
+}
+
+PrivacyCasualArchiveStage PrivacyCasualArchiveEngine::rewriteArchive(
+    const PrivacyCasualArchiveRequest& request,
+    const PrivacyPassword& oldPassword, const PrivacyPassword& newPassword,
+    const CancellationCheck& isCancelled,
+    PrivacyCasualArchiveError* const error) const
+{
+    setError(error, PrivacyCasualArchiveError::None);
+    PrivacyCasualArchiveStage stage;
+
+    if (!checkCapabilities(error))
+    {
+        return stage;
+    }
+
+    if (!oldPassword.isValid() || !newPassword.isValid())
+    {
+        setError(error, PrivacyCasualArchiveError::InvalidPassword);
+        return stage;
+    }
+
+    if (!isCanonicalUuid(request.categoryUuid) ||
+        !isCanonicalUuid(request.containerUuid) ||
+        !isCanonicalUuid(request.itemUuid) ||
+        !safeDestination(request.finalArchivePath) ||
+        !QFileInfo(request.finalArchivePath).isFile())
+    {
+        setError(error, PrivacyCasualArchiveError::InvalidRequest);
+        return stage;
+    }
+
+    const bool exactStageRequested = !request.stagingArchivePath.isEmpty();
+    const QString directory = QFileInfo(request.finalArchivePath).absolutePath();
+    const QString stagingPath = exactStageRequested
+        ? request.stagingArchivePath
+        : directory + QLatin1String("/.digikam-private-stage-") +
+          QUuid::createUuid().toString(QUuid::WithoutBraces) +
+          QLatin1String(".zip");
+
+    if (exactStageRequested &&
+        (!safeStagingPath(request.stagingArchivePath,
+                          request.finalArchivePath, false) ||
+         (QFileInfo(request.stagingArchivePath).absolutePath() != directory)))
+    {
+        setError(error, PrivacyCasualArchiveError::UnsafeDestination);
+        return stage;
+    }
+
+    QByteArray oldManifest;
+
+    if (!readManifestForResume(request.finalArchivePath, oldPassword,
+                               isCancelled, &oldManifest, error) ||
+        !verifyArchive(request.finalArchivePath, oldManifest, oldPassword,
+                       isCancelled, error))
+    {
+        return stage;
+    }
+
+    int zipError = 0;
+    zip_t* oldArchive = zip_open(
+        QFile::encodeName(request.finalArchivePath).constData(),
+        ZIP_RDONLY | ZIP_CHECKCONS, &zipError);
+
+    if (!oldArchive)
+    {
+        setError(error, PrivacyCasualArchiveError::ArchiveOpenFailed);
+        return stage;
+    }
+
+    zip_t* newArchive = zip_open(QFile::encodeName(stagingPath).constData(),
+                                 ZIP_CREATE | ZIP_EXCL, &zipError);
+
+    if (!newArchive)
+    {
+        zip_discard(oldArchive);
+        setError(error, PrivacyCasualArchiveError::StagingCreateFailed);
+        return stage;
+    }
+
+    if (isCancelled)
+    {
+        zip_register_cancel_callback_with_state(
+            newArchive, cancelZip, nullptr,
+            const_cast<CancellationCheck*>(&isCancelled));
+    }
+
+    std::vector<std::unique_ptr<RewriteSource>> sources;
+
+    const auto fail = [&](PrivacyCasualArchiveError value)
+    {
+        for (const std::unique_ptr<RewriteSource>& owned : sources)
+        {
+            if (owned->file)
+            {
+                zip_fclose(owned->file);
+            }
+        }
+
+        if (newArchive)
+        {
+            zip_discard(newArchive);
+            newArchive = nullptr;
+        }
+
+        if (oldArchive)
+        {
+            zip_discard(oldArchive);
+            oldArchive = nullptr;
+        }
+
+        removeKnownStage(stagingPath, request.finalArchivePath);
+        setError(error, cancelled(isCancelled)
+                            ? PrivacyCasualArchiveError::Cancelled
+                            : value);
+        return PrivacyCasualArchiveStage();
+    };
+
+    bool oldPasswordSet = false;
+    bool newPasswordSet = false;
+    oldPassword.withUtf8CString(
+        [oldArchive, &oldPasswordSet](const char* value)
+        {
+            oldPasswordSet = (zip_set_default_password(oldArchive, value) == 0);
+            return true;
+        });
+    newPassword.withUtf8CString(
+        [newArchive, &newPasswordSet](const char* value)
+        {
+            newPasswordSet = (zip_set_default_password(newArchive, value) == 0);
+            return true;
+        });
+
+    if (!oldPasswordSet || !newPasswordSet)
+    {
+        return fail(PrivacyCasualArchiveError::InvalidPassword);
+    }
+
+    int commentLength = 0;
+    const char* const comment =
+        zip_get_archive_comment(oldArchive, &commentLength, 0);
+
+    if (!comment ||
+        (zip_set_archive_comment(
+             newArchive, comment,
+             static_cast<zip_uint16_t>(commentLength)) != 0))
+    {
+        return fail(PrivacyCasualArchiveError::ArchiveWriteFailed);
+    }
+
+    const zip_int64_t entryCount = zip_get_num_entries(oldArchive, 0);
+
+    for (zip_int64_t oldIndex = 0 ; oldIndex < entryCount ; ++oldIndex)
+    {
+        if (cancelled(isCancelled))
+        {
+            return fail(PrivacyCasualArchiveError::Cancelled);
+        }
+
+        const char* const rawName = zip_get_name(
+            oldArchive, static_cast<zip_uint64_t>(oldIndex), ZIP_FL_ENC_STRICT);
+
+        if (!rawName)
+        {
+            return fail(PrivacyCasualArchiveError::ArchivePolicyViolation);
+        }
+
+        zip_stat_t stat;
+        zip_stat_init(&stat);
+
+        if (zip_stat_index(oldArchive,
+                           static_cast<zip_uint64_t>(oldIndex), 0, &stat) != 0)
+        {
+            return fail(PrivacyCasualArchiveError::ArchivePolicyViolation);
+        }
+
+        zip_uint8_t hostSystem = 0;
+        zip_uint32_t attributes = 0;
+        zip_file_get_external_attributes(
+            oldArchive, static_cast<zip_uint64_t>(oldIndex), 0,
+            &hostSystem, &attributes);
+
+        std::unique_ptr<RewriteSource> sourceState(new RewriteSource);
+        sourceState->file = zip_fopen_index(
+            oldArchive, static_cast<zip_uint64_t>(oldIndex), 0);
+        sourceState->size =
+            (stat.valid & ZIP_STAT_SIZE) ? stat.size : 0;
+
+        if (!sourceState->file)
+        {
+            return fail(PrivacyCasualArchiveError::DecryptionFailed);
+        }
+
+        zip_source_t* const source = zip_source_function(
+            newArchive, rewriteSourceCallback, sourceState.get());
+
+        if (!source)
+        {
+            return fail(PrivacyCasualArchiveError::ArchiveWriteFailed);
+        }
+
+        const zip_int64_t newIndex = zip_file_add(
+            newArchive, rawName, source, ZIP_FL_ENC_UTF_8);
+
+        if (newIndex < 0)
+        {
+            zip_source_free(source);
+            return fail(PrivacyCasualArchiveError::ArchiveWriteFailed);
+        }
+
+        const time_t mtime = (stat.valid & ZIP_STAT_MTIME)
+                           ? static_cast<time_t>(stat.mtime)
+                           : 0;
+        bool configured = false;
+        newPassword.withUtf8CString(
+            [newArchive, newIndex, mtime, hostSystem, attributes,
+             &configured](const char* value)
+            {
+                configured =
+                    (zip_set_file_compression(
+                         newArchive, static_cast<zip_uint64_t>(newIndex),
+                         ZIP_CM_STORE, 0) == 0) &&
+                    (zip_file_set_mtime(
+                         newArchive, static_cast<zip_uint64_t>(newIndex),
+                         mtime, 0) == 0) &&
+                    (zip_file_set_external_attributes(
+                         newArchive, static_cast<zip_uint64_t>(newIndex),
+                         0, hostSystem, attributes) == 0) &&
+                    (zip_file_set_encryption(
+                         newArchive, static_cast<zip_uint64_t>(newIndex),
+                         ZIP_EM_TRAD_PKWARE, value) == 0);
+                return true;
+            });
+
+        if (!configured)
+        {
+            return fail(PrivacyCasualArchiveError::ArchiveWriteFailed);
+        }
+
+        sources.push_back(std::move(sourceState));
+    }
+
+    if (zip_close(newArchive) != 0)
+    {
+        newArchive = nullptr;
+        return fail(PrivacyCasualArchiveError::ArchiveWriteFailed);
+    }
+
+    newArchive = nullptr;
+
+    for (const std::unique_ptr<RewriteSource>& owned : sources)
+    {
+        if (owned->file)
+        {
+            zip_fclose(owned->file);
+        }
+    }
+
+    sources.clear();
+    zip_discard(oldArchive);
+    oldArchive = nullptr;
+
+    if (!QFile::setPermissions(stagingPath,
+                               QFileDevice::ReadOwner |
+                               QFileDevice::WriteOwner) ||
+        !syncFile(stagingPath) || !syncDirectory(directory))
+    {
+        removeKnownStage(stagingPath, request.finalArchivePath);
+        setError(error, PrivacyCasualArchiveError::DurabilityFailed);
+        return stage;
+    }
+
+    if (!verifyArchive(stagingPath, oldManifest, newPassword,
+                       isCancelled, error))
+    {
+        removeKnownStage(stagingPath, request.finalArchivePath);
+        return stage;
+    }
+
+    QByteArray archiveHash;
+    qlonglong archiveSize = -1;
+
+    if (!hashFile(stagingPath, &archiveHash, &archiveSize, isCancelled))
+    {
+        removeKnownStage(stagingPath, request.finalArchivePath);
+        setError(error, cancelled(isCancelled)
+                            ? PrivacyCasualArchiveError::Cancelled
+                            : PrivacyCasualArchiveError::SourceReadFailed);
+        return stage;
+    }
+
+    stage.m_stagingPath      = stagingPath;
+    stage.m_finalArchivePath = request.finalArchivePath;
+    stage.m_archiveSize      = archiveSize;
+    stage.m_archiveSha256    = archiveHash;
+    stage.m_expectedManifest = oldManifest;
 
     return stage;
 }

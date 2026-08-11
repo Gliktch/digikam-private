@@ -331,6 +331,7 @@ private Q_SLOTS:
 
     void testCapabilitiesAndArchivePolicy();
     void testStandardToolRecovery();
+    void testPasswordRewritePreservesExactMembers();
     void testResumeVerifiedStageFromJournalFacts();
     void testPublicationConflictAndReplacement();
     void testRejectsUnsafeInputsAndCancellation();
@@ -475,6 +476,46 @@ void PrivacyCasualArchiveTest::testStandardToolRecovery()
     QCOMPARE(restored.readAll(), payload);
     QVERIFY(QFileInfo::exists(QDir(restorePath).filePath(
         PrivacyCasualArchiveEngine::manifestMemberName())));
+}
+
+void PrivacyCasualArchiveTest::testPasswordRewritePreservesExactMembers()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray payload("rewrite-me\0exact", 15);
+    const QString sourcePath = directory.filePath(QLatin1String("source.bin"));
+    const QString archivePath = directory.filePath(
+        QLatin1String("holiday.jpg.digikam-private.zip"));
+    QVERIFY(writeBytes(sourcePath, payload));
+    const PrivacyPassword oldPassword =
+        PrivacyPassword::fromUnicode(QLatin1String("old-pass"));
+    const PrivacyPassword newPassword =
+        PrivacyPassword::fromUnicode(QLatin1String("new-pass"));
+    const PrivacyCasualArchiveMember member = makeMember(
+        sourcePath, QLatin1String("holiday.jpg"),
+        PrivacyAsset::PrimaryMediaRole, 0);
+    PrivacyCasualArchiveEngine engine;
+    PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
+    auto stage = engine.stageArchive(makeRequest(archivePath, { member }),
+                                     oldPassword, {}, &error);
+    QVERIFY2(stage.isValid(),
+             qPrintable(QString::number(static_cast<int>(error))));
+    QVERIFY(engine.publishNew(&stage, &error));
+    const QByteArray oldHash = fileHash(archivePath);
+    const QHash<QString, QByteArray> expected = {
+        { member.protectedRelativePath, payload }
+    };
+    QVERIFY(inspectArchive(archivePath, oldPassword, expected));
+
+    auto rewritten = engine.rewriteArchive(
+        makeRequest(archivePath, { member }), oldPassword, newPassword,
+        {}, &error);
+    QVERIFY2(rewritten.isValid(),
+             qPrintable(QString::number(static_cast<int>(error))));
+    QVERIFY(engine.publishReplacement(&rewritten, oldHash, &error));
+    QVERIFY(inspectArchive(archivePath, newPassword, expected));
+    QVERIFY(!inspectArchive(archivePath, oldPassword, expected));
+    QVERIFY(fileHash(archivePath) != oldHash);
 }
 
 void PrivacyCasualArchiveTest::testPreparedOriginalReader()

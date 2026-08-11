@@ -161,6 +161,18 @@ public:
         const CancellationCheck& isCancelled = {},
         PrivacyCasualArchiveError* error = nullptr) const;
 
+    /** Rewrites one existing Casual archive from the old category password to
+     * the new one without intermediate plaintext files: each decrypted entry
+     * streams directly into a same-directory sibling re-encrypted with the
+     * new password, the sibling is fully verified with the new password and
+     * the old manifest, then published by the caller. */
+    PrivacyCasualArchiveStage rewriteArchive(
+        const PrivacyCasualArchiveRequest& request,
+        const PrivacyPassword& oldPassword,
+        const PrivacyPassword& newPassword,
+        const CancellationCheck& isCancelled = {},
+        PrivacyCasualArchiveError* error = nullptr) const;
+
     /**
      * Reconstitutes the sole owner of a previously verified stage from its
      * non-secret journal facts. Do not call while another live stage object
