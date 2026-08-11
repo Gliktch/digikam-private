@@ -323,6 +323,22 @@ ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacystrongobjectbackend_utest.cpp
 
 #------------------------------------------------------------------------
 
+ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacyindependentrecovery_utest.cpp
+
+              NAME_PREFIX
+
+              "digikam-"
+
+              LINK_LIBRARIES
+
+              digikamcore
+              digikamdatabase
+
+              ${COMMON_TEST_LINK}
+)
+
+#------------------------------------------------------------------------
+
 ecm_add_tests(${CMAKE_CURRENT_SOURCE_DIR}/privacystrongoriginalreader_utest.cpp
 
               NAME_PREFIX

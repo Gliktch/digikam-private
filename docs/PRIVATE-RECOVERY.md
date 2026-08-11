@@ -66,6 +66,40 @@ For v1 Casual Privacy, these stores are convenience and transaction data; the
 adjacent ZIP archives remain the authoritative original-media recovery path.
 Never edit the ciphertext tree directly.
 
+## Recover a Strong Privacy original without digiKam
+
+Strong Privacy originals live inside the category's gocryptfs store, under
+plaintext names such as `originals/<container-uuid>/`. The complete ciphertext
+store directory, its `gocryptfs.conf` and the category password are the normal
+portable recovery unit; digiKam Private is not required.
+
+Copy the complete store directory while digiKam is closed, then mount the copy
+with the category password:
+
+```sh
+mkdir recovered-store
+gocryptfs /path/to/copied/store recovered-store
+```
+
+The original and associated members appear below
+`recovered-store/originals/<container-uuid>/`. Compare every restored member
+against the SHA-256 hashes recorded in the P1 catalogue before replacing any
+collection file, then copy the members to the restored location. Keep the
+ciphertext store read-only and do not edit it directly.
+
+A wrong password is rejected; there is no password reset or recovery-key
+dialog in normal category use. The emergency path exports the master key
+contained in `gocryptfs.conf` with the category password:
+
+```sh
+gocryptfs-xray -dumpmasterkey /path/to/copied/store/gocryptfs.conf
+```
+
+The exported key can then mount the store with `gocryptfs -masterkey=stdin`
+(or the equivalent recovery input form). Treat the exported key exactly like
+the category password: it unlocks every original in that store. The normal
+digiKam Private authentication path never dumps or parses the master key.
+
 ## Restore into digiKam
 
 Restore while digiKam is closed. Restore the database, complete collection
