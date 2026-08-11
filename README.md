@@ -11,11 +11,14 @@ digiKam release. The initial v1 release targets Linux x86-64 AppImage delivery
 and should be tested with disposable or fully backed-up collections before
 wider use.
 
-V1 intentionally exposes only **Casual Privacy** categories. Their ZipCrypto
-archives are designed to remain externally recoverable and are not strong
-encryption against a determined attacker. Strong categories, several optional
-external plug-ins and broader platform/UI automation remain v1.1 work; there is
-no forgotten-password cracking or recovery UI.
+V1 ships both **Casual Privacy** and **Strong** categories on Linux x86-64 as
+a single manually updated AppImage. Casual archives are deliberately
+recoverable and are not strong encryption against a determined attacker;
+Strong categories use one `gocryptfs` vault per category. digiKam Private also
+runs as an isolated profile by default and can import an existing stock
+digiKam catalogue as a copy, never modifying the source in place. Several
+optional external plug-ins and broader platform/UI automation remain v1.1
+work; there is no forgotten-password cracking or recovery UI.
 
 ## Download and run
 
