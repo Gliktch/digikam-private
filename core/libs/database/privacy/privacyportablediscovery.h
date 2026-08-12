@@ -62,6 +62,11 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyPortableStrongStoreCandidate
 
     QString rootPath;
     QString storeUuid;
+    /** Managed-root marker identity decoded from
+     * `.digikam-private/root-marker-v1.json`; reused when publishing the
+     * imported store record so the DB matches the on-disk marker. */
+    QString markerRootUuid;
+    QString markerMarkerUuid;
     QString markerPath;
     QString configAbsolutePath;
     QString cipherRelativePath;

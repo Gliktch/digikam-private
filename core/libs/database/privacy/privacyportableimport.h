@@ -62,6 +62,8 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyPortableImportItemFact
      * (Strong), used as PrivacyContainer.objectRelativePath. */
     QString containerRelativePath;
     QString proxyRelativePath;
+    /** Absolute public collection root containing the proxy. */
+    QString publicRootPath;
     /** Absolute archive path for Casual; empty for Strong. */
     QString sourceAbsolutePath;
     qlonglong containerSize = -1;
@@ -80,12 +82,17 @@ struct DIGIKAM_DATABASE_EXPORT PrivacyPortableImportCandidate
     /** Empty until the commit stage supplies the localized default for a
      * store-less Casual import whose manifest carries no category name. */
     QString categoryName;
+    int presentationMode = 0;
+    int unlockedThumbnailMode = 0;
+    int tagVisibilityMode = 0;
     /** False for store-less Casual import: no credential/store rows exist
      * and authentication must fall back to archive manifest verification. */
     bool hasCredential = false;
     /** Present only when hasCredential is true (a copied store was found). */
     QString storeUuid;
     QString managedStoreRootPath;
+    QString managedStoreMarkerRootUuid;
+    QString managedStoreMarkerMarkerUuid;
     QString cipherRelativePath;
     QString credentialEnvelopeFormat;
     QByteArray credentialEnvelopeBlob;

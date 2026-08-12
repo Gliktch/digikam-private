@@ -175,6 +175,7 @@ bool PrivacyPortableImportItemFact::isValid() const
             isCanonicalUuid(containerUuid) &&
             validKind && validSource &&
             isSafePublicRelativePath(proxyRelativePath) &&
+            QDir::isAbsolutePath(publicRootPath) &&
             (containerSize >= 0) && (containerSha256.size() == 32) &&
             !assets.isEmpty());
 }
@@ -184,12 +185,16 @@ bool PrivacyPortableImportCandidate::isValid() const
     const bool validCredential =
         hasCredential
             ? (isCanonicalUuid(storeUuid) &&
+               isCanonicalUuid(managedStoreMarkerRootUuid) &&
+               isCanonicalUuid(managedStoreMarkerMarkerUuid) &&
                QDir::isAbsolutePath(managedStoreRootPath) &&
                isSafeContainerRelativePath(cipherRelativePath) &&
                !credentialEnvelopeFormat.isEmpty() &&
                !credentialEnvelopeBlob.isEmpty())
             : (storeUuid.isEmpty() &&
                managedStoreRootPath.isEmpty() &&
+               managedStoreMarkerRootUuid.isEmpty() &&
+               managedStoreMarkerMarkerUuid.isEmpty() &&
                cipherRelativePath.isEmpty() &&
                credentialEnvelopeFormat.isEmpty() &&
                credentialEnvelopeBlob.isEmpty());
@@ -198,6 +203,9 @@ bool PrivacyPortableImportCandidate::isValid() const
             ((backend == PrivacyBackend::Casual) ||
              (backend == PrivacyBackend::Strong)) &&
             isCanonicalUuid(categoryUuid) && validCredential &&
+            (presentationMode > 0) &&
+            (unlockedThumbnailMode > 0) &&
+            (tagVisibilityMode > 0) &&
             !items.isEmpty());
 }
 
@@ -426,6 +434,12 @@ PrivacyPortableImportAuthenticator::authenticateCasual(
     candidate.recoverySetUuid = group.recoverySetUuid;
     candidate.backend = PrivacyBackend::Casual;
     candidate.hasCredential = false;
+    candidate.presentationMode =
+        static_cast<int>(PrivacyPresentationMode::Generic);
+    candidate.unlockedThumbnailMode =
+        static_cast<int>(PrivacyUnlockedThumbnailMode::FocusedClear);
+    candidate.tagVisibilityMode =
+        static_cast<int>(PrivacyTagVisibilityMode::UnlockedOnly);
     PrivacyCasualArchiveEngine engine;
     QSet<QString> itemUuids;
 
@@ -502,6 +516,7 @@ PrivacyPortableImportAuthenticator::authenticateCasual(
         item.containerKind = PrivacyContainerKind::CasualArchive;
         item.containerRelativePath = archive.relativePath;
         item.proxyRelativePath = archive.proxyRelativePath;
+        item.publicRootPath = archive.rootPath;
         item.sourceAbsolutePath = archive.absolutePath;
         item.containerSize = identity.archiveSize;
         item.containerSha256 = identity.sha256;
@@ -618,6 +633,10 @@ PrivacyPortableImportAuthenticator::authenticateCasual(
         candidate.hasCredential = true;
         candidate.storeUuid = matchedStore.storeUuid;
         candidate.managedStoreRootPath = matchedStore.rootPath;
+        candidate.managedStoreMarkerRootUuid =
+            matchedStore.markerRootUuid;
+        candidate.managedStoreMarkerMarkerUuid =
+            matchedStore.markerMarkerUuid;
         candidate.cipherRelativePath = matchedStore.cipherRelativePath;
         candidate.credentialEnvelopeFormat = QLatin1String("gocryptfs-config-v2");
         candidate.credentialEnvelopeBlob = configFile.readAll();
@@ -733,9 +752,14 @@ PrivacyPortableImportAuthenticator::authenticateStrong(
     candidate.backend = PrivacyBackend::Strong;
     candidate.categoryUuid = manifest.categoryUuid;
     candidate.categoryName = manifest.categoryName;
+    candidate.presentationMode = manifest.presentationMode;
+    candidate.unlockedThumbnailMode = manifest.unlockedThumbnailMode;
+    candidate.tagVisibilityMode = manifest.tagVisibilityMode;
     candidate.hasCredential = true;
     candidate.storeUuid = store.storeUuid;
     candidate.managedStoreRootPath = store.rootPath;
+    candidate.managedStoreMarkerRootUuid = store.markerRootUuid;
+    candidate.managedStoreMarkerMarkerUuid = store.markerMarkerUuid;
     candidate.cipherRelativePath = store.cipherRelativePath;
     candidate.credentialEnvelopeFormat = QLatin1String("gocryptfs-config-v2");
     QFile configFile(store.configAbsolutePath);
@@ -789,6 +813,7 @@ PrivacyPortableImportAuthenticator::authenticateStrong(
             QFileInfo(recoveryItem.members.constFirst().vaultRelativePath)
                 .path();
         item.containerRelativePath = containerRelativePath;
+        item.publicRootPath = store.rootPath;
         qlonglong totalSize = 0;
         QByteArray combined;
         const PrivacyStrongRecoveryMember* primary = nullptr;

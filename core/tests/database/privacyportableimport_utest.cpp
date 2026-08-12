@@ -429,6 +429,10 @@ void PrivacyPortableImportTest::testCasualLinksMatchingStore()
     store.rootPath = storeRoot.path();
     store.storeUuid =
         QLatin1String("99999999-9999-4999-8999-999999999999");
+    store.markerRootUuid =
+        QLatin1String("88888888-8888-4888-8888-888888888888");
+    store.markerMarkerUuid =
+        QLatin1String("77777777-7777-4777-8777-777777777777");
     store.markerPath = QDir(storeRoot.path()).filePath(
         QLatin1String(".digikam-private/root-marker-v1.json"));
     store.configAbsolutePath = QDir(storeRoot.path()).filePath(
@@ -487,6 +491,10 @@ void PrivacyPortableImportTest::testCasualIgnoresNonMatchingStore()
     store.rootPath = storeRoot.path();
     store.storeUuid =
         QLatin1String("99999999-9999-4999-8999-999999999999");
+    store.markerRootUuid =
+        QLatin1String("88888888-8888-4888-8888-888888888888");
+    store.markerMarkerUuid =
+        QLatin1String("77777777-7777-4777-8777-777777777777");
     store.markerPath = QDir(storeRoot.path()).filePath(
         QLatin1String(".digikam-private/root-marker-v1.json"));
     store.configAbsolutePath = QDir(storeRoot.path()).filePath(
@@ -612,6 +620,10 @@ void PrivacyPortableImportTest::testStrongAuthenticatesWithManifest()
     PrivacyPortableStrongStoreCandidate store;
     store.rootPath = vault.path();
     store.storeUuid = storeUuid;
+    store.markerRootUuid =
+        QLatin1String("88888888-8888-4888-8888-888888888888");
+    store.markerMarkerUuid =
+        QLatin1String("77777777-7777-4777-8777-777777777777");
     store.markerPath = QDir(vault.path()).filePath(
         QLatin1String(".digikam-private/root-marker-v1.json"));
     store.configAbsolutePath = QDir(vault.path()).filePath(

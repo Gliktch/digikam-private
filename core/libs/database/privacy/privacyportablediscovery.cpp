@@ -83,6 +83,8 @@ bool PrivacyPortableStrongStoreCandidate::isValid() const
 {
     return (QDir::isAbsolutePath(rootPath) &&
             isCanonicalUuid(storeUuid) &&
+            isCanonicalUuid(markerRootUuid) &&
+            isCanonicalUuid(markerMarkerUuid) &&
             QDir::isAbsolutePath(markerPath) &&
             QDir::isAbsolutePath(configAbsolutePath) &&
             !cipherRelativePath.isEmpty());
@@ -355,6 +357,8 @@ void PrivacyPortableDiscovery::discoverStrongStores(
         PrivacyPortableStrongStoreCandidate candidate;
         candidate.rootPath = root;
         candidate.storeUuid = storeUuid;
+        candidate.markerRootUuid = rootUuid;
+        candidate.markerMarkerUuid = markerUuid;
         candidate.markerPath = markerPath;
         candidate.configAbsolutePath = configPath;
         candidate.cipherRelativePath =

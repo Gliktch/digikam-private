@@ -113,6 +113,7 @@ set(libdatabase_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacymigrationcoordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyportablediscovery.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyportableimport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyportableimportcoordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacyexternalcheckouttransaction.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacycontracts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/privacy/privacymanagedrootprovisioner.cpp

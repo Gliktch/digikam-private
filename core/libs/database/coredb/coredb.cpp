@@ -1868,6 +1868,34 @@ bool CoreDB::publishPrivacyPortableImport(
         return false;
     };
 
+    const auto insertRootIfAbsent =
+        [this, &abort](const PrivacyStorageRoot& root) -> bool
+    {
+        QVariantList existing;
+        d->db->execSql(QString::fromUtf8(
+            "SELECT kind, albumRootId, configuredPath, identityVersion, "
+            "identityData FROM PrivacyStorageRoots WHERE uuid=?;"),
+            root.uuid, &existing);
+
+        if (existing.isEmpty())
+        {
+            return insertPrivacyStorageRoot(root);
+        }
+
+        if ((existing.size() != 5) ||
+            (existing.at(0).toInt() !=
+             static_cast<int>(root.kind)) ||
+            (existing.at(1).toInt() != root.albumRootId) ||
+            (existing.at(2).toString() != root.configuredPath) ||
+            (existing.at(3).toInt() != root.identityVersion) ||
+            (existing.at(4).toByteArray() != root.identityData))
+        {
+            return abort();
+        }
+
+        return true;
+    };
+
     QVariantList conflict;
     d->db->execSql(QString::fromUtf8(
         "SELECT EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=?);"),
@@ -1887,7 +1915,7 @@ bool CoreDB::publishPrivacyPortableImport(
 
     for (const PrivacyStorageRoot& root : publication.albumRoots)
     {
-        if ((root.albumRootId <= 0) || !insertPrivacyStorageRoot(root))
+        if ((root.albumRootId <= 0) || !insertRootIfAbsent(root))
         {
             return abort();
         }
@@ -1897,7 +1925,7 @@ bool CoreDB::publishPrivacyPortableImport(
 
     if (publication.hasCredential)
     {
-        if (!insertPrivacyStorageRoot(publication.managedStoreRoot) ||
+        if (!insertRootIfAbsent(publication.managedStoreRoot) ||
             !insertPrivacyStore(publication.store))
         {
             return abort();
