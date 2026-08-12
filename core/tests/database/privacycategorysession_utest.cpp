@@ -19,13 +19,20 @@
 // Qt includes
 
 #include <QCryptographicHash>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QSemaphore>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QUuid>
 
 // Local includes
 
 #include "privacycategorysession.h"
+#include "privacycasualarchive.h"
+#include "privacycontracts.h"
 
 using namespace Digikam;
 
@@ -37,6 +44,9 @@ const QString StoreUuid = QLatin1String("20000000-0000-0000-0000-000000000001");
 const QString RootUuid = QLatin1String("30000000-0000-0000-0000-000000000001");
 const QString MarkerUuid = QLatin1String("40000000-0000-0000-0000-000000000001");
 const QString TransactionUuid = QLatin1String("50000000-0000-0000-0000-000000000001");
+const QString RecoverySetUuid = QLatin1String("60000000-0000-0000-0000-000000000001");
+const QString ItemUuid = QLatin1String("70000000-0000-0000-0000-000000000001");
+const QString ContainerUuid = QLatin1String("80000000-0000-0000-0000-000000000001");
 const QByteArray OpaqueConfig("synthetic opaque gocryptfs config");
 
 QString configHash()
@@ -686,6 +696,7 @@ private Q_SLOTS:
     void testThumbnailModeUpdateAuthenticatesAndCompensatesFailure();
     void testTagVisibilityUpdateReusesUnlockedAuthentication();
     void testTagVisibilityUpdateRequiresAuthenticationAndCompensatesFailure();
+    void testStoreLessCasualUnlockFallback();
     void testCallbacksAndBlockingTeardownAreOutOfLock();
     void testDestructorForcesFailedLockTeardown();
 };
@@ -1776,6 +1787,141 @@ void PrivacyCategorySessionTest::testDestructorForcesFailedLockTeardown()
     QCOMPARE(observer.released.load(), 1);
     QVERIFY(!observer.releasedSawOwned.load());
     QVERIFY(observer.releasedSawLeaseDestroyed.load());
+}
+
+void PrivacyCategorySessionTest::testStoreLessCasualUnlockFallback()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString archiveRelative =
+        QLatin1String("album/photo.jpg.digikam-private.zip");
+    const QString sourcePath = QDir(directory.path()).filePath(
+        QLatin1String("album/source.jpg"));
+    QVERIFY(QDir().mkpath(QFileInfo(sourcePath).absolutePath()));
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray payload("store-less archive payload");
+    QCOMPARE(source.write(payload), qint64(payload.size()));
+    source.close();
+
+    PrivacyCasualArchiveMember member;
+    member.sourcePath = sourcePath;
+    member.publicRelativePath = QLatin1String("album/photo.jpg");
+    member.originalName = QLatin1String("photo.jpg");
+    member.role = PrivacyAsset::PrimaryMediaRole;
+    member.ordinal = 0;
+    member.protectedRelativePath =
+        PrivacyCasualArchiveEngine::expectedMemberPath(
+            member.role, member.ordinal, member.originalName);
+    member.originalCreationDate = QDateTime::currentDateTimeUtc();
+    member.originalModificationDate = QDateTime::currentDateTimeUtc();
+    member.expectedSize = payload.size();
+    member.expectedSha256 =
+        QCryptographicHash::hash(payload, QCryptographicHash::Sha256);
+
+    PrivacyCasualArchiveRequest request;
+    request.finalArchivePath = QDir(directory.path()).filePath(archiveRelative);
+    request.categoryUuid = CategoryUuid;
+    request.containerUuid = ContainerUuid;
+    request.itemUuid = ItemUuid;
+    request.recoverySetUuid = RecoverySetUuid;
+    request.members << member;
+    PrivacyCasualArchiveEngine archiveEngine;
+    PrivacyCasualArchiveError archiveError =
+        PrivacyCasualArchiveError::None;
+    auto stage = archiveEngine.stageArchive(
+        request, PrivacyPassword::fromUnicode(QLatin1String("archive-secret")),
+        {}, &archiveError);
+    QVERIFY(stage.isValid());
+    QVERIFY(archiveEngine.publishNew(&stage, &archiveError));
+    const PrivacyCasualArchiveIdentity identity =
+        archiveEngine.inspectIdentity(request.finalArchivePath, &archiveError);
+    QVERIFY(identity.valid);
+
+    FakeRepository repository;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    PrivacyCategory category;
+    category.uuid = CategoryUuid;
+    category.name = QLatin1String("Imported Casual");
+    category.recoverySetUuid = RecoverySetUuid;
+    category.backend = PrivacyBackend::Casual;
+    category.presentationMode = PrivacyPresentationMode::Generic;
+    category.unlockedThumbnailMode =
+        PrivacyUnlockedThumbnailMode::FocusedClear;
+    category.tagVisibilityMode = PrivacyTagVisibilityMode::UnlockedOnly;
+    category.lifecycleState = PrivacyCategoryLifecycleState::Active;
+    category.currentCredentialGeneration = 0;
+    category.schemaVersion = 1;
+    category.createdAt = now;
+    repository.snapshot.categories << category;
+
+    PrivacyStorageRoot albumRoot;
+    albumRoot.uuid = RootUuid;
+    albumRoot.kind = PrivacyStorageRootKind::AlbumRoot;
+    albumRoot.albumRootId = 1;
+    albumRoot.configuredPath = directory.path();
+    albumRoot.identityVersion = 1;
+    albumRoot.identityData = PrivacyRootIdentityCodec::encodeAlbumRootV1(
+        1, QLatin1String("imported-volume"));
+    albumRoot.createdAt = now;
+    repository.snapshot.storageRoots << albumRoot;
+
+    PrivacyItem item;
+    item.imageId = 42;
+    item.uuid = ItemUuid;
+    item.categoryUuid = CategoryUuid;
+    item.presentationVersion = 1;
+    item.generation = 0;
+    item.transactionState =
+        static_cast<int>(PrivacyTransactionState::Complete);
+    repository.snapshot.items << item;
+
+    PrivacyContainer container;
+    container.uuid = ContainerUuid;
+    container.itemUuid = ItemUuid;
+    container.kind = PrivacyContainerKind::CasualArchive;
+    container.rootUuid = RootUuid;
+    container.objectRelativePath = archiveRelative;
+    container.protectedSize = identity.archiveSize;
+    container.protectedHashAlgorithm = QLatin1String("sha256");
+    container.protectedHash = QString::fromLatin1(
+        identity.sha256.toHex());
+    container.formatVersion = 1;
+    container.credentialGeneration = 0;
+    container.state = PrivacyContainerState::Verified;
+    container.createdAt = now;
+    container.updatedAt = now;
+    repository.snapshot.containers << container;
+
+    FakeStoreBackend backend;
+    QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    PrivacyRuntimeCoordinator runtime;
+    initializeRuntime(&runtime, repository.snapshot, verifier);
+    PrivacyCategorySessionCoordinator coordinator(
+        repository, backend, *verifier, runtime);
+
+    QCOMPARE(coordinator.unlockCategory(
+                 CategoryUuid, QLatin1String("archive-secret")).status,
+             PrivacyCategorySessionStatus::Unlocked);
+    QCOMPARE(backend.validateCalls.load(), 0);
+    QCOMPARE(backend.unlockCalls.load(), 0);
+    QCOMPARE(coordinator.lockCategory(CategoryUuid).status,
+             PrivacyCategorySessionStatus::Locked);
+    QCOMPARE(coordinator.unlockCategory(
+                 CategoryUuid, QLatin1String("wrong-secret")).status,
+             PrivacyCategorySessionStatus::AuthenticationFailed);
+
+    bool freshCalled = false;
+    const PrivacyCategorySessionResult fresh =
+        coordinator.runWithFreshlyAuthenticatedSecret(
+            CategoryUuid, QLatin1String("archive-secret"),
+            [&freshCalled](const PrivacyPassword&)
+            {
+                freshCalled = true;
+            });
+    QCOMPARE(fresh.status,
+             PrivacyCategorySessionStatus::FreshAuthenticationVerified);
+    QVERIFY(freshCalled);
 }
 
 QTEST_GUILESS_MAIN(PrivacyCategorySessionTest)

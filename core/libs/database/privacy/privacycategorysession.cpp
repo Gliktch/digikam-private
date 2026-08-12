@@ -20,6 +20,7 @@
 #include <QThread>
 #include <QWaitCondition>
 #include <QUuid>
+#include <QDir>
 
 // C++ includes
 
@@ -29,6 +30,7 @@
 
 #include "privacyrepository.h"
 #include "privacyexternalcheckouttransaction.h"
+#include "privacycasualarchive.h"
 
 namespace Digikam
 {
@@ -395,7 +397,97 @@ public:
     PrivacyCredential credential;
     PrivacyStorageRoot root;
     PrivacyStore store;
+    /** True for an imported store-less Casual category: no credential/store
+     * rows exist and authentication must verify an adjacent archive. */
+    bool storeLessCasual = false;
 };
+
+bool findStoreLessCasualArchive(
+    const PrivacyRepositorySnapshot& snapshot,
+    const QString& categoryUuid,
+    const PrivacyStorageRoot** root,
+    const PrivacyContainer** container)
+{
+    if (!root || !container)
+    {
+        return false;
+    }
+
+    for (const PrivacyContainer& candidate : snapshot.containers)
+    {
+        if ((candidate.kind != PrivacyContainerKind::CasualArchive) ||
+            (candidate.state != PrivacyContainerState::Verified) ||
+            candidate.rootUuid.isEmpty())
+        {
+            continue;
+        }
+
+        const PrivacyItem* item = nullptr;
+
+        for (const PrivacyItem& itemCandidate : snapshot.items)
+        {
+            if (itemCandidate.uuid == candidate.itemUuid)
+            {
+                item = &itemCandidate;
+                break;
+            }
+        }
+
+        if (!item || (item->categoryUuid != categoryUuid))
+        {
+            continue;
+        }
+
+        const PrivacyStorageRoot* rootCandidate = nullptr;
+
+        for (const PrivacyStorageRoot& rootValue : snapshot.storageRoots)
+        {
+            if (rootValue.uuid == candidate.rootUuid)
+            {
+                rootCandidate = &rootValue;
+                break;
+            }
+        }
+
+        if (!rootCandidate || !rootCandidate->isValid() ||
+            (rootCandidate->kind != PrivacyStorageRootKind::AlbumRoot))
+        {
+            continue;
+        }
+
+        *root = rootCandidate;
+        *container = &candidate;
+        return true;
+    }
+
+    return false;
+}
+
+bool verifyStoreLessCasualArchive(
+    const PrivacyRepositorySnapshot& snapshot,
+    const QString& categoryUuid,
+    const PrivacyPassword& password)
+{
+    const PrivacyStorageRoot* root = nullptr;
+    const PrivacyContainer* container = nullptr;
+
+    if (!findStoreLessCasualArchive(snapshot, categoryUuid, &root, &container))
+    {
+        return false;
+    }
+
+    const QString archivePath = QDir(root->configuredPath).filePath(
+        container->objectRelativePath);
+    PrivacyCasualArchiveEngine engine;
+    PrivacyCasualArchiveError error = PrivacyCasualArchiveError::None;
+    PrivacyCasualArchiveManifest manifest;
+
+    return engine.verifyAndReadManifest(
+        archivePath, password, container->protectedSize,
+        QByteArray::fromHex(container->protectedHash.toLatin1()),
+        &manifest, {}, &error) &&
+           (manifest.categoryUuid == categoryUuid);
+}
 
 bool loadActiveBundle(const PrivacyRepositorySnapshot& snapshot,
                       const QString& categoryUuid,
@@ -517,6 +609,25 @@ bool loadActiveBundle(const PrivacyRepositorySnapshot& snapshot,
         {
             ++rootCount;
             bundle->root = root;
+        }
+    }
+
+    const bool storeLessCandidate =
+        (bundle->category.backend == PrivacyBackend::Casual) &&
+        (bundle->category.currentCredentialGeneration == 0) &&
+        (credentialCount == 0) && authorityStoreUuid.isEmpty() &&
+        (storeCount == 0) && (rootCount == 0);
+
+    if (storeLessCandidate)
+    {
+        const PrivacyStorageRoot* root = nullptr;
+        const PrivacyContainer* container = nullptr;
+
+        if (findStoreLessCasualArchive(snapshot, categoryUuid,
+                                       &root, &container))
+        {
+            bundle->storeLessCasual = true;
+            return true;
         }
     }
 
@@ -1411,6 +1522,57 @@ PrivacyCategorySessionResult PrivacyCategorySessionCoordinator::unlockCategory(
         return result;
     }
 
+    if (bundle.storeLessCasual)
+    {
+        if (!verifyStoreLessCasualArchive(snapshot, categoryUuid, password))
+        {
+            result.status = PrivacyCategorySessionStatus::AuthenticationFailed;
+            finishOperation();
+            return result;
+        }
+
+        if (!d->runtime.setCategoryUnlocked(categoryUuid, true))
+        {
+            finishOperation();
+            result.status =
+                PrivacyCategorySessionStatus::PublicationFailedRecoveryRequired;
+            return result;
+        }
+
+        bool canceledAfterPublication = false;
+        {
+            QMutexLocker locker(&d->lock);
+            canceledAfterPublication =
+                d->operationCanceled(categoryUuid, operationToken);
+
+            if (!canceledAfterPublication)
+            {
+                d->sessions.insert(
+                    categoryUuid,
+                    std::make_shared<Private::Session>(
+                        categoryUuid, std::move(password),
+                        std::unique_ptr<PrivacyCategoryStoreLease>()));
+            }
+
+            d->finishOperation(categoryUuid, operationToken);
+        }
+
+        if (canceledAfterPublication)
+        {
+            d->runtime.setCategoryUnlocked(categoryUuid, false);
+            result.status = PrivacyCategorySessionStatus::Canceled;
+            return result;
+        }
+
+        if (d->observer)
+        {
+            d->observer->secretRetained(categoryUuid);
+        }
+
+        result.status = PrivacyCategorySessionStatus::Unlocked;
+        return result;
+    }
+
     if ((bundle.credential.envelopeHashAlgorithm != QLatin1String("sha256")) ||
         (sha256(bundle.credential.envelopeBlob) != bundle.credential.envelopeHash))
     {
@@ -1966,6 +2128,21 @@ PrivacyCategorySessionCoordinator::runWithFreshlyAuthenticatedSecret(
         !loadActiveBundle(snapshot, categoryUuid, &bundle, &result.status,
                           allowedActiveItemTransactionUuid))
     {
+        return result;
+    }
+
+    if (bundle.storeLessCasual)
+    {
+        if (!verifyStoreLessCasualArchive(snapshot, categoryUuid, password))
+        {
+            result.status = PrivacyCategorySessionStatus::AuthenticationFailed;
+            return result;
+        }
+
+        operation(password);
+        Q_UNUSED(session);
+        result.status =
+            PrivacyCategorySessionStatus::FreshAuthenticationVerified;
         return result;
     }
 
