@@ -41,6 +41,9 @@
 #include "privacyportableimport.h"
 #include "privacyportableimportcoordinator.h"
 #include "privacyprocessrunner.h"
+#include "privacyrepository.h"
+#include "privacyruntime.h"
+#include "privacypublicrecoverylocator.h"
 
 Q_DECLARE_METATYPE(Digikam::PrivacyPortableDiscoveryGroup)
 Q_DECLARE_METATYPE(Digikam::PrivacyPortableImportAuthenticationResult)
@@ -508,7 +511,69 @@ bool PrivacyPrivateMediaFoundDialog::offer(const QString& scanRoot,
 
     PrivacyPrivateMediaFoundDialog dialog(scanRoot, discovery, parent);
     dialog.exec();
+
+    if (PrivacyStartupRecovery::coordinator())
+    {
+        PrivacyRepositorySnapshot snapshot;
+        PrivacyRepository().loadSnapshot(&snapshot);
+        PrivacyStartupRecovery::coordinator()->setUnresolvedProxyPaths(
+            unresolvedProxyPaths(discovery, snapshot));
+    }
+
     return (dialog.result() == QDialog::Accepted);
+}
+
+QSet<QString> PrivacyPrivateMediaFoundDialog::unresolvedProxyPaths(
+    const PrivacyPortableDiscoveryResult& discovery,
+    const PrivacyRepositorySnapshot& snapshot)
+{
+    QSet<QString> mappedRecoveryIdentities;
+
+    for (const PrivacyCategory& category : snapshot.categories)
+    {
+        mappedRecoveryIdentities.insert(category.recoverySetUuid);
+    }
+
+    QSet<QString> paths;
+
+    for (const PrivacyPortableDiscoveryGroup& group : discovery.groups)
+    {
+        if (mappedRecoveryIdentities.contains(group.recoverySetUuid))
+        {
+            continue;
+        }
+
+        for (const PrivacyPortableCasualArchiveCandidate& archive :
+             group.casualArchives)
+        {
+            paths.insert(
+                QDir(archive.rootPath).filePath(archive.proxyRelativePath));
+        }
+
+        for (const PrivacyPortableStrongStoreCandidate& store :
+             group.strongStores)
+        {
+            QList<PrivacyPublicRecoveryLocatorEntry> entries;
+            PrivacyPublicRecoveryLocatorError error =
+                PrivacyPublicRecoveryLocatorError::None;
+
+            if (PrivacyPublicRecoveryLocatorStore::load(
+                    store.rootPath, &entries, &error))
+            {
+                for (const PrivacyPublicRecoveryLocatorEntry& entry :
+                     entries)
+                {
+                    if (entry.recoverySetUuid == group.recoverySetUuid)
+                    {
+                        paths.insert(QDir(store.rootPath).filePath(
+                                         entry.publicRelativePath));
+                    }
+                }
+            }
+        }
+    }
+
+    return paths;
 }
 
 } // namespace Digikam

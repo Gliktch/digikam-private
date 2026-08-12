@@ -30,7 +30,10 @@ enum class PrivacyScanDisposition
     RootRecovering              = 4,
     RootOffline                 = 5,
     RootIdentityMismatch        = 6,
-    CompatibilityOriginalExposed = 7
+    CompatibilityOriginalExposed = 7,
+    /** Positive privacy evidence but no validated P1 category mapping yet;
+     * must never be scanned or indexed as ordinary media. */
+    UnresolvedPrivacyProxy       = 8
 };
 
 class DIGIKAM_DATABASE_EXPORT PrivacyScanRequest

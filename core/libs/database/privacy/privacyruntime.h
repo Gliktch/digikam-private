@@ -335,6 +335,11 @@ public:
     bool hasDeferredRoots() const override;
     bool rootContainsProtectedItems(int albumRootId) const override;
 
+    /** Replaces the process-wide set of positively identified privacy proxy
+     * paths that have no validated category mapping yet. These paths are
+     * excluded from ordinary scanning until a portable import resolves them. */
+    bool setUnresolvedProxyPaths(const QSet<QString>& absolutePaths);
+
 private:
 
     bool removeProtectedItemInternal(const PrivacyItem& item,

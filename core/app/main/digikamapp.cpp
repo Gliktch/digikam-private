@@ -20,6 +20,9 @@
 #include "digikamapp_p.h"
 #include "facepipelineedit.h"
 #include "facebackgroundrecognition.h"
+#include "privacyportablediscovery.h"
+#include "privacyprivatemediafounddialog.h"
+#include "privacyrepository.h"
 #include "privacyruntime.h"
 #include "privacysourceresolver.h"
 #include "systemsettings.h"
@@ -227,6 +230,32 @@ DigikamApp::DigikamApp()
 
     if (CoreDbAccess().backend()->isOpen())
     {
+        if (CollectionManager::instance())
+        {
+            QList<QString> scanRoots;
+
+            for (const CollectionLocation& location :
+                 CollectionManager::instance()->allAvailableLocations())
+            {
+                scanRoots << location.albumRootPath();
+            }
+
+            if (!scanRoots.isEmpty())
+            {
+                const PrivacyPortableDiscoveryResult discovery =
+                    PrivacyPortableDiscovery::scan(scanRoots);
+                PrivacyRepositorySnapshot snapshot;
+                PrivacyRepository().loadSnapshot(&snapshot);
+
+                if (PrivacyStartupRecovery::coordinator())
+                {
+                    PrivacyStartupRecovery::coordinator()->setUnresolvedProxyPaths(
+                        PrivacyPrivateMediaFoundDialog::unresolvedProxyPaths(
+                            discovery, snapshot));
+                }
+            }
+        }
+
         AlbumManager::instance()->startScan();
     }
 
@@ -238,6 +267,32 @@ DigikamApp::DigikamApp()
     // preload additional windows
 
     preloadWindows();
+
+    if (CollectionManager::instance())
+    {
+        connect(CollectionManager::instance(),
+                &CollectionManager::locationStatusChanged,
+                this,
+                [this](const CollectionLocation& location, int oldStatus)
+                {
+                    if (!d->privacyImportOfferArmed ||
+                        (oldStatus !=
+                         static_cast<int>(CollectionLocation::LocationNull)) ||
+                        (location.status() !=
+                         CollectionLocation::LocationAvailable))
+                    {
+                        return;
+                    }
+
+                    const QString path = location.albumRootPath();
+                    QTimer::singleShot(0, this, [this, path]()
+                    {
+                        PrivacyPrivateMediaFoundDialog::offer(path, this);
+                    });
+                });
+    }
+
+    d->privacyImportOfferArmed = true;
 
     readFullScreenSettings(group);
 

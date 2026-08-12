@@ -1212,6 +1212,7 @@ public:
     QSet<QString>                           conflictingRootUuids;
     QSet<qlonglong>                         compatibilityExposedItems;
     QSet<QString>                           protectedRootUuids;
+    QSet<QString>                           unresolvedProxyPaths;
     bool                                    hasUnassignedProtectedItems = false;
     bool                                    initialized = false;
     QSharedPointer<const PrivacyRootVerifier> rootVerifier;
@@ -4723,6 +4724,12 @@ PrivacyScanDisposition PrivacyRuntimeCoordinator::evaluate(const PrivacyScanRequ
         return PrivacyScanDisposition::RootRecovering;
     }
 
+    if (!d->unresolvedProxyPaths.isEmpty() &&
+        d->unresolvedProxyPaths.contains(request.absolutePath))
+    {
+        return PrivacyScanDisposition::UnresolvedPrivacyProxy;
+    }
+
     const auto itemIt = d->items.constFind(request.imageId);
 
     if ((itemIt != d->items.constEnd()) &&
@@ -4816,6 +4823,20 @@ bool PrivacyRuntimeCoordinator::rootContainsProtectedItems(int albumRootId) cons
 
     return (!rootUuid.isEmpty() &&
             (d->hasUnassignedProtectedItems || d->protectedRootUuids.contains(rootUuid)));
+}
+
+bool PrivacyRuntimeCoordinator::setUnresolvedProxyPaths(
+    const QSet<QString>& absolutePaths)
+{
+    QWriteLocker locker(&d->lock);
+
+    if (!d->initialized)
+    {
+        return false;
+    }
+
+    d->unresolvedProxyPaths = absolutePaths;
+    return true;
 }
 
 QSharedPointer<const PrivacyRootVerifier> createDefaultPrivacyRootVerifier()

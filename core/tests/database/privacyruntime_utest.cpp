@@ -429,6 +429,7 @@ private Q_SLOTS:
     void testManagedRootMarkerVerification();
     void testScanGateFailsClosedWithoutProvider();
     void testExpectedProxyAndCanonicalAsset();
+    void testUnresolvedProxyQuarantine();
     void testOnDisplayProxyValidation();
     void testCasualOriginalAssetPreparation();
     void testOfflineAndMismatchedRoot();
@@ -624,6 +625,41 @@ void PrivacyRuntimeTest::testExpectedProxyAndCanonicalAsset()
     runtime.initialize(wrongRootSnapshot, verifier, {}, integrity);
     QCOMPARE(runtime.evaluate(makeScanRequest(10, 55)),
              PrivacyScanDisposition::PrivacyInspectionRequired);
+}
+
+void PrivacyRuntimeTest::testUnresolvedProxyQuarantine()
+{
+    const QSharedPointer<FakeRootVerifier> verifier(new FakeRootVerifier);
+    verifier->states.insert(rootUuid,
+                            PrivacyRootRuntimeState::VerifiedAvailable);
+    const QSharedPointer<FakeIntegrityInspector> integrity(
+        new FakeIntegrityInspector);
+    PrivacyRuntimeCoordinator runtime;
+    QCOMPARE(runtime.initialize(makeSnapshot(), verifier, {}, integrity).state,
+             PrivacyStartupState::Ready);
+
+    const QString unresolvedPath =
+        QLatin1String("/synthetic/collection/album/unresolved.jpg");
+    PrivacyScanRequest request = makeScanRequest(9, 55);
+    request.imageId = -1;
+    request.absolutePath = unresolvedPath;
+    QCOMPARE(runtime.evaluate(request),
+             PrivacyScanDisposition::Unprotected);
+
+    QVERIFY(runtime.setUnresolvedProxyPaths({ unresolvedPath }));
+    QCOMPARE(runtime.evaluate(request),
+             PrivacyScanDisposition::UnresolvedPrivacyProxy);
+
+    QVERIFY(runtime.setUnresolvedProxyPaths({}));
+    QCOMPARE(runtime.evaluate(request),
+             PrivacyScanDisposition::Unprotected);
+
+    // The unresolved check also precedes the protected-item lookup.
+    request.imageId = 42;
+    QVERIFY(runtime.setUnresolvedProxyPaths({ unresolvedPath }));
+    request.absolutePath = unresolvedPath;
+    QCOMPARE(runtime.evaluate(request),
+             PrivacyScanDisposition::UnresolvedPrivacyProxy);
 }
 
 void PrivacyRuntimeTest::testOnDisplayProxyValidation()

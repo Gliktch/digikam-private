@@ -13,6 +13,7 @@
 // Qt includes
 
 #include <QDialog>
+#include <QSet>
 
 // Local includes
 
@@ -43,6 +44,12 @@ public:
      * candidates exist. Returns true when at least one category was
      * imported. */
     static bool offer(const QString& scanRoot, QWidget* parent = nullptr);
+
+    /** Proxy paths with positive privacy evidence whose recovery identity is
+     * not yet mapped to a P1 category. These must not be scanned ordinarily. */
+    static QSet<QString> unresolvedProxyPaths(
+        const PrivacyPortableDiscoveryResult& discovery,
+        const PrivacyRepositorySnapshot& snapshot);
 
 private:
 
