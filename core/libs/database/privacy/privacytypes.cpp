@@ -12,7 +12,9 @@
 
 // Qt includes
 
+#include <algorithm>
 #include <QDir>
+#include <QSet>
 #include <QStringList>
 #include <QUuid>
 
@@ -298,6 +300,163 @@ bool PrivacyItem::isValid() const
             (presentationVersion > 0)        &&
             (generation >= 0)                &&
             (transactionState >= 0));
+}
+
+bool PrivacyPortableImportImageFact::isValid() const
+{
+    const QByteArray hash = proxyHashHex.toLatin1();
+    const bool validHash =
+        (hash.size() == 64) &&
+        std::all_of(hash.cbegin(), hash.cend(),
+                    [](char character)
+                    {
+                        return (((character >= '0') && (character <= '9')) ||
+                                ((character >= 'a') && (character <= 'f')));
+                    });
+
+    return ((albumRootId > 0) &&
+            isValidRelativePath(publicRelativePath) &&
+            validHash && (proxySize >= 0) &&
+            modificationDate.isValid());
+}
+
+bool PrivacyPortableImportPublication::isValid() const
+{
+    if (!category.isValid() ||
+        (category.lifecycleState != PrivacyCategoryLifecycleState::Active) ||
+        items.isEmpty() || containers.isEmpty() || assets.isEmpty() ||
+        (items.size() != containers.size()) ||
+        (items.size() != imageFacts.size()) ||
+        albumRoots.isEmpty())
+    {
+        return false;
+    }
+
+    if (hasCredential)
+    {
+        if ((category.currentCredentialGeneration < 1) ||
+            !credential.isValid() ||
+            (credential.categoryUuid != category.uuid) ||
+            (credential.generation != category.currentCredentialGeneration) ||
+            !managedStoreRoot.isValid() ||
+            (managedStoreRoot.kind !=
+             PrivacyStorageRootKind::ManagedStoreRoot) ||
+            !store.isValid() ||
+            (store.categoryUuid != category.uuid) ||
+            (store.rootUuid != managedStoreRoot.uuid) ||
+            (store.lifecycleState != PrivacyStoreLifecycleState::Active) ||
+            (store.configGeneration != category.currentCredentialGeneration) ||
+            storeBindings.isEmpty())
+        {
+            return false;
+        }
+
+        for (const PrivacyStoreBinding& binding : storeBindings)
+        {
+            if ((binding.categoryUuid != category.uuid) ||
+                (binding.storeUuid != store.uuid) || !binding.isValid())
+            {
+                return false;
+            }
+        }
+    }
+    else
+    {
+        if ((category.currentCredentialGeneration != 0) ||
+            managedStoreRoot.isValid() || store.isValid() ||
+            !storeBindings.isEmpty())
+        {
+            return false;
+        }
+    }
+
+    for (const PrivacyStorageRoot& root : albumRoots)
+    {
+        if (!root.isValid() ||
+            (root.kind != PrivacyStorageRootKind::AlbumRoot))
+        {
+            return false;
+        }
+    }
+
+    for (int i = 0 ; i < items.size() ; ++i)
+    {
+        const PrivacyItem& item = items.at(i);
+        const PrivacyContainer& container = containers.at(i);
+
+        if (!imageFacts.at(i).isValid() ||
+            !isCanonicalUuid(item.uuid) ||
+            (item.categoryUuid != category.uuid) ||
+            (item.presentationVersion <= 0) || (item.generation < 0) ||
+            (item.transactionState !=
+             static_cast<int>(PrivacyTransactionState::Complete)) ||
+            item.expectedProxyHash.isEmpty() || (item.expectedProxySize < 0) ||
+            !container.isValid() || (container.itemUuid != item.uuid))
+        {
+            return false;
+        }
+
+        bool foundPrimary = false;
+
+        for (const PrivacyAsset& asset : assets)
+        {
+            if (asset.itemUuid != item.uuid)
+            {
+                continue;
+            }
+
+            if (!asset.isValid() ||
+                (asset.containerUuid != container.uuid))
+            {
+                return false;
+            }
+
+            if ((asset.role == PrivacyAsset::PrimaryMediaRole) &&
+                (asset.ordinal == 0))
+            {
+                if (foundPrimary ||
+                    (asset.publicRelativePath !=
+                     imageFacts.at(i).publicRelativePath) ||
+                    (asset.proxyHash != imageFacts.at(i).proxyHashHex) ||
+                    (asset.proxySize != imageFacts.at(i).proxySize))
+                {
+                    return false;
+                }
+
+                foundPrimary = true;
+            }
+        }
+
+        if (!foundPrimary)
+        {
+            return false;
+        }
+    }
+
+    QSet<QString> itemUuids;
+    QSet<QString> containerUuids;
+
+    for (const PrivacyItem& item : items)
+    {
+        if (itemUuids.contains(item.uuid))
+        {
+            return false;
+        }
+
+        itemUuids.insert(item.uuid);
+    }
+
+    for (const PrivacyContainer& container : containers)
+    {
+        if (containerUuids.contains(container.uuid))
+        {
+            return false;
+        }
+
+        containerUuids.insert(container.uuid);
+    }
+
+    return true;
 }
 
 } // namespace Digikam

@@ -171,6 +171,8 @@ public:
                                         const PrivacyStore& store,
                                         const QList<PrivacyStoreBinding>& bindings,
                                         const PrivacyTransaction& transaction)                                    const;
+    bool publishPrivacyPortableImport(
+        const PrivacyPortableImportPublication& publication)                                                const;
     bool beginPrivacyItemProtection(const PrivacyItem& item,
                                     const PrivacyTransaction& transaction,
                                     const PrivacyTransactionJournal& journal)                                    const;

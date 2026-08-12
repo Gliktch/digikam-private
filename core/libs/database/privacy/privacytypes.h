@@ -386,4 +386,34 @@ public:
     QList<PrivacyTransactionJournal> transactionJournals;
 };
 
+/** Image-row creation facts for one imported proxy (parallel to items). */
+struct DIGIKAM_DATABASE_EXPORT PrivacyPortableImportImageFact
+{
+    bool isValid() const;
+
+    int        albumRootId = -1;
+    QString    publicRelativePath;
+    QString    proxyHashHex;
+    qlonglong  proxySize = -1;
+    QDateTime  modificationDate;
+};
+
+/** One atomic per-category portable-import publication. */
+struct DIGIKAM_DATABASE_EXPORT PrivacyPortableImportPublication
+{
+    bool isValid() const;
+
+    PrivacyCategory category;
+    bool hasCredential = false;
+    PrivacyCredential credential;
+    PrivacyStorageRoot managedStoreRoot;
+    PrivacyStore store;
+    QList<PrivacyStoreBinding> storeBindings;
+    QList<PrivacyStorageRoot> albumRoots;
+    QList<PrivacyPortableImportImageFact> imageFacts;
+    QList<PrivacyItem> items;
+    QList<PrivacyContainer> containers;
+    QList<PrivacyAsset> assets;
+};
+
 } // namespace Digikam

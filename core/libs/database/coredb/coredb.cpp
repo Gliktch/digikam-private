@@ -29,6 +29,8 @@
 
 // Qt includes
 
+#include <QFileInfo>
+#include <QSet>
 #include <QSqlQuery>
 
 // Local includes
@@ -975,17 +977,23 @@ bool CoreDB::insertPrivacyContainer(const PrivacyContainer& container) const
                        << static_cast<int>(PrivacyStorageRootKind::AlbumRoot)
                        << container.credentialGeneration
                        << container.itemUuid
-                       << static_cast<int>(PrivacyBackend::Casual);
+                       << static_cast<int>(PrivacyBackend::Casual)
+                       << container.credentialGeneration;
         d->db->execSql(QString::fromUtf8("SELECT EXISTS("
                                          "SELECT 1 FROM PrivacyItems "
                                          "INNER JOIN PrivacyCategories "
                                          "ON PrivacyCategories.uuid=PrivacyItems.categoryUuid "
                                          "INNER JOIN PrivacyStorageRoots "
                                          "ON PrivacyStorageRoots.uuid=? AND PrivacyStorageRoots.kind=? "
-                                         "INNER JOIN PrivacyCredentials "
+                                         "LEFT JOIN PrivacyCredentials "
                                          "ON PrivacyCredentials.categoryUuid=PrivacyItems.categoryUuid "
                                          "AND PrivacyCredentials.generation=? "
-                                         "WHERE PrivacyItems.uuid=? AND PrivacyCategories.backend=?);"),
+                                         "WHERE PrivacyItems.uuid=? AND PrivacyCategories.backend=? "
+                                         "AND (PrivacyCredentials.categoryUuid IS NOT NULL "
+                                         "OR ( ? = 0 "
+                                         "AND PrivacyCategories.currentCredentialGeneration = 0 "
+                                         "AND NOT EXISTS(SELECT 1 FROM PrivacyCredentials "
+                                         "WHERE PrivacyCredentials.categoryUuid=PrivacyCategories.uuid))));"),
                        parentBindings, &parentValues);
     }
     else
@@ -1840,6 +1848,134 @@ bool CoreDB::publishPrivacyCategoryCreation(
                                             PrivacyTransactionState::Created, 0))
     {
         return abort();
+    }
+
+    return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
+}
+
+bool CoreDB::publishPrivacyPortableImport(
+    const PrivacyPortableImportPublication& publication) const
+{
+    if (!publication.isValid() || d->db->isInTransaction() ||
+        (d->db->beginTransaction() != BdEngineBackend::NoErrors))
+    {
+        return false;
+    }
+
+    const auto abort = [this]()
+    {
+        d->db->rollbackTransactionAndFinish();
+        return false;
+    };
+
+    QVariantList conflict;
+    d->db->execSql(QString::fromUtf8(
+        "SELECT EXISTS(SELECT 1 FROM PrivacyCategories WHERE uuid=?);"),
+        publication.category.uuid, &conflict);
+
+    if ((conflict.size() != 1) || conflict.constFirst().toBool())
+    {
+        return abort();
+    }
+
+    if (!insertPrivacyCategory(publication.category))
+    {
+        return abort();
+    }
+
+    QSet<int> albumRootIds;
+
+    for (const PrivacyStorageRoot& root : publication.albumRoots)
+    {
+        if ((root.albumRootId <= 0) || !insertPrivacyStorageRoot(root))
+        {
+            return abort();
+        }
+
+        albumRootIds.insert(root.albumRootId);
+    }
+
+    if (publication.hasCredential)
+    {
+        if (!insertPrivacyStorageRoot(publication.managedStoreRoot) ||
+            !insertPrivacyStore(publication.store))
+        {
+            return abort();
+        }
+
+        for (const PrivacyStoreBinding& binding : publication.storeBindings)
+        {
+            if (!insertPrivacyStoreBinding(binding))
+            {
+                return abort();
+            }
+        }
+
+        if (!insertPrivacyCredential(publication.credential))
+        {
+            return abort();
+        }
+    }
+
+    for (int i = 0 ; i < publication.items.size() ; ++i)
+    {
+        const PrivacyPortableImportImageFact& fact =
+            publication.imageFacts.at(i);
+
+        if (!albumRootIds.contains(fact.albumRootId))
+        {
+            return abort();
+        }
+
+        const QString relativePath = fact.publicRelativePath;
+        const int slashIndex = relativePath.lastIndexOf(QLatin1Char('/'));
+        const QString directory = (slashIndex < 0)
+            ? QString()
+            : relativePath.left(slashIndex);
+        const QString fileName = (slashIndex < 0)
+            ? relativePath
+            : relativePath.mid(slashIndex + 1);
+        const QString albumPath =
+            QLatin1Char('/') + (directory.isEmpty()
+                                ? QString()
+                                : directory);
+        const int albumId = getAlbumForPath(fact.albumRootId, albumPath, true);
+
+        if ((albumId <= 0) || fileName.isEmpty())
+        {
+            return abort();
+        }
+
+        const qlonglong imageId = addItem(
+            albumId, fileName, DatabaseItem::Visible, DatabaseItem::Image,
+            fact.modificationDate, fact.proxySize, fact.proxyHashHex);
+
+        if (imageId <= 0)
+        {
+            return abort();
+        }
+
+        PrivacyItem item = publication.items.at(i);
+        item.imageId = imageId;
+
+        if (!insertPrivacyItem(item))
+        {
+            return abort();
+        }
+
+        if (!insertPrivacyContainer(publication.containers.at(i)))
+        {
+            return abort();
+        }
+
+        for (const PrivacyAsset& asset : publication.assets)
+        {
+            if ((asset.itemUuid == item.uuid) &&
+                !insertPrivacyAsset(asset))
+            {
+                return abort();
+            }
+        }
     }
 
     return (d->db->commitTransaction() == BdEngineBackend::NoErrors);
