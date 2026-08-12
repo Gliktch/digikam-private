@@ -1,0 +1,170 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2023-05-15
+ * Description : geolocation engine based on Marble.
+ *               (c) 2007-2022 Marble Team
+ *               https://invent.kde.org/education/marble/-/raw/master/data/credits_authors.html
+ *
+ * SPDX-FileCopyrightText: 2023-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ * ============================================================ */
+
+#include "GeoDataSchemaData.h"
+
+// Qt includes
+
+#include <QDataStream>
+#include <QString>
+#include <QHash>
+
+// Local includes
+
+#include "GeoDataSimpleData.h"
+#include "GeoDataTypes.h"
+
+namespace Marble
+{
+
+class Q_DECL_HIDDEN GeoDataSchemaDataPrivate
+{
+public:
+
+    GeoDataSchemaDataPrivate()
+        : m_parent(nullptr)
+    {
+        // nothing to do
+    }
+
+    QString                           m_schemaUrl;
+    QHash<QString, GeoDataSimpleData> m_simpleData;   // Map for name and SimpleData
+    GeoDataExtendedData*              m_parent = nullptr;
+};
+
+GeoDataSchemaData::GeoDataSchemaData()
+    : d(new GeoDataSchemaDataPrivate)
+{
+}
+
+GeoDataSchemaData::GeoDataSchemaData(const GeoDataSchemaData& other)
+    : d(new GeoDataSchemaDataPrivate(*other.d))
+{
+}
+
+GeoDataSchemaData& GeoDataSchemaData::operator=(const GeoDataSchemaData& rhs)
+{
+    *d = *rhs.d;
+    return *this;
+}
+
+bool GeoDataSchemaData::operator==(const GeoDataSchemaData& other) const
+{
+    if (d->m_schemaUrl != other.d->m_schemaUrl ||
+        d->m_simpleData.size() != other.d->m_simpleData.size())
+    {
+        return false;
+    }
+
+    QHash<QString, GeoDataSimpleData>::iterator begin = d->m_simpleData.begin();
+    QHash<QString, GeoDataSimpleData>::iterator end = d->m_simpleData.end();
+    QHash<QString, GeoDataSimpleData>::iterator beginOther = other.d->m_simpleData.begin();
+
+    for (; begin != end; ++begin, ++beginOther)
+    {
+        if (*begin != *beginOther)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool GeoDataSchemaData::operator!=(const GeoDataSchemaData& other) const
+{
+    return !this->operator==(other);
+}
+
+GeoDataSchemaData::~GeoDataSchemaData()
+{
+    delete d;
+}
+
+QString GeoDataSchemaData::schemaUrl() const
+{
+    return d->m_schemaUrl;
+}
+
+void GeoDataSchemaData::setSchemaUrl(const QString& schemaUrl)
+{
+    d->m_schemaUrl = schemaUrl;
+}
+
+GeoDataSimpleData& GeoDataSchemaData::simpleData(const QString& name) const
+{
+    return d->m_simpleData[ name ];
+}
+
+void GeoDataSchemaData::addSimpleData(const GeoDataSimpleData& data)
+{
+    d->m_simpleData.insert(data.name(), data);
+}
+
+QList<GeoDataSimpleData> GeoDataSchemaData::simpleDataList() const
+{
+    return d->m_simpleData.values();
+}
+
+void GeoDataSchemaData::setParent(GeoDataExtendedData* parent)
+{
+    d->m_parent = parent;
+}
+
+const GeoDataExtendedData* GeoDataSchemaData::parent() const
+{
+    return d->m_parent;
+}
+
+GeoDataExtendedData* GeoDataSchemaData::parent()
+{
+    return d->m_parent;
+}
+
+const char* GeoDataSchemaData::nodeType() const
+{
+    return GeoDataTypes::GeoDataSchemaDataType;
+}
+
+void GeoDataSchemaData::pack(QDataStream& stream) const
+{
+    stream << d->m_schemaUrl;
+    stream << d->m_simpleData.size();
+
+    QHash<QString, GeoDataSimpleData>::const_iterator iter = d->m_simpleData.constBegin();
+    QHash<QString, GeoDataSimpleData>::const_iterator end = d->m_simpleData.constEnd();
+
+    for (; iter != end; ++iter)
+    {
+        iter.value().pack(stream);
+    }
+}
+
+void GeoDataSchemaData::unpack(QDataStream& stream)
+{
+    stream >> d->m_schemaUrl;
+    int size = 0;
+    stream >> size;
+
+    for (int i = 0; i < size; i++)
+    {
+        GeoDataSimpleData simpleData;
+        simpleData.unpack(stream);
+        d->m_simpleData.insert(simpleData.name(), simpleData);
+    }
+}
+
+}   // namespace Marble

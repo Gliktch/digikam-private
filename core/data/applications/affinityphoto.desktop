@@ -1,0 +1,25 @@
+[Desktop Entry]
+Type=Application
+Name=Affinity Photo Editor
+Name[ar]=محرر الصور Affinity
+Name[bg]=Affinity Photo Editor
+Name[ca]=Editor de fotos Affinity
+Name[ca@valencia]=Editor de fotos Affinity
+Name[es]=Editor Affinity Photo
+Name[fr]=Éditeur de photos Affinity
+Name[he]=עורך התמונות Affinity
+Name[hu]=Affinity Photo Editor
+Name[it]=Editor di fotografie Affinity
+Name[ka]=ფოტორედაქტორი Affinity
+Name[nl]=Fotobewerker Affinity
+Name[pt_BR]=Editor de Foto Affinity
+Name[ru]=Редактор фотографий Affinity 
+Name[sk]=Affinity Photo Editor
+Name[sl]=Affinity Photo Editor
+Name[sv]=Affinity-fotoeditor
+Name[tr]=Affinity Fotoğraf Düzenleyicisi
+Name[uk]=Редактор фотографій Affinity
+Name[zh_CN]=Affinity Photo 编辑器
+X-Exec=Photo.exe %f
+X-Icon=Photo.exe
+MimeType=image/jpg;image/bmp;image/png;image/tiff;image/raw;image/heif;image/webp;image/dng;image/jxl;image/jp2

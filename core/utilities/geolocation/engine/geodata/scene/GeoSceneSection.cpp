@@ -1,0 +1,158 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2023-05-15
+ * Description : geolocation engine based on Marble.
+ *               (c) 2007-2022 Marble Team
+ *               https://invent.kde.org/education/marble/-/raw/master/data/credits_authors.html
+ *
+ * SPDX-FileCopyrightText: 2023-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ * ============================================================ */
+
+#include "GeoSceneSection.h"
+
+// Local includes
+
+#include "GeoSceneTypes.h"
+#include "GeoSceneItem.h"
+#include "digikam_debug.h"
+
+namespace Marble
+{
+
+GeoSceneSection::GeoSceneSection(const QString& name)
+    : m_name(name),
+      m_checkable(false),
+      m_spacing(12)
+{
+}
+
+GeoSceneSection::~GeoSceneSection()
+{
+    qDeleteAll(m_items);
+}
+
+const char* GeoSceneSection::nodeType() const
+{
+    return GeoSceneTypes::GeoSceneSectionType;
+}
+
+void GeoSceneSection::addItem(GeoSceneItem* item)
+{
+    // Remove any item that has the same name
+    QVector<GeoSceneItem*>::iterator it = m_items.begin();
+
+    while (it != m_items.end())
+    {
+        GeoSceneItem* currentItem = *it;
+
+        if (currentItem->name() == item->name())
+        {
+            delete currentItem;
+            m_items.erase(it);
+            break;
+        }
+
+        else
+        {
+            ++it;
+        }
+    }
+
+    if (item)
+    {
+        m_items.append(item);
+    }
+}
+
+GeoSceneItem* GeoSceneSection::item(const QString& name)
+{
+    GeoSceneItem* item = nullptr;
+
+    QVector<GeoSceneItem*>::const_iterator it = m_items.constBegin();
+    QVector<GeoSceneItem*>::const_iterator end = m_items.constEnd();
+
+    for (; it != end; ++it)
+    {
+        if ((*it)->name() == name)
+        {
+            item = *it;
+            break;
+        }
+    }
+
+    if (!item)
+    {
+        item = new GeoSceneItem(name);
+        addItem(item);
+    }
+
+    return item;
+}
+
+QVector<GeoSceneItem*> GeoSceneSection::items() const
+{
+    return m_items;
+}
+
+QString GeoSceneSection::name() const
+{
+    return m_name;
+}
+
+QString GeoSceneSection::heading() const
+{
+    return m_heading;
+}
+
+void GeoSceneSection::setHeading(const QString& heading)
+{
+    m_heading = heading;
+}
+
+bool GeoSceneSection::checkable() const
+{
+    return m_checkable;
+}
+
+void GeoSceneSection::setCheckable(bool checkable)
+{
+    m_checkable = checkable;
+}
+
+QString GeoSceneSection::connectTo() const
+{
+    return m_connectTo;
+}
+
+void GeoSceneSection::setConnectTo(const QString& connectTo)
+{
+    m_connectTo = connectTo;
+}
+
+int  GeoSceneSection::spacing() const
+{
+    return m_spacing;
+}
+
+void GeoSceneSection::setSpacing(int spacing)
+{
+    m_spacing = spacing;
+}
+
+QString GeoSceneSection::radio() const
+{
+    return m_radio;
+}
+
+void GeoSceneSection::setRadio(const QString& radio)
+{
+    m_radio = radio;
+}
+
+} // namespace Marble

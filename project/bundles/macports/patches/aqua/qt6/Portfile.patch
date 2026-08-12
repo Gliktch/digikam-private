@@ -1,0 +1,28 @@
+--- Portfile.old	2025-05-08 19:33:18
++++ Portfile	2025-05-08 17:44:48
+@@ -57,7 +57,7 @@
+ use_xcode                   yes
+ 
+ # MacPorts LLVM/Clang version to use when required
+-set llvm_version            19
++set llvm_version            20
+ 
+ # MacPorts Python branch & version to use when required
+ set python_branch           3.13
+@@ -365,7 +365,7 @@
+             2b33d1c85e85ed58729db228448f92105ab746ffdc9b98f0c4e3bf00b789789e \
+             672153992
+         }
+-        "path:bin/node:nodejs20 port:python${python_version} port:py${python_version}-html5lib port:py${python_version}-ply"
++        "path:bin/node:nodejs22 port:python${python_version} port:py${python_version}-html5lib port:py${python_version}-ply"
+         "port:libpng port:zlib"
+         "qtdeclarative qtwebchannel qttools qtpositioning"
+         {"Qt WebEngine Qt" "Qt PDF"}
+@@ -1088,6 +1088,7 @@
+ }
+ 
+ subport ${name}-qtwebengine {
++    patchfiles-append      gperf.patch
+     # manually install icudtl.dat
+     post-destroot {
+         xinstall -m 0644 ${worksrcpath}/src/3rdparty/chromium/third_party/icu/common/icudtl.dat \

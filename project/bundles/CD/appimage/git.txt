@@ -1,0 +1,185 @@
+#git clone git@invent.kde.org:packaging/flatpak-kde-applications.git
+#git clone git@invent.kde.org:packaging/craft-blueprints-kde.git
+#git clone git@invent.kde.org:packaging/craft.git
+#git clone git@invent.kde.org:cgilles/binary-factory-tooling.git
+
+#git clone --progress --verbose git@invent.kde.org:graphics/digikam.git ./DKtest
+
+#git clone git@invent.kde.org:graphics/digikam.git ./7.x && git checkout -b qt5-maintenance remotes/origin/qt5-maintenance
+#git clone git@invent.kde.org:graphics/digikam.git ./8.x
+
+#git clone git@invent.kde.org:graphics/digikam.git ./DK.tarball
+#git clone git@invent.kde.org:websites/digikam-org.git ./DK.org
+#git clone git@invent.kde.org:documentation/digikam-doc.git ./DK.doc
+
+#git clone git@invent.kde.org:graphics/digikam.git ./qt6-port
+#git clone git@invent.kde.org:graphics/digikam.git ./warn-qhash
+
+#git clone git@invent.kde.org:frameworks/extra-cmake-modules
+#git clone git@invent.kde.org:frameworks/kxmlgui
+
+#git clone https://github.com/opencv/opencv.git
+
+#git clone https://github.com/Exiv2/exiv2.git
+
+#git clone https://invent.kde.org/qt/qt/qtbase.git ./qtbase
+#git clone https://invent.kde.org/qt/qt/qtimageformats.git ./qtimageformats
+#git clone https://github.com/qt/qtwebkit.git
+
+#git clone https://github.com/jmue/dngconvert.git ./dngconvert
+
+#git clone git@invent.kde.org:graphics/kphotoalbum ./kphotoalbum
+#git clone git@invent.kde.org:graphics/kgeotag ./kgeotag
+
+#git clone git@invent.kde.org:graphics/gwenview ./gwenview
+
+#git clone git://git.gnome.org/gimp
+
+#git clone git@invent.kde.org:frameworks/kmymoney
+
+#git clone https://invent.kde.org/utilities/kate.git
+
+#git clone git@invent.kde.org:frameworks/kde-baseapps
+
+#git clone git@invent.kde.org:Education/marble
+
+#git clone git@invent.kde.org:frameworks/libksane  ./libksane
+
+#git clone git@invent.kde.org:frameworks/kcalendarcore
+#git clone git@invent.kde.org:frameworks/kconfig
+#git clone git@invent.kde.org:frameworks/kcoreaddons
+#git clone git@invent.kde.org:frameworks/kwindowsystem
+#git clone git@invent.kde.org:frameworks/solid
+#git clone git@invent.kde.org:frameworks/ki18n
+#git clone git@invent.kde.org:frameworks/kcrash
+#git clone git@invent.kde.org:frameworks/kservice
+#git clone git@invent.kde.org:frameworks/kdoctools
+#git clone git@invent.kde.org:frameworks/kxmlgui
+#git clone git@invent.kde.org:frameworks/kconfigwidgets
+#git clone git@invent.kde.org:frameworks/kiconthemes
+#git clone git@invent.kde.org:frameworks/kbookmarks
+#git clone git@invent.kde.org:frameworks/marble
+#git clone git@invent.kde.org:frameworks/knotifications
+#git clone git@invent.kde.org:frameworks/knotifyconfig
+#git clone git@invent.kde.org:frameworks/ktextwidgets
+#git clone git@invent.kde.org:frameworks/sonnet
+#git clone git@invent.kde.org:frameworks/phonon
+#git clone git@invent.kde.org:frameworks/kwidgetsaddons
+#git clone git@invent.kde.org:frameworks/kio
+#git clone git@invent.kde.org:frameworks/breeze-icons.git
+
+#git clone git@invent.kde.org:graphics/krita.git
+
+#git clone git@invent.kde.org:frameworks/scratch/cgilles/cgilles.git
+
+#git clone git@invent.kde.org:frameworks/ffmpegthumbs.git
+
+#git clone git@invent.kde.org:frameworks/websites/digikam-org
+
+#git clone git://git.code.sf.net/p/lensfun/code lensfun-code
+
+#git clone https://github.com/jrfonseca/drmingw.git
+
+#git clone https://github.com/nokiatech/heif.git
+
+#git clone https://github.com/ImageMagick/ImageMagick.git
+
+#git clone git@github.com:cgilles/gmic-qt.git
+
+#git clone https://github.com/strukturag/libde265.git
+#git clone https://github.com/strukturag/libheif.git
+
+#git clone https://gitlab.com/Bobulous/digikam-html5-gallery-theme.git
+
+#git clone https://github.com/LibRaw/LibRaw.git
+
+#git clone git://anongit.kde.org/marble.git
+
+#git clone https://github.com/wang-bin/QtAV.git && cd QtAV && git submodule update --init
+
+#git clone git@github.com:cgilles/ImageMosaicWall.git
+
+#git clone git@github.com:cgilles/digikam-photolayout.git
+
+#git clone https://github.com/alexey-lysiuk/macos-sdk.git
+
+#git clone https://github.com/clementine-player/Clementine.git
+
+#git clone git@github.com:cgilles/digikam-analogexif.git
+
+#git clone https://github.com/KDE/clazy
+
+#git clone https://github.com/Krazy-collection/krazy
+
+#git clone https://github.com/philvl/ZExifTool.git
+
+#git clone https://github.com/Fimagena/raw2dng.git
+
+#git clone https://github.com/adobe/XMP-Toolkit-SDK.git
+
+#git clone git@invent.kde.org:graphics/kipi-plugins.git
+
+#git clone git@github.com:cgilles/dngconvert.git
+
+#git clone https://invent.kde.org/packaging/flatpak-kde-applications.git
+
+#git clone git@github.com:cgilles/digikam-pgf-database.git
+
+#git clone https://invent.kde.org/qt/qt/qt5.git
+
+#git clone https://github.com/cgilles/digikam-install-deps.git
+
+#git clone https://github.com/manisandro/gImageReader.git
+
+#git clone git@invent.kde.org:graphics/kooka.git
+
+#git clone https://github.com/AmonRaNet/QGeoView.git
+
+#git clone https://invent.kde.org/system/dolphin.git
+
+#git clone https://github.com/strukturag/libde265.git
+
+#git clone https://github.com/strukturag/libheif.git
+
+#git clone https://github.com/musselwhizzle/Focus-Points.git
+
+#git clone git@invent.kde.org:sysadmin/repo-metadata.git
+
+#git clone https://github.com/tatokis/qresExtract.git
+
+#git clone https://github.com/unicode-org/icu.git
+
+#git clone git@github.com:cgilles/digikamflowplugin.git
+#git clone https://github.com/cgilles/digikam-plugins-demo.git
+
+#git clone git@github.com:cgilles/LibRaw.git LibRaw.cgilles
+
+#git clone https://github.com/libjxl/libjxl.git
+
+#git clone https://github.com/AOMediaCodec/libavif.git
+#git clone https://aomedia.googlesource.com/aom
+
+#git clone https://git.ffmpeg.org/ffmpeg.git
+
+#git clone git@github.com:cgilles/digikam-plugins-demo.git
+
+#git clone git@github.com:cgilles/digikam-vkontakte.git
+#git clone git@github.com:cgilles/digikam-yandexfotki.git
+
+#git clone git@github.com:cgilles/digikam-debianscreenshots.git
+
+#git clone git@invent.kde.org:graphics/libksane.git
+
+#git clone https://invent.kde.org/frameworks/kimageformats.git
+
+#git clone https://github.com/freedesktop/uchardet
+
+#git clone git@invent.kde.org:sysadmin/binary-factory-tooling.git
+
+#git clone git@invent.kde.org:multimedia/kdenlive.git
+
+#git clone https://invent.kde.org/sdk/kdesrc-build.git
+
+#git clone git@invent.kde.org:cgilles/marble.git marble.cgilles
+
+git clone https://github.com/jasper-software/jasper.git

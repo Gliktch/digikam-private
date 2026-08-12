@@ -1,0 +1,402 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2023-05-15
+ * Description : geolocation engine based on Marble.
+ *               (c) 2007-2022 Marble Team
+ *               https://invent.kde.org/education/marble/-/raw/master/data/credits_authors.html
+ *
+ * SPDX-FileCopyrightText: 2023-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ * ============================================================ */
+
+#include "DownloadRegion.h"
+
+// Local includes
+
+#include "MarbleModel.h"
+#include "MarbleMap.h"
+#include "MarbleMath.h"
+#include "TextureLayer.h"
+#include "GeoDataLatLonAltBox.h"
+#include "GeoDataLineString.h"
+#include "GeoSceneDocument.h"
+#include "GeoSceneMap.h"
+#include "GeoSceneLayer.h"
+#include "GeoSceneTileDataset.h"
+#include "GeoSceneAbstractTileProjection.h"
+#include "TileCoordsPyramid.h"
+#include "digikam_debug.h"
+
+namespace Marble
+{
+
+class Q_DECL_HIDDEN DownloadRegionPrivate
+{
+public:
+
+    MarbleModel*     m_marbleModel      = nullptr;
+
+    QPair<int, int>  m_tileLevelRange;
+
+    int              m_visibleTileLevel = 0;
+
+public:
+
+    DownloadRegionPrivate();
+
+    int rad2PixelX(qreal const lon, const TileLayer* tileLayer) const;
+
+    int rad2PixelY(qreal const lat, const TileLayer* tileLayer) const;
+};
+
+DownloadRegionPrivate::DownloadRegionPrivate()
+    : m_marbleModel     (nullptr),
+      m_tileLevelRange  (0, 0),
+      m_visibleTileLevel(0)
+{
+    // nothing to do
+}
+
+// copied from AbstractScanlineTextureMapper and slightly adjusted
+int DownloadRegionPrivate::rad2PixelX(qreal const lon, const TileLayer* tileLayer) const
+{
+    qreal tileWidth         = tileLayer && (tileLayer->layerCount() > 0) ? tileLayer->tileSize().width() : 256;
+    qreal const globalWidth = tileWidth * tileLayer->tileColumnCount(m_visibleTileLevel);
+
+    return static_cast<int>(globalWidth * 0.5 * (1 + lon / M_PI));
+}
+
+/**
+ * Copied from AbstractScanlineTextureMapper and slightly adjusted.
+ */
+int DownloadRegionPrivate::rad2PixelY(qreal const lat, const TileLayer* tileLayer) const
+{
+    if (tileLayer)
+    {
+        qreal tileHeight         = (tileLayer->layerCount() > 0) ? tileLayer->tileSize().height()
+                                                                 : 256;
+        qreal const globalHeight = tileHeight * tileLayer->tileRowCount(m_visibleTileLevel);
+
+        switch (tileLayer->tileProjection()->type())
+        {
+            case GeoSceneAbstractTileProjection::Equirectangular:
+            {
+                return static_cast<int>(globalHeight * (0.5 - lat / M_PI));
+            }
+
+            case GeoSceneAbstractTileProjection::Mercator:
+            {
+                if (fabs(lat) < 1.4835)
+                {
+                    return static_cast<int>(globalHeight * 0.5 * (1 - gdInv(lat) / M_PI));
+                }
+
+                if (lat >= +1.4835)
+                {
+                    return static_cast<int>(globalHeight * 0.5 * (1 - 3.1309587 / M_PI));
+                }
+
+                if (lat <= -1.4835)
+                {
+                    return static_cast<int>(globalHeight * 0.5 * (1 + 3.1309587 / M_PI));
+                }
+            }
+        }
+    }
+
+    // Dummy value to avoid a warning.
+
+    return 0;
+}
+
+DownloadRegion::DownloadRegion(QObject* parent) : QObject(parent),
+    d(new DownloadRegionPrivate)
+{
+    // nothing to do
+}
+
+void DownloadRegion::setMarbleModel(MarbleModel* model)
+{
+    d->m_marbleModel = model;
+}
+
+DownloadRegion::~DownloadRegion()
+{
+    delete d;
+}
+
+void DownloadRegion::setTileLevelRange(const int minimumTileLevel, const int maximumTileLevel)
+{
+    Q_ASSERT(minimumTileLevel >= 0);
+    Q_ASSERT(maximumTileLevel >= 0);
+    Q_ASSERT(minimumTileLevel <= maximumTileLevel);
+
+    d->m_tileLevelRange.first  = minimumTileLevel;
+    d->m_tileLevelRange.second = maximumTileLevel;
+}
+
+QVector<TileCoordsPyramid> DownloadRegion::region(const TileLayer* tileLayer,
+                                                  const GeoDataLatLonAltBox& downloadRegion) const
+{
+    Q_ASSERT(tileLayer);
+
+    int tileLevelRangeFirst  = d->m_tileLevelRange.first;
+    int tileLevelRangeSecond = d->m_tileLevelRange.second;
+
+    TileType tileType = dynamic_cast<const TextureLayer*>(tileLayer) ? TextureTileType : VectorTileType;
+
+    QVector<int> validLevels;
+    validLevels = validTileLevels(tileType);
+
+    // Align the tileLevelRangeSecond with the validTileLevels
+
+    if (!validLevels.isEmpty())
+    {
+        int lastIndex = validLevels.count() - 1;
+
+        for (int i = 0 ; i < validLevels.count() ; ++i)
+        {
+            if (
+                (validLevels.at(lastIndex - i) <= tileLevelRangeSecond) &&
+                (validLevels.at(lastIndex - i) >= tileLevelRangeFirst)
+               )
+            {
+                tileLevelRangeSecond = validLevels.at(lastIndex - i);
+                break;
+            }
+        }
+    }
+
+    int const westX  = d->rad2PixelX(downloadRegion.west(), tileLayer);
+    int const northY = d->rad2PixelY(downloadRegion.north(), tileLayer);
+    int const eastX  = d->rad2PixelX(downloadRegion.east(), tileLayer);
+    int const southY = d->rad2PixelY(downloadRegion.south(), tileLayer);
+
+    // FIXME: remove this stuff
+
+    qCDebug(DIGIKAM_GEOENGINE_LOG) << "DownloadRegionDialog downloadRegion:"
+                                   << "north:" << downloadRegion.north()
+                                   << "south:" << downloadRegion.south()
+                                   << "east:" << downloadRegion.east()
+                                   << "west:" << downloadRegion.west();
+    qCDebug(DIGIKAM_GEOENGINE_LOG) << "north/west (x/y):" << westX << northY;
+    qCDebug(DIGIKAM_GEOENGINE_LOG) << "south/east (x/y):" << eastX << southY;
+
+    int const tileWidth  = tileLayer->tileSize().width();
+    int const tileHeight = tileLayer->tileSize().height();
+    qCDebug(DIGIKAM_GEOENGINE_LOG) << "DownloadRegionDialog downloadRegion: tileSize:" << tileWidth << tileHeight;
+
+    int const visibleLevelX1 = qMin(westX, eastX);
+    int const visibleLevelY1 = qMin(northY, southY);
+    int const visibleLevelX2 = qMax(westX, eastX);
+    int const visibleLevelY2 = qMax(northY, southY);
+
+    qCDebug(DIGIKAM_GEOENGINE_LOG) << "visible level pixel coords (level/x1/y1/x2/y2):" << d->m_visibleTileLevel
+                                   << visibleLevelX1 << visibleLevelY1 << visibleLevelX2 << visibleLevelY2;
+
+    int bottomLevelX1, bottomLevelY1, bottomLevelX2, bottomLevelY2;
+
+    // the pixel coords calculated above are referring to the visible tile level,
+    // if the bottom level is a different level, we have to take it into account
+
+    if      (d->m_visibleTileLevel > tileLevelRangeSecond)
+    {
+        int const deltaLevel = d->m_visibleTileLevel - tileLevelRangeSecond;
+        bottomLevelX1        = visibleLevelX1 >> deltaLevel;
+        bottomLevelY1        = visibleLevelY1 >> deltaLevel;
+        bottomLevelX2        = visibleLevelX2 >> deltaLevel;
+        bottomLevelY2        = visibleLevelY2 >> deltaLevel;
+    }
+    else if (d->m_visibleTileLevel < tileLevelRangeSecond)
+    {
+        int const deltaLevel = tileLevelRangeSecond - d->m_visibleTileLevel;
+        bottomLevelX1        = visibleLevelX1 << deltaLevel;
+        bottomLevelY1        = visibleLevelY1 << deltaLevel;
+        bottomLevelX2        = visibleLevelX2 << deltaLevel;
+        bottomLevelY2        = visibleLevelY2 << deltaLevel;
+    }
+    else
+    {
+        bottomLevelX1 = visibleLevelX1;
+        bottomLevelY1 = visibleLevelY1;
+        bottomLevelX2 = visibleLevelX2;
+        bottomLevelY2 = visibleLevelY2;
+    }
+
+    qCDebug(DIGIKAM_GEOENGINE_LOG) << "bottom level pixel coords (level/x1/y1/x2/y2):"
+                                   << tileLevelRangeSecond
+                                   << bottomLevelX1 << bottomLevelY1 << bottomLevelX2 << bottomLevelY2;
+
+    TileCoordsPyramid coordsPyramid(tileLevelRangeFirst, tileLevelRangeSecond);
+    coordsPyramid.setValidTileLevels(validLevels);
+
+    QRect bottomLevelTileCoords;
+    bottomLevelTileCoords.setCoords(bottomLevelX1 / tileWidth,
+                                    bottomLevelY1 / tileHeight,
+                                    bottomLevelX2 / tileWidth  + (bottomLevelX2 % tileWidth  > 0 ? 1 : 0) - 1,    // -1 needed for proper counting
+                                    bottomLevelY2 / tileHeight + (bottomLevelY2 % tileHeight > 0 ? 1 : 0) - 1);   // -1 needed for proper counting
+
+    qCDebug(DIGIKAM_GEOENGINE_LOG) << "bottom level tile coords: (x1/y1/size):" << bottomLevelTileCoords;
+    coordsPyramid.setBottomLevelCoords(bottomLevelTileCoords);
+
+    qCDebug(DIGIKAM_GEOENGINE_LOG) << "tiles count:" << coordsPyramid.tilesCount();
+    QVector<TileCoordsPyramid> pyramid;
+    pyramid << coordsPyramid;
+
+    return pyramid;
+}
+
+void DownloadRegion::setVisibleTileLevel(const int tileLevel)
+{
+    d->m_visibleTileLevel = tileLevel;
+}
+
+QVector<TileCoordsPyramid> DownloadRegion::fromPath(const TileLayer* tileLayer,
+                                                    qreal offset,
+                                                    const GeoDataLineString& waypoints) const
+{
+    if (!d->m_marbleModel || !tileLayer)
+    {
+        return QVector<TileCoordsPyramid>();
+    }
+
+    int tileLevelRangeFirst  = d->m_tileLevelRange.first;
+    int tileLevelRangeSecond = d->m_tileLevelRange.second;
+
+    TileType tileType        = dynamic_cast<const TextureLayer*>(tileLayer) ? TextureTileType : VectorTileType;
+
+    QVector<int> validLevels;
+    validLevels              = validTileLevels(tileType);
+
+    // Align the tileLevelRangeSecond with the validTileLevels
+
+    if (!validLevels.isEmpty())
+    {
+        int lastIndex = validLevels.count() - 1;
+
+        for (int i = 0 ; i < validLevels.count() ; ++i)
+        {
+            if (
+                (validLevels.at(lastIndex - i) <= tileLevelRangeSecond) &&
+                (validLevels.at(lastIndex - i) >= tileLevelRangeFirst)
+               )
+            {
+                tileLevelRangeSecond = validLevels.at(lastIndex - i);
+                break;
+            }
+        }
+    }
+
+    TileCoordsPyramid coordsPyramid(tileLevelRangeFirst, tileLevelRangeSecond);
+    coordsPyramid.setValidTileLevels(validLevels);
+
+    int const tileWidth  = tileLayer->tileSize().width();
+    int const tileHeight = tileLayer->tileSize().height();
+
+    qreal radius         = d->m_marbleModel->planetRadius();
+    QVector<TileCoordsPyramid> pyramid;
+    qreal radianOffset   = offset / radius;
+
+    for (int i = 1 ; i < waypoints.size() ; ++i)
+    {
+        GeoDataCoordinates position = waypoints[i];
+        qreal lonCenter             = position.longitude();
+        qreal latCenter             = position.latitude();
+
+        // coordinates of the of the vertices of the square(topleft and bottomright) at an offset distance from the waypoint
+
+        qreal latNorth        = asin(sin(latCenter) *  cos(radianOffset) +  cos(latCenter) * sin(radianOffset)  * cos(7 * M_PI / 4));
+        qreal dlonWest        = atan2(sin(7 * M_PI / 4) * sin(radianOffset) * cos(latCenter),  cos(radianOffset) -  sin(latCenter) * sin(latNorth));
+        qreal lonWest         = fmod(lonCenter - dlonWest + M_PI, 2 * M_PI) - M_PI;
+        qreal latSouth        = asin(sin(latCenter) * cos(radianOffset) + cos(latCenter) * sin(radianOffset) * cos(3 * M_PI / 4));
+        qreal dlonEast        = atan2(sin(3 * M_PI / 4) * sin(radianOffset) * cos(latCenter),  cos(radianOffset) -  sin(latCenter) * sin(latSouth));
+        qreal lonEast         = fmod(lonCenter - dlonEast + M_PI, 2 * M_PI) - M_PI;
+
+        int const northY      = d->rad2PixelY(latNorth, tileLayer);
+        int const southY      = d->rad2PixelY(latSouth, tileLayer);
+        int const eastX       = d->rad2PixelX(lonEast, tileLayer);
+        int const westX       = d->rad2PixelX(lonWest, tileLayer);
+
+        int const west        = qMin(westX, eastX);
+        int const north       = qMin(northY, southY);
+        int const east        = qMax(westX, eastX);
+        int const south       = qMax(northY, southY);
+
+        int bottomLevelTileX1 = 0;
+        int bottomLevelTileY1 = 0;
+        int bottomLevelTileX2 = 0;
+        int bottomLevelTileY2 = 0;
+
+        if      (d->m_visibleTileLevel > tileLevelRangeSecond)
+        {
+            int const deltaLevel = d->m_visibleTileLevel - tileLevelRangeSecond;
+            bottomLevelTileX1    = west  >> deltaLevel;
+            bottomLevelTileY1    = north >> deltaLevel;
+            bottomLevelTileX2    = east  >> deltaLevel;
+            bottomLevelTileY2    = south >> deltaLevel;
+        }
+        else if (d->m_visibleTileLevel < tileLevelRangeSecond)
+        {
+            int const deltaLevel = tileLevelRangeSecond - d->m_visibleTileLevel;
+            bottomLevelTileX1    = west  << deltaLevel;
+            bottomLevelTileY1    = north << deltaLevel;
+            bottomLevelTileX2    = east  << deltaLevel;
+            bottomLevelTileY2    = south << deltaLevel;
+        }
+        else
+        {
+            bottomLevelTileX1 = west;
+            bottomLevelTileY1 = north;
+            bottomLevelTileX2 = east;
+            bottomLevelTileY2 = south;
+        }
+
+        QRect waypointRegion;
+
+        // square region around the waypoint
+
+        waypointRegion.setCoords(bottomLevelTileX1 / tileWidth, bottomLevelTileY1 / tileHeight,
+                                 bottomLevelTileX2 / tileWidth, bottomLevelTileY2 / tileHeight);
+        coordsPyramid.setBottomLevelCoords(waypointRegion);
+        pyramid << coordsPyramid;
+    }
+
+    return pyramid;
+}
+
+QVector<int> DownloadRegion::validTileLevels(const TileType tileType) const
+{
+    QVector<int> validTileLevels;
+
+    const GeoSceneMap* const map   = d->m_marbleModel->mapTheme()->map();
+    QVector<GeoSceneLayer*> layers = map->layers();
+
+    for (auto layer : std::as_const(layers))
+    {
+        if (
+            ((layer->backend() == QString::fromUtf8("vectortile")) && (tileType == VectorTileType)) ||
+            ((layer->backend() == QString::fromUtf8("texture"))    && (tileType == TextureTileType))
+           )
+        {
+            const GeoSceneTileDataset* const dataset = dynamic_cast<GeoSceneTileDataset*>(layer->datasets().first());
+
+            if (dataset)
+            {
+                validTileLevels = dataset->tileLevels();
+            }
+
+            break;
+        }
+    }
+
+    return validTileLevels;
+}
+
+} // namespace Marble
+
+#include "moc_DownloadRegion.cpp"

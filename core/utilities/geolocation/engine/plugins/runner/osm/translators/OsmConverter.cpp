@@ -1,0 +1,194 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2023-05-15
+ * Description : geolocation engine based on Marble.
+ *               (c) 2007-2022 Marble Team
+ *               https://invent.kde.org/education/marble/-/raw/master/data/credits_authors.html
+ *
+ * SPDX-FileCopyrightText: 2023-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ * ============================================================ */
+
+#include "OsmDocumentTagTranslator.h"
+
+// Qt includes
+
+#include <QDebug>
+
+// Local includes
+
+#include "OsmNodeTagWriter.h"
+#include "OsmWayTagWriter.h"
+#include "OsmElementDictionary.h"
+#include "GeoDataDocument.h"
+#include "GeoWriter.h"
+#include "GeoDataPlacemark.h"
+#include "GeoDataGeometry.h"
+#include "GeoDataPoint.h"
+#include "GeoDataPolygon.h"
+#include "GeoDataRelation.h"
+#include "GeoDataLinearRing.h"
+#include "GeoDataBuilding.h"
+#include "GeoDataMultiGeometry.h"
+#include "OsmPlacemarkData.h"
+#include "OsmObjectManager.h"
+#include "OsmRelationTagWriter.h"
+
+namespace Marble
+{
+
+void OsmConverter::read(const GeoDataDocument* document)
+{
+    m_nodes.clear();
+    m_ways.clear();
+    m_relations.clear();
+
+    // Writing all the component nodes ( points, nodes of polylines, nodes of polygons )
+
+    for (auto feature : document->featureList())
+    {
+        if      (auto placemark = geodata_cast<GeoDataPlacemark>(feature))
+        {
+            // If the placemark's osmData is not complete, it is initialized by the OsmObjectManager
+
+            OsmObjectManager::initializeOsmData(placemark);
+            const OsmPlacemarkData& osmData = placemark->osmData();
+
+            if (geodata_cast<GeoDataPoint>(placemark->geometry()))
+            {
+                m_nodes << OsmConverter::Node(placemark->coordinate(), osmData);
+            }
+            // cppcheck-suppress constVariablePointer
+            else if (const auto lineString = geodata_cast<GeoDataLineString>(placemark->geometry()))
+            {
+                for (auto const& coordinates : *lineString)
+                {
+                    m_nodes << OsmConverter::Node(coordinates, osmData.nodeReference(coordinates));
+                }
+
+                m_ways << OsmConverter::Way(lineString, osmData);
+            }
+            // cppcheck-suppress constVariablePointer
+            else if (const auto linearRing = geodata_cast<GeoDataLinearRing>(placemark->geometry()))
+            {
+                processLinearRing(linearRing, osmData);
+            }
+            // cppcheck-suppress constVariablePointer
+            else if (const auto polygon = geodata_cast<GeoDataPolygon>(placemark->geometry()))
+            {
+                processPolygon(polygon, osmData, placemark);
+            }
+            // cppcheck-suppress constVariablePointer
+            else if (const auto building = geodata_cast<GeoDataBuilding>(placemark->geometry()))
+            {
+                // cppcheck-suppress constVariablePointer
+                if      (const auto linearRing = geodata_cast<GeoDataLinearRing>(&building->multiGeometry()->at(0)))
+                {
+                    processLinearRing(linearRing, osmData);
+                }
+                // cppcheck-suppress constVariablePointer
+                else if (const auto polygon = geodata_cast<GeoDataPolygon>(&building->multiGeometry()->at(0)))
+                {
+                    processPolygon(polygon, osmData, placemark);
+                }
+            }
+        }
+        // cppcheck-suppress constVariablePointer
+        else if (const auto placemark = geodata_cast<GeoDataRelation>(feature))
+        {
+            m_relations.append(OsmConverter::Relation(placemark, placemark->osmData()));
+        }
+    }
+
+    // Sort by id ascending since some external tools rely on that
+
+    std::sort(m_nodes.begin(), m_nodes.end(),
+              [](const Node& a, const Node& b)
+        {
+            return a.second.id() < b.second.id();
+        }
+    );
+
+    std::sort(m_ways.begin(), m_ways.end(),
+              [](const Way& a, const Way& b)
+        {
+            return a.second.id() < b.second.id();
+        }
+    );
+
+    std::sort(m_relations.begin(), m_relations.end(),
+              [](const Relation& a, const Relation& b)
+        {
+            return a.second.id() < b.second.id();
+        }
+    );
+}
+
+const OsmConverter::Nodes& OsmConverter::nodes() const
+{
+    return m_nodes;
+}
+
+const OsmConverter::Ways& OsmConverter::ways() const
+{
+    return m_ways;
+}
+
+const OsmConverter::Relations& OsmConverter::relations() const
+{
+    return m_relations;
+}
+
+void OsmConverter::processLinearRing(GeoDataLinearRing* linearRing,
+                                     const OsmPlacemarkData& osmData)
+{
+    for (auto const& coordinates : *linearRing)
+    {
+        m_nodes << OsmConverter::Node(coordinates, osmData.nodeReference(coordinates));
+    }
+
+    m_ways << OsmConverter::Way(linearRing, osmData);
+}
+
+void OsmConverter::processPolygon(GeoDataPolygon* polygon,
+                                  const OsmPlacemarkData& osmData,
+                                  GeoDataPlacemark* placemark)
+{
+    int index                               = -1;
+
+    // Writing all the outerRing's nodes
+
+    const GeoDataLinearRing& outerRing      = polygon->outerBoundary();
+    const OsmPlacemarkData outerRingOsmData = osmData.memberReference(index);
+
+    for (auto const& coordinates : outerRing)
+    {
+        m_nodes << OsmConverter::Node(coordinates, outerRingOsmData.nodeReference(coordinates));
+    }
+
+    m_ways << OsmConverter::Way(&outerRing, outerRingOsmData);
+
+    // Writing all nodes for each innerRing
+
+    for (auto const& innerRing : polygon->innerBoundaries())
+    {
+        ++index;
+        const OsmPlacemarkData innerRingOsmData = osmData.memberReference(index);
+
+        for (auto const& coordinates : innerRing)
+        {
+            m_nodes << OsmConverter::Node(coordinates, innerRingOsmData.nodeReference(coordinates));
+        }
+
+        m_ways << OsmConverter::Way(&innerRing, innerRingOsmData);
+    }
+
+    m_relations.append(OsmConverter::Relation(placemark, osmData));
+}
+
+} // namespace Marble

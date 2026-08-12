@@ -1,0 +1,11 @@
+.onnx file generated based on 
+https://huggingface.co/google/efficientnet-b7
+License: Apache-2.0
+
+@article{Tan2019EfficientNetRM,
+  title={EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks},
+  author={Mingxing Tan and Quoc V. Le},
+  journal={ArXiv},
+  year={2019},
+  volume={abs/1905.11946}
+}

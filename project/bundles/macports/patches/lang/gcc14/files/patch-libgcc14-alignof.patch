@@ -1,0 +1,71 @@
+diff --git gcc/c-family/c-common.cc gcc/c-family/c-common.cc
+index 79dac5fccf30d2f640cdcac2406c851d45b35aa4..a038651aa28bf9ca7a45f1e980bc52a07b009de3 100644
+--- gcc/c-family/c-common.cc
++++ gcc/c-family/c-common.cc
+@@ -388,8 +388,8 @@ static bool nonnull_check_p (tree, unsigned HOST_WIDE_INT);
+ */
+ const struct c_common_resword c_common_reswords[] =
+ {
+-  { "_Alignas",		RID_ALIGNAS,   D_CONLY },
+-  { "_Alignof",		RID_ALIGNOF,   D_CONLY },
++  { "_Alignas",		RID_ALIGNAS,   D_EXT_C_IN_CXX },
++  { "_Alignof",		RID_ALIGNOF,   D_EXT_C_IN_CXX },
+   { "_Atomic",		RID_ATOMIC,    D_CONLY },
+   { "_BitInt",		RID_BITINT,    D_CONLY },
+   { "_Bool",		RID_BOOL,      D_CONLY },
+diff --git gcc/c-family/c-common.h gcc/c-family/c-common.h
+index 78414d4519e90168cd01bd910ec1bb05cce1ad4d..5831c8b5af9a0f9c9a0c03b7d975c4c26f7099f7 100644
+--- gcc/c-family/c-common.h
++++ gcc/c-family/c-common.h
+@@ -445,6 +445,8 @@ extern machine_mode c_default_pointer_mode;
+ #define D_CXX20		0x8000  /* In C++, C++20 only.  */
+ #define D_CXX_COROUTINES 0x10000  /* In C++, only with coroutines.  */
+ #define D_CXX_MODULES	0x20000  /* In C++, only with modules.  */
++#define D_EXT_C_IN_CXX	0x40000  /* In C++, allow additional C keywords.  */
++#define D_EXT_CXX_IN_C	0x80000  /* In C, allow additional C++ keywords.  */
+ 
+ #define D_CXX_CONCEPTS_FLAGS D_CXXONLY | D_CXX_CONCEPTS
+ #define D_CXX_CHAR8_T_FLAGS D_CXXONLY | D_CXX_CHAR8_T
+diff --git gcc/c-family/c.opt gcc/c-family/c.opt
+index 418e87fa486bb26db1414ac198fae10584d3048b..7375dcf95efbb042e816bc703c5af02e754a01de 100644
+--- gcc/c-family/c.opt
++++ gcc/c-family/c.opt
+@@ -1712,6 +1712,10 @@ fallow-extended-attribute-placement
+ C ObjC C++ ObjC++ LTO Var(flag_allow_ext_attr_placement) Init(0)
+ Allow placement of attributes on function definitions.
+ 
++fallow-extra-keywords
++C ObjC C++ ObjC++ LTO Var(flag_allow_extra_keywords) Init(0)
++Allow additional C keywords in C++ and vice versa.
++
+ fcilkplus
+ C ObjC C++ ObjC++ LTO Undocumented Ignore
+ Removed in GCC 8.  This switch has no effect.
+diff --git gcc/config/darwin.cc gcc/config/darwin.cc
+index e6657753211f6dc03f493504f6aa61ee1a10135c..233710ae566fea8796e8691cdb568ce1b722ef59 100644
+--- gcc/config/darwin.cc
++++ gcc/config/darwin.cc
+@@ -3959,6 +3959,9 @@ darwin_override_options (void)
+ 
+   /* The c_dialect...() macros are not available to us here.  */
+   darwin_running_cxx = (strstr (lang_hooks.name, "C++") != 0);
++  /* We need to consume some C keywords in C++.  */
++  if (!OPTION_SET_P (flag_allow_extra_keywords))
++    flag_allow_extra_keywords = true;
+ }
+ 
+ #if DARWIN_PPC
+diff --git gcc/cp/lex.cc gcc/cp/lex.cc
+index 1110db7f8d074e923e2ac8e51976b537c28b15ac..0c4f93a6787b85abd8fcc13f00f57e9feea0a52a 100644
+--- gcc/cp/lex.cc
++++ gcc/cp/lex.cc
+@@ -267,6 +267,9 @@ init_reswords (void)
+     {
+       if (c_common_reswords[i].disable & D_CONLY)
+ 	continue;
++      if (!flag_allow_extra_keywords
++	  && c_common_reswords[i].disable & D_EXT_C_IN_CXX)
++	continue;
+       id = get_identifier (c_common_reswords[i].word);
+       C_SET_RID_CODE (id, c_common_reswords[i].rid);
+       ridpointers [(int) c_common_reswords[i].rid] = id;

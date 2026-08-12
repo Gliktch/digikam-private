@@ -1,0 +1,20 @@
+Priority    Description
+==================================================================================================================
+
+Low         Parallelize different face detection operations
+
+Low         Fix the redraw artifacts made when dragging and resizing face items.
+
+==================================================================================================================
+TODO list for post-GSoC 2019 on backend of face recognition:
+==================================================================================================================
+
+High        Reinvestigate every options and combinations in facescan settings           ==> DONE
+
+High        Simplify facescan dialog (e.g. removing this dialog and place all widget
+            in the bottom of people left sidebar tab, as for similarity tab for ex)     ==> DONE
+
+Medium      Implement feature to allow 128-D face embedding vectors to be computed
+            only once, and when detected face bounding box is modified.
+            That feature seems already existed in FaceScanSettings::alreadyScannedHandling,
+            but not implemented in the right way                                        ==> DONE

@@ -1,0 +1,160 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 75f0ae6a..0bf05711 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -94,7 +94,7 @@ IF(BUILD_FOR_SSE2)
+   ENDIF()
+ ENDIF()
+ 
+-IF(WIN32)
++IF(0)
+   # base path for searching for glib on windows
+   IF(NOT GLIB2_BASE_DIR)
+     SET(GLIB2_BASE_DIR "${SOURCE_BASE_DIR}/glib-2.28.1" CACHE STRING "Base path of glib2 dir." FORCE)
+@@ -116,7 +116,7 @@ ELSE()
+   FIND_PACKAGE(GLIB2 REQUIRED)
+ ENDIF()
+ 
+-INCLUDE_DIRECTORIES(SYSTEM ${GLIB2_INCLUDE_DIRS})
++INCLUDE_DIRECTORIES(SYSTEM ${GLIB2_INCLUDE_DIR})
+ LINK_DIRECTORIES(${GLIB2_LIBRARY_DIRS})
+ 
+ 
+@@ -193,7 +193,7 @@ IF(BUILD_DOC)
+   ADD_SUBDIRECTORY(docs)
+ ENDIF()
+ 
+-IF(WIN32 AND NOT BUILD_STATIC)
++IF(0)
+   FIND_FILE(GLIB2_DLL
+             NAMES glib-2.0-0.dll glib-2.dll glib-2-vs9.dll
+             PATHS "${GLIB2_BASE_DIR}/bin"
+@@ -221,7 +221,7 @@ MESSAGE(STATUS "Build with support for SSE2: ${BUILD_FOR_SSE2}")
+ MESSAGE(STATUS "Install helper scripts: ${INSTALL_HELPER_SCRIPTS}")
+ MESSAGE(STATUS "\nInstall prefix: ${CMAKE_INSTALL_PREFIX}")
+ MESSAGE(STATUS "\nUsing: ")
+-MESSAGE(STATUS "GLIB2 include dir: ${GLIB2_INCLUDE_DIRS}")
++MESSAGE(STATUS "GLIB2 include dir: ${GLIB2_INCLUDE_DIR}")
+ MESSAGE(STATUS "GLIB2 library: ${GLIB2_LIBRARIES}")
+ IF(GLIB2_DLL)
+ MESSAGE(STATUS "GLIB2 DLL: ${GLIB2_DLL}")
+diff --git a/cmake/modules/FindGLIB2.cmake b/cmake/modules/FindGLIB2.cmake
+index db07ba27..f6bad1b1 100644
+--- a/cmake/modules/FindGLIB2.cmake
++++ b/cmake/modules/FindGLIB2.cmake
+@@ -1,70 +1,51 @@
+-IF (NOT MSVC)
+-    FIND_PACKAGE(PkgConfig)
+-    PKG_SEARCH_MODULE(GLIB2 glib-2.0)
+-    IF(WIN32 AND NOT BUILD_STATIC)
+-        FIND_FILE(GLIB2_DLL 
+-                NAMES glib-2.dll glib-2-vs9.dll libglib-2.0-0.dll
+-                PATHS "${GLIB2_LIBRARY_DIRS}/../bin"
+-                NO_SYSTEM_ENVIRONMENT_PATH)
+-    ENDIF()
+-ENDIF()
++# - Try to find the GLIB2 libraries
++# Once done this will define
++#
++#  GLIB2_FOUND       - system has glib2
++#  GLIB2_INCLUDE_DIR - the glib2 include directory
++#  GLIB2_LIBRARIES   - glib2 library
++#
++# SPDX-FileCopyrightText: 2008 by Laurent Montel, <montel@kde.org>
++#
++# SPDX-License-Identifier: BSD-3-Clause
++#
+ 
+-IF (NOT GLIB2_FOUND OR NOT PKG_CONFIG_FOUND)
+-    FIND_PATH(GLIB2_GLIB2CONFIG_INCLUDE_PATH
+-        NAMES glibconfig.h
+-        PATHS
+-          /usr/local/lib
+-          /usr/lib
+-          /usr/lib64
+-          /opt/local/lib
+-          ${GLIB2_BASE_DIR}/lib
+-          ${GLIB2_BASE_DIR}/include
+-          ${CMAKE_LIBRARY_PATH}
+-        PATH_SUFFIXES glib-2.0/include
+-    )
++if(GLIB2_INCLUDE_DIR AND GLIB2_LIBRARIES)
++    # Already in cache, be silent
++    set(GLIB2_FIND_QUIETLY TRUE)
++endif(GLIB2_INCLUDE_DIR AND GLIB2_LIBRARIES)
+ 
++find_package(PkgConfig)
++pkg_check_modules(PC_LibGLIB2 QUIET glib-2.0)
+ 
+-    FIND_PATH(GLIB2_INCLUDE_DIRS
+-        NAMES glib.h
+-        PATHS
+-            /usr/local/include
+-            /usr/include
+-            /opt/local/include
+-            ${GLIB2_BASE_DIR}/include
+-        PATH_SUFFIXES gtk-2.0 glib-2.0 glib20 
+-    )
++find_path(GLIB2_MAIN_INCLUDE_DIR
++          NAMES glib.h
++          HINTS ${PC_LibGLIB2_INCLUDEDIR}
++          PATH_SUFFIXES glib-2.0)
+ 
+-    FIND_LIBRARY(GLIB2_LIBRARIES
+-        NAMES  glib-2.0 glib20 glib
+-        PATHS  
+-            /usr/local/lib
+-            /usr/lib
+-            /usr/lib64
+-            /opt/local/lib
+-            ${GLIB2_BASE_DIR}/lib
+-    )
+-    
+-    IF(GLIB2_GLIB2CONFIG_INCLUDE_PATH AND GLIB2_INCLUDE_DIRS AND GLIB2_LIBRARIES)
+-        SET( GLIB2_INCLUDE_DIRS  ${GLIB2_GLIB2CONFIG_INCLUDE_PATH} ${GLIB2_INCLUDE_DIRS} )
+-        SET( GLIB2_LIBRARIES ${GLIB2_LIBRARIES} )
+-        SET( GLIB2_FOUND 1 )
+-    ELSE()
+-        SET( GLIB2_INCLUDE_DIRS )
+-        SET( GLIB2_LIBRARIES )
+-        SET( GLIB2_FOUND 0)
+-    ENDIF()    
+-    
+-    IF(WIN32 AND NOT BUILD_STATIC)
+-        FIND_FILE(GLIB2_DLL 
+-                NAMES glib-2.dll glib-2-vs9.dll libglib-2.0-0.dll
+-                PATHS "${GLIB2_BASE_DIR}/bin"
+-                NO_SYSTEM_ENVIRONMENT_PATH)
+-    ENDIF()    
+-ENDIF ()
++find_library(GLIB2_LIBRARY 
++             NAMES glib-2.0 
++             HINTS ${PC_LibGLIB2_LIBDIR}
++)
+ 
+-#INCLUDE( FindPackageHandleStandardArgs )
+-#FIND_PACKAGE_HANDLE_STANDARD_ARGS( GLIB2 DEFAULT_MSG GLIB2_LIBRARIES GLIB2_GLIB2CONFIG_INCLUDE_PATH GLIB2_GLIB2_INCLUDE_PATH )
++set(GLIB2_LIBRARIES ${GLIB2_LIBRARY})
+ 
+-IF (NOT GLIB2_FOUND AND GLIB2_FIND_REQUIRED)
+-        MESSAGE(FATAL_ERROR "Could not find glib2")
+-ENDIF()
++# search the glibconfig.h include dir under the same root where the library is found
++get_filename_component(glib2LibDir "${GLIB2_LIBRARIES}" PATH)
++
++find_path(GLIB2_INTERNAL_INCLUDE_DIR glibconfig.h
++          PATH_SUFFIXES glib-2.0/include
++          HINTS ${PC_LibGLIB2_INCLUDEDIR} "${glib2LibDir}" ${CMAKE_SYSTEM_LIBRARY_PATH})
++
++set(GLIB2_INCLUDE_DIR "${GLIB2_MAIN_INCLUDE_DIR}")
++
++# not sure if this include dir is optional or required
++# for now it is optional
++if(GLIB2_INTERNAL_INCLUDE_DIR)
++  set(GLIB2_INCLUDE_DIR ${GLIB2_INCLUDE_DIR} "${GLIB2_INTERNAL_INCLUDE_DIR}")
++endif(GLIB2_INTERNAL_INCLUDE_DIR)
++
++include(FindPackageHandleStandardArgs)
++find_package_handle_standard_args(GLIB2  DEFAULT_MSG  GLIB2_LIBRARIES GLIB2_MAIN_INCLUDE_DIR)
++
++mark_as_advanced(GLIB2_INCLUDE_DIR GLIB2_LIBRARIES)

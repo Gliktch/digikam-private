@@ -1,0 +1,104 @@
+#!/bin/bash
+
+# SPDX-FileCopyrightText: 2008-2026 by Gilles Caulier, <caulier dot gilles at gmail dot com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Arguments : $1 : VCPKG install path.
+#             $2 : build type : 'debugfull' to hack (default), 'release' for production, relwithdebinfo for packaging.
+#             $3 : Cmake extra configure options.
+
+# Halt and catch errors
+set -eE
+trap 'PREVIOUS_COMMAND=$THIS_COMMAND; THIS_COMMAND=$BASH_COMMAND' DEBUG
+trap 'echo "FAILED COMMAND: $PREVIOUS_COMMAND"' ERR
+
+INSTALL_DIR=$1
+
+if [[ $INSTALL_DIR == "" ]]; then
+
+    INSTALL_DIR="/e/dk/"
+
+fi
+
+VCPKG_DIR="/e/vcpkg"
+VCPKG_TRIPLET="x64-windows"
+VCPKG_INSTALL_PREFIX=$INSTALL_DIR/$VCPKG_TRIPLET
+
+CMAKE_BIN="`find "/c/Program Files/Microsoft Visual Studio/" -name "cmake.exe" -type f -executable`"
+echo "$CMAKE_BIN"
+
+if [ ! -f "$CMAKE_BIN" ] ; then
+    echo "CMake CLI tool is not installed"
+    echo "Install VSCommunity C++ CMake tools component."
+    exit 1
+else
+    echo "Check CMake CLI tools passed..."
+fi
+
+BUILD_TYPE=$2
+
+if [[ $BUILD_TYPE == "" ]]; then
+    BUILD_TYPE=RelWithDebInfo
+fi
+
+OPTIONS=$3
+
+echo "Installing to $INSTALL_DIR for target $VCPKG_TRIPLET with build mode $BUILD_TYPE and configure options $OPTIONS"
+
+# Paths rules
+ORIG_PATH="$PATH"
+
+export PATH="\
+$PATH:\
+/c/bison:/c/icoutils/bin:\
+$VCPKG_INSTALL_PREFIX/tools/gperf:\
+$VCPKG_INSTALL_PREFIX/tools/curl:\
+$VCPKG_INSTALL_PREFIX/tools/pkgconf:\
+$VCPKG_INSTALL_PREFIX/tools/gettext/bin:\
+$VCPKG_INSTALL_PREFIX/bin:\
+$VCPKG_INSTALL_PREFIX/tools/Qt6/bin:\
+$VCPKG_INSTALL_PREFIX/tools/qt5/bin:\
+e/d/tools/python/python-3.14.2-x64-1:\
+e/d/tools/ninja-1.13.2-windows:\
+"
+
+echo "PATH=$PATH"
+
+export PKG_CONFIG_PATH=$VCPKG_INSTALL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH
+
+if [ ! -d "build" ]; then
+    mkdir build
+fi
+
+cd build
+
+"${CMAKE_BIN}" .. \
+      -DCMAKE_TOOLCHAIN_FILE=$VCPKG_DIR/scripts/buildsystems/vcpkg.cmake \
+      -DVCPKG_TARGET_TRIPLET=$VCPKG_TRIPLET \
+      -DCMAKE_COLOR_MAKEFILE=ON \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DCMAKE_INSTALL_PREFIX=$VCPKG_INSTALL_PREFIX \
+      -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+      -DINSTALL_ROOT=$INSTALL_DIR \
+      -DBUILD_TESTING=OFF \
+      -DBUILD_WITH_QT6=ON \
+      -DDIGIKAMSC_COMPILE_PO=OFF \
+      -DDIGIKAMSC_COMPILE_DIGIKAM=ON \
+      -DENABLE_KFILEMETADATASUPPORT=OFF \
+      -DENABLE_AKONADICONTACTSUPPORT=OFF \
+      -DENABLE_MYSQLSUPPORT=ON \
+      -DENABLE_INTERNALMYSQL=ON \
+      -DENABLE_GEOLOCATION=ON \
+      -DENABLE_MEDIAPLAYER=ON \
+      -DENABLE_DBUS=OFF \
+      -DENABLE_KIO=OFF \
+      -DENABLE_APPSTYLES=ON \
+      ${OPTIONS} \
+      -Wno-dev
+
+CMAKE_VAL_RET=$?
+
+export PATH=$ORIG_PATH
+
+exit $CMAKE_VAL_RET

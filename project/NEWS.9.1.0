@@ -1,0 +1,138 @@
+digiKam 9.1.0 - Release date: 2026-06-07
+
+*****************************************************************************************************
+NEW FEATURES:
+
+Bundles component versions:
+
+(*): Updated compared to previous digiKam release.
+
+| Bundles       | Qt         | KDE        | OpenCV   | FFmpeg    | Heif       | ExifTool  | Exiv2      | LibRaw       | QtAvPlayer   | Build Environment   |
+|---------------|------------|------------|----------|-----------|------------|-----------|------------|--------------|--------------|---------------------|
+| Windows Qt5   | 5.15.17    | 5.116      | 4.11     | 7.1.1     | 1.20.2     | 13.58 (*) | 0.28.8 (*) | 20260523 (*) | 20260405 (*) | Windows 10 + VCPKG  |
+| Windows Qt6   | 6.11.0 (*) | 6.26.0 (*) | 4.12 (*) | 8.1.1 (*) | 1.21.2 (*) | 13.58 (*) | 0.28.8 (*) | 20260523 (*) |    -         | Windows 11 + VCPKG  |
+| AppImage Qt5  | 5.15.18    | 5.116      | 4.13 (*) | 8.0.1 (*) | 1.21.2 (*) | 13.58 (*) | 0.28.8 (*) | 20260523 (*) | 20260405 (*) | XUbuntu 20.06       |
+| AppImage Qt6  | 6.11.0 (*) | 6.26.0 (*) | 4.13 (*) | 8.1.1 (*) | 1.21.2 (*) | 13.58 (*) | 0.28.8 (*) | 20260523 (*) |    -         | XUbuntu 22.04       |
+| macOS Qt5     | 5.15.18    | 5.116      | 4.13 (*) | 8.0.1 (*) | 1.20.2     | 13.58 (*) | 0.28.8 (*) | 20260523 (*) | 20260405 (*) | Monterey + Macports |
+| macOS Qt6     | 6.11.0 (*) | 6.26.0 (*) | 4.13 (*) | 8.1.0 (*) | 1.21.2     | 13.58 (*) | 0.28.8 (*) | 20260523 (*) |    -         | Tathoe + Macports   |
+
+Import          : USB Mass Storage driver now support video thumbnails.
+
+Advanced Search : Add "Clear All Groups" button in the SearchView interface.
+
+Preview         : Add support for Pixel motion photos, which are short videos embedded in pictures taken on Google Pixel phones.
+                  Better support of the audio output selection provided by the video media player.
+
+Database        : Schema updated to support time-Zone with registered item time-stamps.
+
+*****************************************************************************************************
+BUGFIXES:
+
+001 --> 517251 - MariaSQL Migration.
+002 --> 517308 - In the new "Survey" tool, the left and right overlay navigation arrows are not working.
+003 --> 517303 - Modification date is not being edited.
+004 --> 517328 - Error when starting digiKam 9.0.0 - lensfun.dll.
+005 --> 517393 - Faces menu when viewing an image preview is showing image_recognize_faces instead of the label.
+006 --> 517420 - Changing rating filter does not result in immediate view update.
+007 --> 517449 - Unable to create a face region.
+008 --> 517441 - Grouping by Filename is behaving differently on MacOS than on Linux Mint.
+009 --> 517484 - Network error message while using reverse geocoding with OpenStreetMap.
+010 --> 517538 - Shortcuts not working in Survey module.
+011 --> 517354 - Images seem to be gone when upgrading from 8.8.0 with mariadb on NAS (but are still in DB).
+012 --> 517560 - Short key for flags do not work in new survey screen.
+013 --> 516875 - OpenCL not detected on AMD RADEON RX 470 card.
+014 --> 517588 - Cut and paste crash, jas_init_library: Assertion `!jas_global.initialized' failed.
+015 --> 517585 - Import from SD-card without being asked for an album.
+016 --> 517558 - Finalizing Tags removes EXIF Copyright and Artist entries.
+017 --> 511588 - Portable archive for 8.8.0 (digiKam-8.8.0-Qt6-Win64.tar.xz) is missing as a download option.
+018 --> 517624 - Filtering on rating (stars 0-5) not working correct.
+019 --> 517671 - Rating filter do not work.
+020 --> 517668 - Show placeholders for other files in the album.
+021 --> 517772 - Bug after update libexiv2-27.
+022 --> 517766 - Crash on App startup.
+023 --> 517299 - Opening Geolocation Editor crashes digiKam.
+024 --> 517757 - Clicking on a "Help" button in a dialog causes digiKam to silently disappear.
+025 --> 514121 - Preserve item selection when resorting columns in Table View (Album tab).
+026 --> 517798 - digiKam crashes immediately even after reinstall.
+027 --> 517790 - GPS coordinate overwritten when writing tags to XMP sidecar.
+028 --> 517864 - Unsynchronized panning control areas between left and right panes.
+029 --> 517863 - Batch queue-subtract time errors.
+030 --> 517885 - Can't assign number key without modifier as tag shortcut.
+031 --> 517942 - Qt assertion failure due to integer overflow in facepipeline.
+032 --> 517862 - Poor rendering of JXL thumbnails in general thumbnails view.
+033 --> 214957 - New tool to export to Darqroom.
+034 --> 186869 - Export favorites to virtual folder for plasma to display as background.
+035 --> 181951 - digiKam crashes during the importing of pictures from Kodak V530 camera.
+036 --> 181347 - Cannot download picture with digiKam: free-space over-estimated.
+037 --> 180447 - Images imported into wrong folder.
+038 --> 180065 - digiKam image download from memory card problems.
+039 --> 179276 - Namuga webcam Samsung netbook NC10.
+040 --> 177934 - Image status on camera gets broken when usb device silently disconnects.
+041 --> 177181 - digiKam crashes after trying to import from Nikon Coolpix 4600.
+042 --> 176231 - Browse Media Menu Not Populated.
+043 --> 175925 - USB Storage size (and Local disk) are wrong.
+044 --> 175802 - Flickr uploader tool post too large.
+045 --> 174469 - Fatal error message signal11(SIGSEGV).
+046 --> 170620 - Export doesn't work with space in album name.
+047 --> 170272 - Undefined signature problem prevents uploading to Flickr.
+048 --> 165403 - Build issues.
+049 --> 162441 - Unable to create an album.
+050 --> 160228 - Configure does not check for libltdl installed.
+051 --> 158374 - Download images dialog fails to report errors.
+052 --> 157224 - Support for picture import through the OBEX protocol.
+053 --> 154623 - Compile error about getExifTagsDataList.
+054 --> 153205 - Large images (>10 MB) cause Flickr export to fail.
+055 --> 151859 - Don't load photos from camera with error #50.
+056 --> 151747 - digiKam does not detect images on 4GB CF card.
+057 --> 151537 - Back and forward buttons are missing when viewing selected images in camera GUI.
+058 --> 151535 - Errors while downloading images from camera.
+059 --> 150523 - Precision mini digital camera.
+060 --> 150355 - Importing folder feature imports incomplete photos.
+061 --> 518046 - AssignCaption tool: caption/title disappear after restart.
+062 --> 518072 - Declutter sidebars.
+063 --> 518091 - Error 429 from OpenstreetMap: too much request.
+064 --> 518100 - BQM Time adjust not changing the time.
+065 --> 518263 - Filter on star rating does not work.
+066 --> 518287 - Small fault in the "Selected Item Properties" caption.
+067 --> 518334 - Use QuickTime CreationDate if Present Rather Than CreateDate in MOV files.
+068 --> 518245 - Crash: std::system_error EINVAL in QReadWriteLock::lockForRead() during scanPAlbums on Linux kernel 6.17 (AppImage Qt 6.10.2 vs host glibc 2.42).
+069 --> 518318 - Crash in QToolBar::widgetForAction during cleanupActions() on Fedora 43 (Qt 6.10.2).
+070 --> 518518 - After opening digiKam and connecting Bluetooth headphones, you'll need to restart the application for it to recognize the headphones.
+071 --> 518587 - Migration from a PC to another one.
+072 --> 518612 - Face detection fails on low-resolution (300x300px) images.
+073 --> 518662 - "Delete permanently" with Shift+Del now focus on Cancel button then Delete button as before.
+074 --> 518660 - Combobox history of used renames is empty in 9.0.0 but shown in 8.8.0.
+075 --> 518687 - Time Adjust "EXIF: original" uses old XMP CreateDate/DateCreated instead of Xmp.exif.DateTimeOriginal.
+076 --> 518688 - macOS: digiKam cannot switch application language to Simplified Chinese (zh_CN).
+077 --> 518820 - Image Editor Save Settings are incorrect.
+078 --> 518839 - Improve performance of album's cache [patch].
+079 --> 448135 - No plugins could be loaded in Windows 10.
+080 --> 518728 - The ratings/star filters have no effect.
+081 --> 518771 - Build system and documentation issues on ARM64 Linux.
+082 --> 510124 - Black screen during video playback.
+083 --> 518981 - "Write to XMP sidecar only" not honored for rotation data.
+084 --> 518995 - ExifTool not fund on first use.
+085 --> 518993 - New album dialog is blocked and hidden when selected as part of move items workflow.
+086 --> 519200 - Darktable raw import fails.
+087 --> 519273 - New Album dialog has its initial focus on the 'Help' button rather than on Title of New Album.
+088 --> 519370 - OS cursor is still visible when preview magnifier tool is active, obscuring the magnified content.
+089 --> 519125 - Improve face tag query performance: CREATE INDEX idx_itp_tagid_property ON ImageTagProperties(tagid, property(50)).
+090 --> 514970 - Create index on ImageTagProperties.property.
+091 --> 519389 - MariaDB/MySQL: missing index on Images.status causes full table scan on tag count, calendar, and People panel queries.
+092 --> 519390 - DB: ImageTagProperties.property should be VARCHAR, not TEXT -- TEXT prevents histogram stats and forces wrong query plans.
+093 --> 519443 - [master Qt6] UpdateSchemaFromV16ToV17 not implemented for QMYSQL / MariaDB.
+094 --> 519650 - The program closes suddenly when opening geotag dialog.
+095 --> 519854 - Album (sorted by folder)->Refresh does not include sub-folders in specified album.
+096 --> 519714 - Flickr Export reports "Unable to Write".
+097 --> 519915 - Face Recognition engine fails to process Tag-only selections and ignores Tag constraints when Albums are selected.
+098 --> 520195 - Error message during reverse geocoding.
+099 --> 520203 - Setting a people (eg. "Mark") through tag manager => htags = "People", "People|Mark" instead of just "People|Mark".
+100 --> 520290 - digiKam hangs after choosing WebDAVs network share (KDE).
+101 --> 520333 - GPS coordinates for video file is not upfdated in ImagePositions table.
+102 --> 520577 - Navigating in thumbnails/preview uses 100% of main thread for 10-15 seconds on each selection change.
+103 --> 520510 - Date Format is inconsistent with settings.
+104 --> 514723 - File rename seems to be unable to detect existing files with name it wishes to assign, and that generates a conflict.
+104 --> 506349 - "Move To Album" default album.
+105 --> 520901 - Slideshow freezes and stops responding when encountering JPEG with 0xDEADBEEF marker in EXIF UserComment field.
+106 --> 520697 - Grouped Image in Survey is not deleted.
+

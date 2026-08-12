@@ -1,0 +1,44 @@
+--- Portfile.old	2025-08-09 21:30:34.000000000 +0200
++++ Portfile	2025-08-09 21:37:56.000000000 +0200
+@@ -111,7 +111,7 @@
+ }
+ 
+ # MacPorts LLVM/Clang version to use when required.
+-set llvm_version 19
++set llvm_version 20
+ 
+ ############################################################################### Modules Not Considered
+ #
+@@ -676,7 +676,7 @@
+     qtwebengine {
+         {}
+         "port:python27 port:py27-ply path:bin/ninja:ninja port:gperf port:bison port:flex port:qt5-qtwebengine-gn"
+-        "port:fontconfig port:dbus path:lib/pkgconfig/harfbuzz.pc:harfbuzz path:lib/pkgconfig/glib-2.0.pc:glib2 port:zlib port:minizip port:libevent port:libxml2 path:lib/pkgconfig/poppler.pc:poppler port:pulseaudio port:ffmpeg4 port:libopus port:webp port:libpng port:lcms2 port:freetype port:re2 port:snappy"
++        "port:fontconfig port:dbus path:lib/pkgconfig/harfbuzz.pc:harfbuzz path:lib/pkgconfig/glib-2.0.pc:glib2 port:zlib port:minizip port:libevent port:libxml2 path:lib/pkgconfig/poppler.pc:poppler port:pulseaudio port:libopus port:webp port:libpng port:lcms2 port:freetype port:re2 port:snappy"
+         "qtdeclarative qtquickcontrols qtquickcontrols2 qtlocation qtwebchannel qttools"
+         {"Qt WebEngine"}
+         "very large and relatively new"
+@@ -1726,6 +1726,9 @@
+                 # do not opportunistically find MacPorts libraries (e.g. X11 libraries)
+                 patchfiles-append patch-qtwebengine_tests.diff
+ 
++                patchfiles-append patch-qtwebengine-spellcheck.patch
++                patchfiles-append gperf.patch
++
+                 # Fix warning in ht-ff.cc causing error
+                 # Fix based on https://github.com/harfbuzz/harfbuzz/commit/d88269c827895b38f99f7cf741fa60210d4d5169
+                 # See: https://trac.macports.org/ticket/70850
+@@ -1761,11 +1764,10 @@
+                 # see config_help.txt
+                 configure.post_args-append         \
+                     --                             \
+-                    -webengine-native-spellchecker \
++                    -no-webengine-spellchecker     \
+                     -webengine-kerberos \
+                     -webengine-proprietary-codecs \
+-                    -system-webengine-icu \
+-                    -system-webengine-ffmpeg
++                    -system-webengine-icu
+ 
+                 configure.pkg_config_path   ${prefix}/libexec/ffmpeg4/lib/pkgconfig
+ 

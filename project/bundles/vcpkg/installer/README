@@ -1,0 +1,19 @@
+* About
+
+NSIS is an open source Windows installer usable in a cross-compilation environnment.
+For more info see https://nsis.sourceforge.io/
+
+* Requirements
+
+NSIS version >= 3 is required to be compatible with Windows 10.
+
+* Other projects which provide a NSIS Windows installer:
+
+VLC        : https://github.com/videolan/vlc/tree/master/extras/package/win32/NSIS
+Kate       : https://invent.kde.org/sars/kate-windows-build/-/tree/master/installer
+KShutdown  : https://sourceforge.net/p/kshutdown/code/HEAD/tree/trunk/kshutdown2/
+Clementine : https://github.com/clementine-player/Clementine/tree/master/dist/windows
+Filezilla  : https://svn.filezilla-project.org/filezilla/FileZilla3/trunk/data/
+Inkscape   : https://github.com/inkscape/inkscape/tree/bzr-original/packaging/win32
+Firefox    : https://dxr.mozilla.org/mozilla-central/source/browser/installer/windows/nsis/installer.nsi
+OBS-studio : https://github.com/obsproject/obs-studio/tree/master/UI/installer

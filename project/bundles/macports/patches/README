@@ -1,0 +1,13 @@
+All these patches must be applied to the Macports portfiles located at
+
+_macports_install_prefix_/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports
+
+To create a patch:
+
+- copy the original Portfile to Portfile.old.
+- modify the Portfile contents.
+- run "diff -u Portfile.old Portfile > Portfile.patch"
+
+To apply a patch to a Portfile:
+
+patch -u ./Portfile -i ./Portfile.patch

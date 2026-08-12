@@ -1,0 +1,2 @@
+opencv-dnn                 : face recognition based on OPenCV neural network models.
+recognitiontraningprovider : faces recognition training helper class.

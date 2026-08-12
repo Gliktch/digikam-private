@@ -1,0 +1,98 @@
+Notice to make release tarballs from GIT
+----------------------------------------
+
+1/  Release announcements can be send to kde-i18n-docs if internationalized strings are frozen.
+    The earlier is better.
+
+2/  Commit last changes from source code to GIT. The code MUST compile in all cases.
+
+3/  Update the release info in top level CMakeLists.txt and commit to GIT.
+
+4/  Update the release info in appdata files for digiKam and Showfoto. Commit to GIT.
+
+5/  Update NEWS file. If ChangeLog is a dry historical record of development,
+    NEWS should focus on the improvements and changes, summarize everything since
+    last major release. Look in bugzilla for closed file summaries.
+    Commit to GIT.
+
+    Note: after a stable release, the NEWS file is moved from the root directory to the project sub-directory
+    with the release IDs as file-name suffix. The NEWS file from the root directory is cleaned for the next release.
+
+6/  Tag Git with the release version in this format: vX.Y.Z-suffix.
+    Use these commands:
+
+       git tag -a vX.Y.Z-suffix -m "Create version X.Y.Z-suffix" && git push origin vX.Y.Z-suffix
+
+    Where X is major version, Y minor version, and Z the patch version.
+    The optional suffix is to indicate a non final release, as "-beta1" for ex.
+    Look with "git tag" command for exiting tags in git.
+    These git tags will be used to make tarball and all bundles.
+
+7/  Edit the bootstrap.tarball and patch the value from TARBALL_VERSION.
+    Run the bootstrap.tarball script to release digiKam source tarball. This will include all translations
+    files and the documentation. The script compiles all translations files to see if nothing is broken.
+    At the end, if all is fine, the tarball properties must be displayed.
+    3 files are generated:
+
+       Source code tarball compressed as tar.xz.
+       The archive signature is done with gpg.
+       The SHA-256 checksums of files.
+
+    Note: if .sig files are not generated with GPG, you can process signature computation with the command line
+    below. In this example, the GPG key is installed to ~/.gnupg/dkorg-gpg-pwd.txt.
+
+    cat ~/.gnupg/dkorg-gpg-pwd.txt | gpg --batch --yes --passphrase-fd 0 -stabv "tarball_file_to_sign" && mv "tarball_file_to_sign.asc" "tarball_file_to_sign.sig"
+
+    NOTE: project/scripts/signbundles.sh can batch sign all files in current directory.
+
+8/  Upload tarball and signature to temporary FTP server at url
+
+    ftp://upload.kde.org/incoming for the final publication.
+
+    Create a "system admin task" to publish the files officially on download servers from this url:
+
+    https://phabricator.kde.org/maniphest/task/edit/form/2/
+
+    Title: "New digiKam release X.Y.Z tarballs and bundles for Windows, Linux, and MacOS"
+
+    Description:
+
+        Destination: stable/digikam/X.Y.Z/
+        ...
+        List of SHA-256 + file names
+        ...
+
+    Note: for beta release, destination is "unstable/digikam/"
+
+ 9/ Create bundles files with signatures for Linux, MacOS, and Windows. See README.BUNDLES for details.
+    Use same workflow than source tarball.
+
+10/ Create a release announcement page on digikam.org web site.
+
+    Web-site is hosted in a dedicated release repository: https://invent.kde.org/websites/digikam-org/
+    Website repository use a staging branch named "dev" to review changes before to post contents officially.
+    See this README file for details: https://invent.kde.org/websites/digikam-org/blob/master/README
+    The release announcement can use MarkDown format and are located to "news" directory.
+
+    Don't forget to patch default download links with new stable releases files in data/release.yml.
+
+11/ Perform an official release announcement to these mailing-lists:
+
+    digikam-users@kde.org
+    digikam-devel@kde.org
+    kde-announce@kde.org
+
+    Title: digiKam X.Y.Z-suffix is released
+
+    Dear digiKam fans and users,
+
+    The digiKam development team is proud to release digiKam
+    X.Y.Z-suffix. For more details, see announcement on
+    digikam.org:
+
+    https://www.digikam.org/news/date-X.Y.Z-suffix_release_announcement/
+
+    Best regards
+    digiKam team
+
+---------------------------------------------------

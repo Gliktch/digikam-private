@@ -1,0 +1,8 @@
+TODO list for post-GSoC 2019 on backend of face recognition:
+
+* Remove old codes of face recognition algorithms not based on DNN ==> DONE.
+
+* New face clustering algorithms should be studied and implemented.
+  A candidate can be [https://ieeexplore.ieee.org/document/8359265 Density-Based Multiscale Analysis for Clustering in Strong Noise Settings With Varying Densities] (DBMAC/DBMAC-II).
+
+* Implement universal object detection module that allow user to import customize model.

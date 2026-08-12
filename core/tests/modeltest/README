@@ -1,0 +1,11 @@
+ModelTest code is now hosted here:
+
+https://invent.kde.org/qt/qt/qt/-/tree/4.8/tests/auto/modeltest
+
+ModelTest was originally taken from here:
+
+http://labs.trolltech.com/page/Projects/Itemview/Modeltest
+
+KDevelop also uses it:
+
+https://invent.kde.org/kdevelop/kdevelop/-/tree/master/kdevplatform/tests

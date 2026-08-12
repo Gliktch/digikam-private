@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# SPDX-FileCopyrightText: 2008-2026 by Gilles Caulier, <caulier dot gilles at gmail dot com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Clazy static analyzer configuration used by project/reports/clazy.sh
+
+# --- Directories to exclude from Clazy static analysis.
+
+IGNORE_DIRS=".*include.*|"
+IGNORE_DIRS+=".*/opt/qt6/include/.*|"
+IGNORE_DIRS+=".*/opt/qt6/include/QtCore/.*|"
+IGNORE_DIRS+=".*/opt/qt6/include/QtWidgets/.*|"
+IGNORE_DIRS+=".*/usr/include/.*|"
+IGNORE_DIRS+=".*core/utilities/geolocation/engine/.*|"
+IGNORE_DIRS+=".*core/libs/dimg/filters/transform/lqr/.*|"
+IGNORE_DIRS+=".*core/libs/pgfutils/libpgf/.*|"
+IGNORE_DIRS+=".*core/libs/dimg/filters/greycstoration/cimg/.*|"
+IGNORE_DIRS+=".*core/libs/jpegutils/libjpeg/.*|"
+IGNORE_DIRS+=".*core/libs/rawengine/libraw/.*|"
+IGNORE_DIRS+=".*core/libs/dngwriter/extra/.*|"
+IGNORE_DIRS+=".*core/libs/dplugins/webservices/o2/.*|"
+IGNORE_DIRS+=".*core/dplugins/generic/tools/mediaserver/upnpsdk/.*|"
+IGNORE_DIRS+=".*core/libs/video/QtAVPlayer/.*|"
+# Remove last character
+IGNORE_DIRS=${IGNORE_DIRS::-1}
+
+export CLAZY_IGNORE_DIRS=$IGNORE_DIRS
+
+# --- Checkers to include on Clazy static analysis.
+
+export CLAZY_CHECKS="\
+level2,\
+no-qproperty-without-notify,\
+no-old-style-connect,\
+no-qstring-allocations,\
+no-qstring-arg,\
+no-qstring-ref,\
+no-qstring-insensitive-allocation,\
+no-function-args-by-value,\
+no-fully-qualified-moc-types,\
+no-unexpected-flag-enumerator-value,\
+no-module-include,\
+signal-with-return-value,\
+raw-environment-function,\
+qt-keywords,\
+missing-qobject-macro,\
+range-loop-detach,\
+range-loop-reference,\
+use-static-qregularexpression\
+"

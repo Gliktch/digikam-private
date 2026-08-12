@@ -1,0 +1,16 @@
+#git clone git@invent.kde.org:graphics/digikam.git 7.x
+
+#git clone git@invent.kde.org:graphics/digikam.git ./DK.tarball
+
+#git clone git@invent.kde.org:websites/digikam-org.git ./DK.org
+
+#git clone git@invent.kde.org:kde/digikam-doc.git DK.doc
+
+#git clone git@invent.kde.org:frameworks/kxmlgui.git
+#git clone git@invent.kde.org:frameworks/kcoreaddons.git
+#git clone git@invent.kde.org:frameworks/kitemviews.git
+#git clone git@invent.kde.org:frameworks/kconfig.git
+#git clone git@invent.kde.org:frameworks/kconfigwidgets.git
+#git clone git@invent.kde.org:frameworks/solid.git
+#git clone git@invent.kde.org:frameworks/kcalendarcore.git
+#git clone git@invent.kde.org:frameworks/breeze-icons.git

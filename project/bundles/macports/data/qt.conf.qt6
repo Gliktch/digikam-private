@@ -1,0 +1,4 @@
+[Paths]
+Prefix=libexec/qt6
+Translations=translations
+Plugins=plugins

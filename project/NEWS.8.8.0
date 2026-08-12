@@ -1,0 +1,145 @@
+digiKam 8.8.0 - Release date: 2025-10-19
+
+*****************************************************************************************************
+NEW FEATURES:
+
+Bundles component versions:
+
+(*): Updated compared to previous digiKam release.
+
+| Bundles       | Qt version | KDE version | OpenCV version | FFmpeg version | Heif version | ExifTool version | Exiv2 version |
+|---------------|------------|-------------|----------------|----------------|--------------|------------------|---------------|
+| Windows Qt5   | 5.15.17 (*)| 5.116       | 4.11           | 7.1.1 (*)      | 1.20.2 (*)   | 13.36 (*)        | 0.28.5        |
+| Windows Qt6   | 6.9.1 (*)  | 6.17.0 (*)  | 4.11           | 7.1.1 (*)      | 1.20.2 (*)   | 13.36 (*)        | 0.28.5        |
+| AppImage Qt5  | 5.15.17 (*)| 5.116       | 4.12 (*)       | 7.1.1 (*)      | 1.20.1 (*)   | 13.36 (*)        | 0.28.5        |
+| AppImage Qt6  | 6.9.1 (*)  | 6.17.0 (*)  | 4.12 (*)       | 7.1.1 (*)      | 1.20.1 (*)   | 13.36 (*)        | 0.28.5        |
+| macOS Qt5     | 5.15.15    | 5.116       | 4.12 (*)       | 7.1.1 (*)      | 1.19.8 (*)   | 13.36 (*)        | 0.28.5        |
+| macOS Qt6     | 6.9.1 (*)  | 6.17.0 (*)  | 4.12 (*)       | 7.1.1 (*)      | 1.19.8 (*)   | 13.36 (*)        | 0.28.5        |
+
+
+General:         Code ported to last Qt 6.10.0.
+General:         English string review with codespell static analyzer.
+Windows:         Support for long file paths in Windows 10/11 when enabled.
+RawEngine:       Update internal Libraw to last 20250727 upstream.
+Video:           Update internal QtAVPlayer to last 20250913 upstream (Qt5 only).
+Plugins:         G'MIC-Qt updated to last v3.6.0.
+TagsManager:     Add options to import or export tag-hierarchies to text files.
+                 Controlled Vocabulary Keyword Catalogue format is supported (https://www.controlledvocabulary.com/products/index.html).
+Preview:         Add support to the FujiFilm camera focus points.
+Preview:         Add support to the Olympus/OM Systems camera focus points.
+ColorManagement: Use monitor color profile set under Windows, macOS, and Wayland.
+ProgressManager: Use native desktop notifier under Linux, macOS, and Windows.
+Editor:          New enhance tool to blur progressively the background of a subject from a photo.
+Documentation:   Add Brazilian translations.
+
+*****************************************************************************************************
+BUGFIXES:
+
+001 --> 506429 - digiKam 8.6 DLNA server freezes after "upnp devices created: 0" (regression from 8.5).
+002 --> 506457 - The help window blocks digiKam at downloading AI models stage.
+003 --> 506577 - digiKam crashes after startup if database server is mysql 8.
+004 --> 506671 - Split single digikam database into core/thumb/faces/similarity dbs.
+005 --> 506712 - Two small note about the "New Advanced Search" menu.
+006 --> 506861 - digiKam crashes when trying to start scanning, if no album is selected.
+007 --> 507071 - Build failed with : error: ‘QString::QString(const char*)’.
+008 --> 507092 - Small fault in the Tooltip text.
+009 --> 507064 - Crash at start due to enabled video hardware acceleration.
+010 --> 479792 - In "digiKam Properties" sidebar, double quotes in caption are displayed as &quot;
+011 --> 507051 - Portable archive for 8.7.0 (digiKam-8.7.0-Qt6-Win64.tar.xz) is missing as a download option.
+012 --> 506663 - Face recognition finds nothing.
+013 --> 507101 - OpenCV 4.12 exception and face classifier not working.
+014 --> 507113 - Face recognition does not identify faces even after scanning hundreds of faces.
+015 --> 507299 - Typo: Settings tab is named "Behaviour" even when the locale is en_US.
+016 --> 507279 - Small typos and grammatical errors in the English text.
+017 --> 505199 - System shows 607MB RAM allocation that is not returned to the OS without a physical end task (or restart of system).
+018 --> 507190 - On Windows 11, digiKam background process remains running after app close.
+019 --> 506775 - digikam.exe process never closes after closing the window.
+020 --> 487911 - Tag but do not train.
+021 --> 479404 - Add delete button to People search filter field.
+022 --> 506073 - Automatic update doesn't work because no sha256 files on server.
+023 --> 468867 - Face detection and recognition.
+024 --> 446729 - Crashes with error: The Wayland connection broken. Did the Wayland compositor die?
+025 --> 507417 - Binary data seems gobbled by captions parsing.
+026 --> 503251 - Faces recognition stopped working.
+027 --> 507449 - Do not allow running multiple instances.
+028 --> 507467 - Switching from lazy synchronization mode aborts remaining lazy sync.
+029 --> 507356 - Deleted 'Behaviour' term causes problem in language translation.
+030 --> 507485 - Editing Advanced Search doesn't work.
+031 --> 507576 - digiKam User Comment Exif displaying incorrect characters for Nikon images.
+032 --> 507582 - digiKam process does not terminate when window is closed.
+033 --> 507591 - Small fault: superfluous dot at the end of the sentence.
+034 --> 507595 - Assign the same tag to people in the same photo.
+035 --> 507355 - Suggestion for improvement re positioning of small icons in Preview window.
+036 --> 455226 - Panorama Tool needs the Hugin pto2mk software.
+037 --> 507647 - Language cannot be chosen - only US_English available.
+038 --> 507657 - app/utils/digikam_globals_bundles.cpp build failed with error.
+039 --> 507668 - Prioritize user-added metadata over the ones in MakerNotes.
+040 --> 507713 - Incorrect sorting of picture names.
+041 --> 507661 - Portrait videos are displayed horizontally in presentation mode.
+042 --> 507749 - Sort Items by Name in Thumbnails View.
+043 --> 444966 - Request for Keyword Import in Database Capability.
+044 --> 507524 - Feature Request - Import Structured Keyword List Text File.
+045 --> 507798 - .digikam_ignore file fails to prevent scanning of subdirectories on Windows.
+046 --> 459913 - Tag manager does not support export the tags to a text file.
+047 --> 507575 - Gmic plugins using Category dropdown and Preset dropdown to select not working.
+048 --> 491687 - G'MIC-Qt plugin "Color Presets" not working properly - LUTs Pack cannot be changed.
+049 --> 505486 - Loading HEIC photos from SMB shares is very slow.
+050 --> 453768 - File import error when path > MAX_PATH(260).
+051 --> 507909 - Change location of AI model files download.
+052 --> 507953 - Building CXX object core/.../digikam_version.cpp.o failed with Qt5.
+053 --> 508042 - Setting some ColorLabel does not work.
+054 --> 508047 - Reverse geocoding set number street twice into XMP-lr:HierarchicalSubject.
+055 --> 508076 - No abort button while exporting to filesystem.
+056 --> 508123 - digiKam crashes on startup with remote Mariadb or Mysql database.
+057 --> 508060 - When adding a new collection, tags are not associated with images when using sidecars file and tags hierarchy.
+058 --> 436526 - Use native Color Management settings from Windows and MacOS.
+059 --> 508104 - Add Fujifilm focus-point extractor support to digiKam.
+060 --> 508242 - Crash while needing help about numerotation.
+061 --> 508419 - Race condition with XMP files causes confusing tagging behavior.
+062 --> 503370 - "Open in File Manager" opens a wrong folder.
+063 --> 508121 - Face Recognition does not produce any results.
+064 --> 508464 - Album marked as not available although it is available.
+065 --> 508500 - Wipe all tags from Database only results in "Cannot delete required face tag" message.
+066 --> 508633 - Duplicates freezes, cannot sort by Similarity, or resize.
+067 --> 508645 - Segments of digikam window are repeated on screen.
+068 --> 501767 - Right-Click & 'Open With...' shows apps multiple times.
+069 --> 509074 - HEIF/HEIC files not being displayed in Thumbnails.
+070 --> 387323 - Printing assistant keeps resetting page layout & no way to specify spacing between images.
+071 --> 509213 - "Update Fingerprints" updates all images instead of selected album.
+072 --> 508606 - Add new tool to generate blur background of a photo.
+073 --> 509375 - Rating an image is counter intuitive in some situations.
+074 --> 509156 - Wishlist - Recursive Folder's Option in Advanced Search.
+075 --> 506495 - OpenCL not recognized even if installed (Kubuntu 25.04, Nvidia, AppImage).
+076 --> 508681 - Does not start in Windows.
+077 --> 508768 - digiKam crashes on launch.
+078 --> 509059 - Rebuild all training data results in crash.
+079 --> 509583 - digiKam icon is displayed twice in the taskbar.
+080 --> 509573 - Add support of OM System OM-5 Mark II focus point.
+081 --> 505103 - digiKam git freeze when trying to drag and drop/copy files/images inside albums (Wayland/Hyprland).
+082 --> 501862 - Dragging tags to new location no longer has option to merge tags.
+083 --> 503054 - A merge of tags sometimes does not get triggered.
+084 --> 504238 - Add support of keywords merge using Drag and Drop.
+085 --> 509796 - digiKam generated XMP sidecars not updated by darktable.
+086 --> 509844 - digiKam closed unexpectedly (Qt5 based).
+087 --> 509976 - PNG and HEIF not rotated correctly.
+088 --> 510040 - Slow first startup after installation.
+089 --> 507615 - Failure at initial launch of version 8.7.
+090 --> 510129 - digiKam stays as a background process after closing or quitting.
+091 --> 510179 - A DK background process remains after closing DK.
+092 --> 510191 - gui_digikamautotagassignment_obj.dir/all] Error 2 Build Error.
+093 --> 510276 - Moving folder causes recursive copy.
+094 --> 510094 - DK crashes with Face Training.
+095 --> 510334 - Build failed with : correlator_utest.cpp.o.
+096 --> 472438 - Failed to update the database schema from version 15 to version 16.
+097 --> 508733 - Duplicates found on Similarity Search but not displayed for review (no thumbnails).
+098 --> 493294 - Extremely slow duplicate search. It takes literally days.
+099 --> 510406 - Integrated browser not working well to show image on map.
+100 --> 510460 - Bookmark without location saved when selecting multiple images (right click Bookmarks - Add Bookmark).
+101 --> 510481 - Build failed on Qt5 with : gpsitemlistcontextmenu.cpp.o.
+102 --> 510403 - Writing something in Captions/Description --> Captions works incorrectly.
+103 --> 510515 - QMYSQL driver cannot be used.
+104 --> 510458 - Right click on map copy coordinates does not allow pasting in filelist.
+105 --> 508199 - Miscellaneous Settings > System > Use OpenCL Hardware Acceleration Issues.
+106 --> 506535 - OpenCL isn't working - despite OpenCL driver is loaded on GPU.
+107 --> 510610 - Thumbnail for .mov not showing properly.
+108 --> 510608 - Wrong country name for North Macedonia.

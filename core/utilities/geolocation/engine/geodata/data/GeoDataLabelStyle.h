@@ -1,0 +1,145 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2023-05-15
+ * Description : geolocation engine based on Marble.
+ *               (c) 2007-2022 Marble Team
+ *               https://invent.kde.org/education/marble/-/raw/master/data/credits_authors.html
+ *
+ * SPDX-FileCopyrightText: 2023-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ * ============================================================ */
+
+#pragma once
+
+// Local includes
+
+#include "GeoDataColorStyle.h"
+#include "digikam_export.h"
+
+class QFont;
+
+namespace Marble
+{
+
+class GeoDataLabelStylePrivate;
+
+/**
+ * @short specifies how the <b>name</b> of a GeoDataFeature is drawn
+ *
+ * A GeoDataLabelStyle specifies how the <b>name</b> of a
+ * GeoDataFeature is drawn in the viewer. A custom color, color mode
+ * (both inherited from GeoDataColorStyle, and scale for the label
+ * (name) can be specified.
+ */
+class DIGIKAM_EXPORT GeoDataLabelStyle : public GeoDataColorStyle
+{
+public:
+
+    enum Alignment
+    {
+        Corner,
+        Center,
+        Right
+        /*
+                , Left
+                , Below
+        */
+    };
+
+    /// Construct a new GeoDataLabelStyle
+    GeoDataLabelStyle();
+    GeoDataLabelStyle(const GeoDataLabelStyle& other);
+    /**
+     * @brief Construct a new GeoDataLabelStyle
+     * @param  font   the font to use when showing the name
+     * @param  color  the color to use when showing the name @see GeoDataColorStyle
+     */
+    GeoDataLabelStyle(const QFont& font, const QColor& color);
+
+    ~GeoDataLabelStyle() override;
+
+    /**
+    * @brief assignment operator
+    */
+    GeoDataLabelStyle& operator=(const GeoDataLabelStyle& other);
+
+    bool operator==(const GeoDataLabelStyle& other) const;
+    bool operator!=(const GeoDataLabelStyle& other) const;
+
+    /// Provides type information for downcasting a GeoData
+    const char* nodeType() const override;
+
+    /**
+     * @brief Set the scale of the label
+     * @param  scale  the new scale
+     */
+    void setScale(float scale);
+    /**
+     * @brief Return the current scale of the label
+     * @return  the current scale
+     */
+    float scale() const;
+    /**
+     * @brief Set the alignment of the label
+     * @param alignment the alignment
+     */
+    void setAlignment(GeoDataLabelStyle::Alignment alignment);
+    /**
+     * @brief Return the alignment of the label
+     * @return  the current alignment
+     */
+    GeoDataLabelStyle::Alignment alignment() const;
+    /**
+     * @brief Set the font of the label
+     * @param  font  the new font
+     */
+    void setFont(const QFont& font);
+    /**
+     * @brief Return the current font of the label
+     * @return  the current font
+     */
+    QFont font() const;
+
+    /**
+     * @brief Return the scaled font of the label
+     * @return  the scaled font
+     */
+    QFont scaledFont() const;
+
+    /**
+     * @brief Return true if the text of the label should glow, false otherwise
+     * @see setGlow
+     */
+    bool glow() const;
+
+    /**
+     * @brief Enable or disable a glow effect around the text of the label.
+     *
+     * The default is false.
+     *
+     * Note that this is not a KML property.
+     */
+    void setGlow(bool on);
+
+    /**
+     * @brief  Serialize the style to a stream.
+     * @param  stream  the stream
+     */
+    void pack(QDataStream& stream) const override;
+    /**
+     * @brief  Unserialize the style from a stream
+     * @param  stream  the stream
+     */
+    void unpack(QDataStream& stream) override;
+
+private:
+
+    GeoDataLabelStylePrivate* const d = nullptr;
+};
+
+} // namespace Marble

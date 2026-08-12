@@ -1,0 +1,206 @@
+digiKam 6.3.0 - Release date: 2019-09-08
+
+*****************************************************************************************************
+NEW FEATURES:
+
+General    : Internal Libraw updated to last stable 0.19.5.
+General    : First version of exported DPlugin API for future external contributions.
+Image Editor: new external plugin based on GMicQt included in all bundles (https://github.com/c-koi/gmic-qt)
+
+*****************************************************************************************************
+BUGFIXES:
+
+001 --> 410501 - Dark Themes show white frames with light grey text in menu etc. - not readable.
+002 --> 382646 - XMP sidecar file doesn't contain GPS tags.
+003 --> 393635 - Segfault when saving TIFF after modifying RAW.
+004 --> 410634 - The xmp tag data is not handled correctly for raw images with sidecar files.
+005 --> 379503 - When detecting a new jpg with xmp sidecarfile in album: tags are not read/lost.
+006 --> 410661 - Aspect ratio crop of 1024 x 500 always results in portret mode.
+007 --> 410657 - digiKam 6.2 bad sorting.
+008 --> 410692 - Export to google photo: bad request.
+009 --> 409034 - Unable to memorize any album and any preference.
+010 --> 129523 - Editing images in other programs (e.g.: gimp).
+011 --> 265861 - digiKam is missing session management.
+012 --> 275002 - Import or synchronize contact lists.
+013 --> 284745 - digiKam crashed while running ufraw, started from digikam menu.
+014 --> 305839 - Opening terminal from Album List opens Terminal in background.
+015 --> 331866 - Wish: "Open with" more prominently in the Menu/Image/ or as Toolbar item.
+016 --> 380329 - Wishlist: Item - Open (locate) in file manager.
+017 --> 195538 - Use more than one thread for batch conversion of RAW images.
+018 --> 251656 - digiKam batch queue manager crashed on raw conversion to jpeg with rezising.
+019 --> 276093 - Settings missing for raw demosaicing.
+020 --> 285874 - digiKam crashed when loading an image via raw tool.
+021 --> 294620 - Bad quality using batch raw converter.
+022 --> 364122 - Crash due socket connect failed.
+023 --> 303066 - Icon marking geotagged images.
+024 --> 330974 - digiKam crashed when regenerating thumbnails in album.
+025 --> 092375 - Rezisable thumbnail in Comments and Tag editor.
+026 --> 116187 - No thumbnails in the album view.
+027 --> 126111 - Prevent reloading thumbnails while renaming images.
+028 --> 140616 - Continues creating of thumbnail in open album.
+029 --> 169459 - digiKam view photo not work.
+030 --> 173986 - Can view thumbnails, but not individual images.
+031 --> 177500 - Thumbnails not shown when overwriting pictures.
+032 --> 188029 - Aggressive preloading of thumbnail previews.
+033 --> 207006 - Browsing, rating, mouse, stars.
+034 --> 228056 - digiKam doesn't autorotate images anymore.
+035 --> 259880 - When creating new pic-versions in different formats, a _different_(!!) preview appears and seems to be stored.
+036 --> 297546 - digiKam scan thumbnails with duplicate filenames in different directories.
+037 --> 307940 - Crash of digiKam.
+038 --> 327033 - Memory leak when re-creating all thumbnails.
+039 --> 407183 - Feature Request : "Open In File Manager" Applicable To Images.
+040 --> 405519 - Google Maps not shown (blank map window).
+041 --> 388898 - Convert Tiff to PNG fails.
+042 --> 410796 - Convert to PNG - Fail to Process Item/Create File.
+043 --> 410537 - Digikam 6.2-git win64 does not show some images in the folder.
+044 --> 145295 - Support PDF as image format.
+045 --> 320436 - Update mime data settings to remove mpo extension.
+046 --> 333792 - Crash when renaming category.
+047 --> 298717 - Unreadable Tooltips - dark grey on black.
+048 --> 245472 - digiKam crashed after clicking on the "Configure digiKam" option in the Settings menu.
+049 --> 245920 - digiKam crash when open in suse 11.3.
+050 --> 246666 - digiKam crashes at launch.
+051 --> 251403 - Crash after trying to check the setup.
+052 --> 253200 - digiKam Crashes As Soon As I Hit the Icon to Load.
+053 --> 256391 - Application crashes on startup.
+054 --> 260864 - digiKam fails to start.
+055 --> 267742 - digiKam crashes during startup.
+056 --> 410862 - Crash when starting appimage build 6.3.0-git-20190812T053738-x86-64.
+057 --> 088932 - Add service menus functionality.
+058 --> 144647 - Ctrl-F10 doesn't bring context menu.
+059 --> 146571 - Incorrect french translation in digikam servicemenus (correct translation provided).
+060 --> 157013 - Program menu of digikam is hidden.
+061 --> 161360 - Menu and tool bar have disappeared and I can't get them back.
+062 --> 164943 - Image editor menu and toolbar gone.
+063 --> 262562 - Tags should be assigned in a textbox, not with a menu.
+064 --> 310573 - Crashed while saving in Image Editor.
+065 --> 346062 - Menu »Configuration» > «theme» > «Configuration» does nothing.
+066 --> 362213 - Right menu show only one icon.
+067 --> 225029 - Browse images in view mode with mouse wheel.
+068 --> 165927 - Translation bug: Missing german translation.
+069 --> 281235 - "Manage your photographs like a professional" == You are not a professional.
+070 --> 192424 - "Autohide" toolbar in full-screen view.
+071 --> 278346 - Status bar is not preserved in full screen mode.
+072 --> 288487 - Exiting Full Screen mode doesn't display Windows taskbar or digiKam titlebar.
+073 --> 301535 - Fullscreen of pics moving on second monitor.
+074 --> 361689 - Provide a real (and simple) full screen mode.
+075 --> 305288 - Crash in digiKam when editing shortcuts.
+076 --> 301536 - Wish: configurable shortcuts for opening pics in other applications like gimp, rawtherapee, email.
+077 --> 245765 - It would be fine to have a shortcut to start GIMP.
+078 --> 226505 - Sidepanel hiding with shortcuts.
+079 --> 219523 - Keyboard shortcuts are registered globally.
+080 --> 196920 - Cannot exit full-screen mode without previously learning keyboard shortcut.
+081 --> 195177 - Usability: difficulty of captioning albums.
+082 --> 185277 - Cannot use keyboard to advance image while adding caption.
+083 --> 150471 - Keyboard shortcut for "Open With" default app.
+084 --> 145086 - F8 isn't used to resize panels.
+085 --> 145085 - F6 isn't used for navigation between major panels.
+086 --> 145084 - Ctrl-PgDown, Ctrl-PgUp aren't used for navigation between panels.
+087 --> 131428 - Control C does not actually copy in the albums.
+088 --> 114540 - Versioning of images in digiKam.
+089 --> 127039 - digiKam needs to integrate a revision control system.
+090 --> 145057 - Non Destructive Image Editing.
+091 --> 202814 - Automatically manage original and versioned edited photos.
+092 --> 218027 - Wish stacks in digiKam to organize originals and versions.
+093 --> 277183 - Renaming multiple files.
+094 --> 277585 - When using "Save as new version", the new file is added at the end of the thumbbar.
+095 --> 281724 - Crashed when saving a version file.
+096 --> 096279 - Cannot drag photos out of "My albums" into a specific album.
+097 --> 102413 - Album drag and drop multiple folders.
+098 --> 125789 - Move pictures per drag & drop in calendar view between albums.
+099 --> 134485 - Writing keywords to files doesn't work when draggingg and dropping the keywords.
+100 --> 136582 - Moving pictures by Drag'n'Drop, Destination-Album still empty although files have been moved to new destination folder.
+101 --> 146761 - Improve keyword-assignment through enhanced drag and drop.
+102 --> 161467 - Light table has confusing drag-drop-click behaviour.
+103 --> 209729 - Crash while drag and drop.
+104 --> 219231 - Crash at drag n drop.
+105 --> 222717 - digiKam crashes when editing tags by drag-and-drop.
+106 --> 222731 - digiKam crashes when editing tags using drag-and-drop
+107 --> 222733 - digikam crashes when editing tags using drag-and-drop.
+108 --> 245835 - Dragging images from digikam album view to Nautilus removes the original.
+109 --> 252189 - Crash on drag & drop from digiKam to external application.
+110 --> 306635 - Drag and drop of pictures into chrome doesn't work.
+111 --> 313173 - Drag and drop DELETES files from library (MOVES).
+112 --> 333623 - Allow to drag photo over the Map to correct their coordinates.
+113 --> 333787 - Crash while draggingg image to People tag.
+114 --> 358832 - Crash when drag and drop a tag under another tag.
+115 --> 328732 - Crash with lots of memory usage while rebuilding thumbnails.
+116 --> 330904 - digiKam crash during maintenance.
+117 --> 185207 - Segfault when watching pictures.
+118 --> 185369 - Crash when a photo is displayed/modified.
+119 --> 192415 - Allow the "thumb bar" to be repositioned.
+120 --> 289260 - Invalid thumbbar-state, when switching from picture preview to full-screen-preview.
+121 --> 341032 - THUMBBAR : Multiple selection on preview image (after using onscreen arrows) has wrong edge.
+122 --> 231574 - Need "set as wallpaper" option (from digiKam host application).
+123 --> 181308 - Integrate plasma with digiKam.
+124 --> 350130 - Crash while viewing / scrolling thumbnails.
+125 --> 216160 - digiKam crash when rating picture.
+126 --> 221110 - Writing Exif-Information (Tags) resulted in Segmentation Fault [mem2chunk_check, free_check, qFree].
+127 --> 224467 - Click on thumbnail crashes digiKam.
+128 --> 246369 - digiKam crashes on photo thumb hovering.
+129 --> 246899 - digiKam crashes when hovering over the thumbnail view of a photograph.
+130 --> 255256 - Crash browsing in album view clicking and rotating several thumbnails.
+131 --> 255930 - digiKam crashes on start-up after throwing an instance of 'std::bad_alloc'.
+132 --> 255953 - Crash during thumbnail creation.
+133 --> 259031 - digiKam crashes when searching for missing thumbnails.
+134 --> 259167 - digiKam crashes when searching for missing thumbnails.
+135 --> 259869 - Crash when scanning for thumbnails.
+136 --> 261664 - digiKam crashes while using gimp.
+137 --> 266632 - System crashed during copying files.
+138 --> 273133 - Crash when move files from harddisc folder to digiKam.
+139 --> 273302 - Crashes while importing pictures from SD.
+140 --> 274051 - digiKam crashed while rename multiple images.
+141 --> 280527 - digiKam crashes while importing picture.
+142 --> 281567 - Crash after importing pix, possibly rebuilding thumbnails.
+143 --> 283214 - digiKam crashed when doing "cut and paste" from SD card.
+144 --> 291070 - Rotation of thumbs/pics does not work.
+145 --> 291436 - Optimize thumbnail generation process - is painfully slow in certain usage cases.
+146 --> 324516 - digiKam crashed after switching display mode from thumbnails to table.
+147 --> 339217 - Crash on startup: SIGSEGV in Exiv2::PreviewManager::getPreviewImage.
+148 --> 339751 - Large tif files crash thumbnail generator (out of memory / sig11).
+149 --> 339811 - Crash occurring when browsing my images, resolved issue to thumbnailcreator.cpp trying to access non-present preview.
+150 --> 358337 - digiKam crashes while viewing thumbnails.
+151 --> 393758 - Crash during assigned tag.
+152 --> 396862 - digiKam crashed while closing.
+153 --> 397129 - Dates panel, thumb generation crash (core dump).
+154 --> 401164 - Crash on close from preview mode.
+155 --> 401546 - digiKam crashes upon quit (Files -> Quit).
+156 --> 402122 - Crashed while scrolling images.
+157 --> 410912 - Improve "Move to album" for keyboard use.
+158 --> 411011 - Digikam does not display a PNG photo.
+159 --> 411013 - Export png to google photos or google drive fails.
+160 --> 149874 - Include dcraw version 8.77.
+161 --> 137869 - ImageRotate: ImageMagick exception: ImageMagick: Delegate failed `"dcraw".
+162 --> 338416 - Crash when trying to scan faces, undefined symbol.
+163 --> 340194 - Symbol lookup error: digikam: undefined symbol.
+164 --> 343257 - digiKam still crashing on startup with OpenSUSE.
+165 --> 366740 - Remove extra dependency for KF5 framework.
+166 --> 410973 - Plugin Panorama.
+167 --> 102275 - No support for mass storage camera.
+168 --> 361033 - Build fails on Slackware Linux.
+169 --> 269900 - Geolocation no longer compiles.
+170 --> 200530 - digiKam crashes just after a fresh compile.
+171 --> 202193 - Wish for more rating options.
+172 --> 226751 - Rating hangs in view mode.
+173 --> 234516 - digiKam crash while rating.
+174 --> 238605 - Crash when moving the mouse over the album view, or list.
+175 --> 247413 - digiKam crashes randomly.
+176 --> 237104 - Very slow commit after tag change only in digiKam image editor.
+177 --> 358590 - digiKam crashes after applying color label.
+178 --> 402922 - Spell check.
+179 --> 384059 - Album > Reread metadata from images does not work correctly.
+180 --> 146934 - Too many steps for continuous commenting.
+181 --> 411146 - Git master doesn't compile moc_advancedrenameprocessdialog.cpp.
+182 --> 411271 - Digikam crashes when clicking on calendar drop down for date selection in advanced search.
+183 --> 411279 - Digikam does not save initial DB configuration.
+184 --> 411287 - Wrong link to splash screen SVGs.
+185 --> 407235 - MacOS : digiKam 6 crashes when quitting.
+186 --> 410518 - ~4 seconds after exiting with super-q, notice of crash appears.
+187 --> 408549 - Many crashes on MacOS with current git.
+188 --> 411053 - digikam-6.2.0-x86-64 appimage fails to run in Ubuntu 16.04.
+189 --> 411395 - digiKam git master doesn't build with Imagemagick 6.9.
+190 --> 411429 - Dimg test doesn't compile with latest imagemagick.
+191 --> 411289 - Wishlist: Color schemes, Icon themes and Widget style together in the same menu.
+192 --> 374091 - Theme application menu icons combine theme with icon theme.
+193 --> 409084 - Greycard theme and Editor tools icon lack of visibility.
+194 --> 411587 - [digiKam] Crash when reopening Google Photos import wizard.

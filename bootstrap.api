@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# SPDX-FileCopyrightText: 2008-2026 by Gilles Caulier, <caulier dot gilles at gmail dot com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Configure compile and upload the API doc (html tarball + PDF).
+
+# Halt and catch errors
+set -eE
+trap 'PREVIOUS_COMMAND=$THIS_COMMAND; THIS_COMMAND=$BASH_COMMAND' DEBUG
+trap 'echo "FAILED COMMAND: $PREVIOUS_COMMAND"' ERR
+
+SOURCEDIR=$PWD
+export BUILD_WITH_QT6=1
+
+if [[ $BUILD_WITH_QT6 == 1 ]] ; then
+    QTPATHS="qtpaths6"
+else
+    QTPATHS="qtpaths"
+fi
+
+# Prior Qt6 first. if failed try Qt5
+# Customized install Qt path compiled with https://github.com/cgilles/digikam-install-deps.git
+
+if   [[ -d /opt/qt6 && $BUILD_WITH_QT6 == 1 ]] ; then
+
+    export Qt6_DIR=/opt/qt6
+
+    QTPATHS="/opt/qt6/bin/qtpaths6"
+
+    export CMAKE_BINARY=/opt/qt6/bin/cmake
+
+elif [ -d /opt/qt5 ] ; then
+
+    export Qt5_DIR=/opt/qt5
+
+    QTPATHS="/opt/qt5/bin/qtpaths"
+
+    export CMAKE_BINARY=/opt/qt5/bin/cmake
+
+    export BUILD_WITH_QT6=0
+
+fi
+
+command -v $QTPATHS >/dev/null 2>&1 || { echo >&2 "This script require $QTPATHS CLI tool from Qt project but it's not installed. Aborting."; exit 1; }
+
+MAKEFILES_TYPE='Unix Makefiles'
+CURRENT_DIR=$PWD
+BUILDDIR=$CURRENT_DIR"/build.api"
+LIBPATH="lib64"
+CMAKE_BINARY="cmake"
+CURRENT_DATE=`date +"%Y-%m-%d"`
+TARBALL_FILE="digiKam-apidoc-html-$CURRENT_DATE.tar.xz"
+TARBALL_PATH="$CURRENT_DIR/$TARBALL_FILE"
+PDF_FILE="digiKam-apidoc-$CURRENT_DATE.pdf"
+PDF_PATH="$CURRENT_DIR/latex/$PDF_FILE"
+
+QT_INSTALL_PREFIX=`$QTPATHS --install-prefix`
+QT_PLUGIN_INSTALL_DIR=`$QTPATHS --plugin-dir`
+export PATH=$QT_INSTALL_PREFIX/bin:$PATH
+DIGIKAM_INSTALL_PREFIX="/usr"
+
+export LD_LIBRARY_PATH=$DIGIKAM_INSTALL_PREFIX/$LIBPATH:$LD_LIBRARY_PATH
+export PKG_CONFIG_PATH=$DIGIKAM_INSTALL_PREFIX/$LIBPATH/pkgconfig:$PKG_CONFIG_PATH
+
+echo "QtInstall Path  : $QT_INSTALL_PREFIX"
+echo "CMake binary    : $CMAKE_BINARY"
+echo "Build Directory : $BUILDDIR"
+echo "ECM min version : $ECM_MIN_VERSION"
+
+mkdir -p $BUILDDIR
+cd $BUILDDIR
+
+# Build API HTML section with Doxygen
+
+$CMAKE_BINARY -G "$MAKEFILES_TYPE" . \
+      -DBUILD_TESTING=OFF \
+      -DBUILD_WITH_CCACHE=OFF \
+      -DBUILD_WITH_QT6=$BUILD_WITH_QT6 \
+      -DDIGIKAMSC_COMPILE_PO=OFF \
+      -DDIGIKAMSC_COMPILE_DIGIKAM=OFF \
+      $SOURCEDIR && echo "$MESSAGE"
+
+make -j4 doc
+
+XZ_OPT=-9 tar cJf $TARBALL_PATH -C $CURRENT_DIR ./html
+
+rm -fr $BUILDDIR
+rm -fr $CURRENT_DIR/html
+
+# Upload API HTML tarball section
+
+cd $CURRENT_DIR
+
+API_UPLOADURL="digikam@tinami.kde.org:/srv/archives/files/digikam/api/"
+
+echo -e "---------- Cleanup older API DOC tarball files from files.kde.org repository \n"
+
+sftp -q $API_UPLOADURL <<< "rm digiKam-apidoc-*.tar.xz"
+
+echo -e "---------- Upload $TARBALL_PATH tarball files"
+echo -e "---------- to $API_UPLOADURL \n"
+
+rsync -r -v --progress -e ssh $TARBALL_PATH $API_UPLOADURL
+
+
+# Build API PDF section with PDFLatex
+
+cd $CURRENT_DIR/latex
+
+make
+make pdf
+mv refman.pdf $PDF_PATH
+
+# Upload API PDF section
+
+echo -e "---------- Cleanup older API PDF files from files.kde.org repository \n"
+
+sftp -q $API_UPLOADURL <<< "rm digiKam-apidoc-*.pdf"
+
+echo -e "---------- Upload $PDF_PATH PDF files"
+echo -e "---------- to $API_UPLOADURL \n"
+
+rsync -r -v --progress -e ssh $PDF_PATH $API_UPLOADURL
+
+# Cleanup
+
+rm -fr $TARBALL_PATH
+rm -fr $CURRENT_DIR/latex

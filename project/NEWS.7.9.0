@@ -1,0 +1,111 @@
+digiKam 7.9.0 - Release date: 2022-12-04
+
+*****************************************************************************************************
+NEW FEATURES:
+
+General  : Update internal Libraw with snapshot 2022-11-23
+General  : Update Exiftool to 12.51 to the bundles.
+MacOS    : Update frameworks Qt5 to 5.15.7 and KF5 to 5.99.
+AppImage : Update frameworks Qt5 to 5.15.7 and KF5 to 5.99.
+Windows  : Update frameworks Qt5 to 5.15.7 and KF5 to 5.99.
+AppImage : Linux Ubuntu 18.04 is now used to compile AppImage with a Glibc >= 2.27 binary compatibility.
+
+*****************************************************************************************************
+BUGFIXES:
+
+001 --> 458690 - Crash after the digiKam splash screen.
+002 --> 458627 - Unconfirmed faces do not show up.
+003 --> 458752 - Appimage isn't recognising digiKam tags in xmp sidecars.
+004 --> 458704 - Migration Database.
+005 --> 458968 - Geolocation information icon not visible.
+006 --> 458958 - Album items not sorted according to date from XMP sidecar.
+007 --> 459124 - Tags are duplicated when adding People/Face tags.
+008 --> 459370 - Merge tags dont remove old tags.
+009 --> 453621 - Error while opening the database.
+010 --> 459463 - Paste Coordinates Lost Precision.
+011 --> 459276 - Batch Queue Manager, Base tool (Convert tool): crash for some selected formats.
+012 --> 459306 - 'Ambiguous Shortcuts' Message is displayed every time digiKam is launched.
+013 --> 459822 - Blending raw images (-2,0,+2 Ev) does not result in exposure blend. (all three TIFFs are corrected for 0Ev before merging.)
+014 --> 459819 - digiKam Crashes after downloading several files.
+015 --> 459910 - Picture detail in full screen.
+016 --> 459892 - Fingerprints in maintenance mode crash.
+017 --> 398386 - Allow video frame to be saved as picture.
+018 --> 459969 - Unconfirmed Faces are not grouped correctly when re-running recognition.
+019 --> 460091 - Original batch still present after modification.
+020 --> 460124 - Unable to access existing collections.
+021 --> 460132 - Impossible to drag suggested face tag to other face tag in sidebar (for reassignment).
+022 --> 460153 - Deleting an album takes many seconds.
+023 --> 429709 - Date view suddenly switches to month view.
+024 --> 416524 - Cannot move item inside album or between albums.
+025 --> 370356 - Very slow when delete photos and albums.
+026 --> 460464 - "Scan for faces" context menu in Faces view does not trigger scan.
+027 --> 460629 - "People" top level tag appears in People left hand pane.
+027 --> 460683 - digiKam crash on libheif.
+028 --> 456882 - HEIF decoding in 7.7.0 flatpak version not supported.
+029 --> 460746 - Face rectangle description boxes "fly out of the view" when zooming an image with many faces.
+030 --> 425254 - Face tagging in digiKam: Exiv2 saves [XMP-mwg-rs] with "inf, inf, inf, inf" instead of numbers.
+031 --> 461197 - English mistranslation in Showfoto undo cache free space warning.
+032 --> 461221 - If Title and Description text is the same, only write one of these two to Google Caption Field to avoid duplication.
+033 --> 459160 - Geolocation Editor maps don’t zoom enough.
+034 --> 460775 - "TLS initialization failed" error whenever the app tries to download files.
+035 --> 461257 - digiKam crashes when displaying thumbnails for JP2 files.
+036 --> 461348 - Does not start because - Failed to update the database schema from version 13 to version 14.
+037 --> 461495 - 'Help' window does not work.
+038 --> 461471 - 01-build-mxe Script Fails Due to Unavailable Github Repository
+039 --> 458754 - Geolocation of JPEG shown in Map vary of 100 meters from the correct position set in RAW.
+040 --> 461522 - Geo Localisation differs between two jpg-Files.
+041 --> 461633 - Using rounded coordinates for map display causes wrong emplacement of picture.
+042 --> 461709 - Maintenance and Scan for New Items options remain disabled after cancelling operation.
+043 --> 461792 - Map view draws only a partial subset of marker pins for images in album subfolders.
+044 --> 461889 - digiKam crashes on close (perhaps properties dialog and/or exiftool).
+045 --> 461790 - Upload from digiKam 7.8.0 to piwigo 13.1.0 broken.
+046 --> 462013 - Preferences on application of changes not saved.
+047 --> 462067 - Order by Exif date.
+048 --> 462129 - Bomb after splash screen.
+049 --> 461842 - digiKam crash at launch after migration kubuntu 20.04 LTS to 22.04 LTS.
+050 --> 447304 - Appimage digiKam 7.4 will not start in Linux Mint 19 (Tara).
+051 --> 443484 - digiKam 7.2 does not start after upgrading to Windows 11.
+052 --> 436930 - Visualization of tracks in the Map tab.
+053 --> 458138 - Crash when adding new items to the Batch Queue Manager.
+054 --> 458628 - Unconfirmed faces do not show up.
+055 --> 452752 - Upon starting digiKam - the following message is displayed - There are two actions (Open Command Bar, Add Images...) that want to use the same shortcut (Ctrl+Alt+I).
+056 --> 446931 - Can't upload pictures.
+057 --> 445694 - Thumbnails jump to the wrong place if you are "-" a photo for an incorrectly identified face when the same face is elsewhere in the photo.
+058 --> 417833 - Geolocation is not shown under Maps view.
+059 --> 413327 - Option to change video thumbnail.
+060 --> 296838 - Export tool has problem with non ascii characters in new albums.
+061 --> 289463 - The workflow for uploading photos to is not consistent with other export tools.
+062 --> 287773 - digiKam crash.
+063 --> 288207 - Trying to launch Scangui makes digiKam crash - always.
+064 --> 282744 - Crash when importing photos from Android phone.
+065 --> 242411 - digiKam crashed while importing pictures.
+066 --> 234043 - I was importing a group of .NEF raw files (Nikon raw) and the application crashed.
+067 --> 233228 - digiKam crashed when selected "download/delete all" from import window.
+068 --> 232488 - Crash trying to download picture from SD card.
+069 --> 231798 - digiKam crashed after trying to copy large amount of jpg's into a directory.
+070 --> 231481 - digiKam crashes when trying to download images via SanDisk USB card reader.
+071 --> 230837 - digiKam shuts down photos from card.
+072 --> 230761 - digiKam crashes when attempting to download images from mobile phone.
+073 --> 230464 - digiKam, crash report, loading photos to disk.
+074 --> 228837 - digiKam crashed when importing images from a USB device.
+075 --> 229436 - digiKam crashed when try to transfer pictures (click on transfer button).
+076 --> 228744 - digiKam crashed during image download.
+077 --> 227102 - Crash while attempting to copy selected images from card reader.
+078 --> 227013 - The crash happen when i try to download images from my canon cameras.
+079 --> 225919 - digiKam crash when try to download picture from device.
+080 --> 225401 - Cannot export to Flash.
+081 --> 225197 - digiKam crashes each time I try to import new Pics from my Camera (seen as a USB disk).
+082 --> 225060 - Tried to import pictures from a USB drive.
+083 --> 424363 - If an album is created with google photos then with digikam we can't add photo to album.
+084 --> 404900 - Exporting video, photo to Google photo fails.
+084 --> 268773 - Crash while Adding Camera.
+086 --> 269626 - Crash trying to add Camera.
+087 --> 462286 - HEIF image loading broken with kimageformats 5.100.0.
+088 --> 462137 - Information about applied Gmic-Qt filter not saved (neither in database nor in metadata Xmp.digiKam.ImageHistory).
+089 --> 462066 - Filters missing from G'MIC.
+090 --> 427906 - Appimage fails to launch on Wayland stating xkb.
+091 --> 433766 - Flickr export does not work (7.1.0 appimage).
+092 --> 323300 - Keyboard shortcuts do not respect the keymap.
+093 --> 389054 - "use file dialog from system" fail.
+094 --> 462226 - No Tool Bar in Presentation Tool in action.
+095 --> 415999 - Progress bar goes backwards when tagging faces (from (100% to 0%).

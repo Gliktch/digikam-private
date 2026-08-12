@@ -1,0 +1,22 @@
+auto          : Auto Color Correction.
+bw            : Black and White.
+bcg           : Brightness / Contrast / Gamma.
+cb            : Color Balance Correction.
+curves        : Histogram Curves Correction.
+decorate      : Decorative Effects.
+film          : Color negative simulation.
+fx            : Special Effects including color FX and 3D Lut.
+greystoration : CImg library interface for Greystoration filter.
+hotpixels     : Hot Pixels Fixer
+hsl           : Hue / Saturation / Lightness.
+icc           : Color Management.
+imgqsort      : Image Quality Scanner.
+lc            : Local Contrast (LDR Tonemapping).
+lens          : Misc lens correction filters.
+levels        : Histogram Levels Correction.
+nr            : Wavelets Noise Reduction.
+raw           : RAW image processing
+redeye        : Red-Eye Detection and Correction.
+sharp         : Sharp / Unsharp Mask / Refocus
+transform     : Change Image Geometry.
+wb            : White Balance.

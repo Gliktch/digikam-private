@@ -1,0 +1,335 @@
+[{
+  "SourceFile": "02.jpg",
+  "ExifTool:ExifTool:ExifTool:ExifToolVersion": {
+    "desc": "ExifTool Version Number",
+    "val": 12.00
+  },
+  "ExifTool:ExifTool:ExifTool:Warning": {
+    "desc": "Warning",
+    "val": "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto"
+  },
+  "File:System:Other:FileName": {
+    "desc": "File Name",
+    "val": "02.jpg"
+  },
+  "File:System:Other:Directory": {
+    "desc": "Directory",
+    "val": "."
+  },
+  "File:System:Other:FileSize": {
+    "desc": "File Size",
+    "val": 55451
+  },
+  "File:System:Other:FilePermissions": {
+    "desc": "File Permissions",
+    "val": 664
+  },
+  "File:System:Time:FileModifyDate": {
+    "desc": "File Modification Date/Time",
+    "val": "2014:09:23 16:07:34+02:00"
+  },
+  "File:System:Time:FileAccessDate": {
+    "desc": "File Access Date/Time",
+    "val": "2021:04:22 22:32:50+02:00"
+  },
+  "File:System:Time:FileInodeChangeDate": {
+    "desc": "File Inode Change Date/Time",
+    "val": "2021:04:21 15:17:33+02:00"
+  },
+  "File:File:Other:FileType": {
+    "desc": "File Type",
+    "val": "JPEG"
+  },
+  "File:File:Other:FileTypeExtension": {
+    "desc": "File Type Extension",
+    "val": "JPG"
+  },
+  "File:File:Other:MIMEType": {
+    "desc": "MIME Type",
+    "val": "image/jpeg"
+  },
+  "JFIF:JFIF:Image:JFIFVersion": {
+    "desc": "JFIF Version",
+    "val": "1 1"
+  },
+  "JFIF:JFIF:Image:ResolutionUnit": {
+    "desc": "Resolution Unit",
+    "val": 1
+  },
+  "JFIF:JFIF:Image:XResolution": {
+    "desc": "X Resolution",
+    "val": 72
+  },
+  "JFIF:JFIF:Image:YResolution": {
+    "desc": "Y Resolution",
+    "val": 72
+  },
+  "File:File:Image:ExifByteOrder": {
+    "desc": "Exif Byte Order",
+    "val": "MM"
+  },
+  "File:File:Image:CurrentIPTCDigest": {
+    "desc": "Current IPTC Digest",
+    "val": "016f0695834c6325b02d20d270202326"
+  },
+  "File:File:Image:Comment": {
+    "desc": "Comment",
+    "val": "Created with GIMP"
+  },
+  "File:File:Image:ImageWidth": {
+    "desc": "Image Width",
+    "val": 640
+  },
+  "File:File:Image:ImageHeight": {
+    "desc": "Image Height",
+    "val": 400
+  },
+  "File:File:Image:EncodingProcess": {
+    "desc": "Encoding Process",
+    "val": 0
+  },
+  "File:File:Image:BitsPerSample": {
+    "desc": "Bits Per Sample",
+    "val": 8
+  },
+  "File:File:Image:ColorComponents": {
+    "desc": "Color Components",
+    "val": 3
+  },
+  "File:File:Image:YCbCrSubSampling": {
+    "desc": "Y Cb Cr Sub Sampling",
+    "val": "1 1"
+  },
+  "EXIF:IFD0:Image:string:ProcessingSoftware": {
+    "desc": "Processing Software",
+    "val": "digiKam-4.4.0"
+  },
+  "EXIF:IFD0:Image:string:DocumentName": {
+    "desc": "Document Name",
+    "val": "02.jpg"
+  },
+  "EXIF:IFD0:Image:string:ImageDescription": {
+    "desc": "Image Description",
+    "val": "Created with GIMP"
+  },
+  "EXIF:IFD0:Image:string:Software": {
+    "desc": "Software",
+    "val": "digiKam-4.0.0-beta2"
+  },
+  "EXIF:IFD0:Image:Copy2:int32u:ImageWidth": {
+    "desc": "Image Width",
+    "val": 640
+  },
+  "EXIF:IFD0:Image:Copy2:int32u:ImageHeight": {
+    "desc": "Image Height",
+    "val": 400
+  },
+  "EXIF:IFD0:Image:int16u:Orientation": {
+    "desc": "Orientation",
+    "val": 1
+  },
+  "EXIF:IFD0:Time:string:ModifyDate": {
+    "desc": "Modify Date",
+    "val": "2003:02:01 17:03:43"
+  },
+  "EXIF:IFD0:Image:Copy1:int32s:Rating": {
+    "desc": "Rating",
+    "val": 2
+  },
+  "EXIF:IFD0:Image:Copy1:int32s:RatingPercent": {
+    "desc": "Rating Percent",
+    "val": 25
+  },
+  "EXIF:ExifIFD:Time:string:DateTimeOriginal": {
+    "desc": "Date/Time Original",
+    "val": "2003:02:01 17:03:43"
+  },
+  "EXIF:ExifIFD:Image:undef:UserComment": {
+    "desc": "User Comment",
+    "val": "Created with GIMP"
+  },
+  "EXIF:ExifIFD:Image:int32u:ExifImageWidth": {
+    "desc": "Exif Image Width",
+    "val": 640
+  },
+  "EXIF:ExifIFD:Image:int32u:ExifImageHeight": {
+    "desc": "Exif Image Height",
+    "val": 400
+  },
+  "EXIF:IFD1:Image:int16u:Compression": {
+    "desc": "Compression",
+    "val": 6
+  },
+  "EXIF:IFD1:Image:int32u:ThumbnailOffset": {
+    "desc": "Thumbnail Offset",
+    "val": 398
+  },
+  "EXIF:IFD1:Image:int32u:ThumbnailLength": {
+    "desc": "Thumbnail Length",
+    "val": 2757
+  },
+  "XMP:XMP-x:Document:XMPToolkit": {
+    "desc": "XMP Toolkit",
+    "val": "XMP Core 4.4.0-Exiv2"
+  },
+  "XMP:XMP-tiff:Image:Copy1:Software": {
+    "desc": "Software",
+    "val": "digiKam-4.4.0"
+  },
+  "XMP:XMP-tiff:Image:Copy1:Orientation": {
+    "desc": "Orientation",
+    "val": 1
+  },
+  "XMP:XMP-tiff:Image:Copy1:ImageWidth": {
+    "desc": "Image Width",
+    "val": 640
+  },
+  "XMP:XMP-tiff:Image:Copy1:ImageHeight": {
+    "desc": "Image Height",
+    "val": 400
+  },
+  "XMP:XMP-tiff:Image:Copy1:ImageDescription": {
+    "desc": "Image Description",
+    "val": "Created with GIMP"
+  },
+  "XMP:XMP-tiff:Time:DateTime": {
+    "desc": "Date/Time Modified",
+    "val": "2003:02:01 17:03:43"
+  },
+  "XMP:XMP-xmp:Image:CreatorTool": {
+    "desc": "Creator Tool",
+    "val": "digiKam-4.0.0-beta2"
+  },
+  "XMP:XMP-xmp:Image:Rating": {
+    "desc": "Rating",
+    "val": 2
+  },
+  "XMP:XMP-xmp:Time:CreateDate": {
+    "desc": "Create Date",
+    "val": "2003:02:01 17:03:43"
+  },
+  "XMP:XMP-xmp:Time:MetadataDate": {
+    "desc": "Metadata Date",
+    "val": "2003:02:01 17:03:43"
+  },
+  "XMP:XMP-xmp:Time:Copy1:ModifyDate": {
+    "desc": "Modify Date",
+    "val": "2003:02:01 17:03:43"
+  },
+  "XMP:XMP-tmp0:Unknown:PickLabel": {
+    "desc": "Pick Label",
+    "val": 0
+  },
+  "XMP:XMP-tmp0:Unknown:ColorLabel": {
+    "desc": "Color Label",
+    "val": 1
+  },
+  "XMP:XMP-tmp0:Unknown:TagsList": {
+    "desc": "Tags List",
+    "val": "gilles"
+  },
+  "XMP:XMP-tmp0:Unknown:CaptionsAuthorNames": {
+    "desc": "Captions Author Names",
+    "val": ""
+  },
+  "XMP:XMP-tmp0:Unknown:CaptionsDateTimeStamps": {
+    "desc": "Captions Date Time Stamps",
+    "val": ""
+  },
+  "XMP:XMP-exif:Time:Copy1:DateTimeOriginal": {
+    "desc": "Date/Time Original",
+    "val": "2003:02:01 17:03:43"
+  },
+  "XMP:XMP-exif:Image:Copy1:ExifImageWidth": {
+    "desc": "Exif Image Width",
+    "val": 640
+  },
+  "XMP:XMP-exif:Image:Copy1:ExifImageHeight": {
+    "desc": "Exif Image Height",
+    "val": 400
+  },
+  "XMP:XMP-exif:Image:Copy1:UserComment": {
+    "desc": "User Comment",
+    "val": "Created with GIMP"
+  },
+  "XMP:XMP-photoshop:Time:Copy1:DateCreated": {
+    "desc": "Date Created",
+    "val": "2003:02:01 17:03:43"
+  },
+  "XMP:XMP-photoshop:Image:Urgency": {
+    "desc": "Urgency",
+    "val": 1
+  },
+  "XMP:XMP-microsoft:Image:RatingPercent": {
+    "desc": "Rating Percent",
+    "val": 25
+  },
+  "XMP:XMP-microsoft:Image:LastKeywordXMP": {
+    "desc": "Last Keyword XMP",
+    "val": "gilles"
+  },
+  "XMP:XMP-lr:Image:HierarchicalSubject": {
+    "desc": "Hierarchical Subject",
+    "val": "gilles"
+  },
+  "XMP:XMP-mwg-rs:Image:RegionList": {
+    "desc": "Region List",
+    "val": ""
+  },
+  "XMP:XMP-MP:Image:RegionInfoRegions": {
+    "desc": "Region Info Regions",
+    "val": ""
+  },
+  "XMP:XMP-dc:Image:Description": {
+    "desc": "Description",
+    "val": "Created with GIMP"
+  },
+  "XMP:XMP-dc:Image:Subject": {
+    "desc": "Subject",
+    "val": "gilles"
+  },
+  "IPTC:IPTC:Other:CodedCharacterSet": {
+    "desc": "Coded Character Set",
+    "val": "\u001B%G"
+  },
+  "IPTC:IPTC:Other:OriginatingProgram": {
+    "desc": "Originating Program",
+    "val": "digiKam"
+  },
+  "IPTC:IPTC:Other:ProgramVersion": {
+    "desc": "Program Version",
+    "val": "4.4.0"
+  },
+  "IPTC:IPTC:Other:Caption-Abstract": {
+    "desc": "Caption-Abstract",
+    "val": "Created with GIMP"
+  },
+  "IPTC:IPTC:Other:Keywords": {
+    "desc": "Keywords",
+    "val": "gilles"
+  },
+  "IPTC:IPTC:Time:DateCreated": {
+    "desc": "Date Created",
+    "val": "2003:02:01"
+  },
+  "IPTC:IPTC:Time:TimeCreated": {
+    "desc": "Time Created",
+    "val": "17:03:43+00:00"
+  },
+  "Composite:Composite:Image:ImageSize": {
+    "desc": "Image Size",
+    "val": "640 400"
+  },
+  "Composite:Composite:Image:Megapixels": {
+    "desc": "Megapixels",
+    "val": 0.256
+  },
+  "EXIF:IFD1:Preview:ThumbnailImage": {
+    "desc": "Thumbnail Image",
+    "val": "base64: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"
+  },
+  "Composite:Composite:Time:DateTimeCreated": {
+    "desc": "Date/Time Created",
+    "val": "2003:02:01 17:03:43+00:00"
+  }
+}]

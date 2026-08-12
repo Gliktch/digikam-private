@@ -1,0 +1,24 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f92a444ac..b937e13e0 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -59,7 +59,7 @@ find_package(KF6Config ${KF_DEP_VERSION} REQUIRED)
+ find_package(KF6CoreAddons ${KF_DEP_VERSION} REQUIRED)
+ find_package(KF6I18n ${KF_DEP_VERSION} REQUIRED)
+ find_package(KF6Service ${KF_DEP_VERSION} REQUIRED)
+-find_package(KF6DocTools ${KF_DEP_VERSION})
++#find_package(KF6DocTools ${KF_DEP_VERSION})
+ find_package(KF6Solid ${KF_DEP_VERSION} REQUIRED) # for kio_trash
+ if (NOT ANDROID)
+     find_package(KF6Crash ${KF_DEP_VERSION} REQUIRED)
+@@ -170,7 +170,9 @@ if(BUILD_TESTING)
+     endif()
+ endif()
+ 
+-add_subdirectory(templates)
++if(NOT MSVC)
++    add_subdirectory(templates)
++endif()
+ 
+ # create a Config.cmake and a ConfigVersion.cmake file and install them
+ set(CMAKECONFIG_INSTALL_DIR "${KDE_INSTALL_CMAKEPACKAGEDIR}/KF6KIO")

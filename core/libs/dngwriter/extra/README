@@ -1,0 +1,6 @@
+* DNG SDK tarball: https://helpx.adobe.com/photoshop/digital-negative.html#dng_sdk_download
+
+* XMP SDK code come from the DNG SDK 3rd party.
+* MD5 source code come from the XMP SDK 3rd party.
+
+* Removed the XMP SDK classes unused by the DNG SDK

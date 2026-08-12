@@ -1,0 +1,23 @@
+There are more than one database managed by digiKam :
+
+- Core database which host all albums, items, searches data.
+- Thumbnails database to host image thumbs with wavelets compression images.
+- Similarity database to host image finger-prints with computed Haar algorithms.
+- Face database to host face areas on images and face histograms used by faces recognition.
+  For technical reasons, code is located in libs/facesengine/facedb.
+
+Directory         | Description
+------------------|-------------------------------------------------------------------------------------
+collection/       | Collections management interface.
+coredb/           | Core database implementation based on Database Engine.
+dbjobs/           | Database jobs manager.
+engine/           | Low Level database engine common to all database interface.
+haar/             | Haar fingerprint algorithms used by Fuzzy Search tool.
+history/          | Item history algorithms.
+imgqsort/         | Image Quality algorithms.
+item/             | Item management interfaces.
+server/           | Internal database server.
+similaritydb/     | Similarity database implementation based on Database Engine
+tags/             | Tags management and Face tags interface.
+thumbsdb/         | Thumbnails database implementation based on Database Engine.
+utils/            | High level implementation based on Core database interface plus widgets and dialogs.

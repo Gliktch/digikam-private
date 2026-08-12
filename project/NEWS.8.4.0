@@ -1,0 +1,205 @@
+digiKam 8.4.0 - Release date: 2024-07-14
+
+*****************************************************************************************************
+NEW FEATURES:
+
+Auto-Tags: Add online translators support to internationalize generated keywords.
+Auto-Lens: Add support for new Lensfun library API version 0.4.
+RawEngine: Update internal libraw to last 20240711 upstream. New supported cameras:
+           Canon EOS R6 Mark II, EOS R8, EOS R50, EOS R100, EOS Ra.
+           Fujifilm GFX100-II, X-T5, X-S20, X-H2, X-H2S.
+           Hasselblad X2D-100c.
+           Leica Q3, M11 Monochrom.
+           Nikon Z30, Z8.
+           OM Digital OM-5.
+           Panasonic DC-G9 II, DC-ZS200D / ZS220D, DC-TZ200D / TZ202D / TZ220D, DC-S5-II, DC-GH6.
+           Sony A7C-II, A7CR, ILCE-6700, ZV-1M2, ZV-E1, ILCE-7RM5 (A7R-V), ILME-FX30, DSC-HX95, A1.
+           Multiple DJI and Skydio drones.
+           Multiple smartphones with DNG format recorded.
+Video:     Update internal QtAVPlayer to last 20240616 upstream (Qt5 only).
+Video:     Add support to advance in video frame by frame (Qt6 only).
+DNGWriter: Update Adobe DNG SDK to last 1.7.1 with JPEG-XL compression support.
+           Add optional libjxl dependency to compile DNG support.
+Bundles:   Update Exiftool to last 12.88.
+Bundles:   AppImage and Windows installer are now based on last Exiv2 0.28.2.
+Bundles:   AppImage are now based on Qt6 framework 6.7.2, Qt5 framework 5.15.14, and KDE framework 6.2.0.
+Bundles:   Windows installer are now based on Qt6 framework 6.7.2, Qt5 framework 5.15.14, and  KDE framework 6.2.0.
+Bundles:   Windows installer are now build with VCPKG (Qt5 and Qt6). MinGW supports through MXE is dropped.
+Bundles:   G'Mic-Qt Image Editor tool updated to last version 3.4.0.
+Bundles:   New Batch Queue Manager tool to apply G'MIC filters over images.
+
+*****************************************************************************************************
+BUGFIXES:
+
+001 --> 483715 - digiKam 8.3.0 release source tarball has 8.4.0 as version specifier in sources.
+002 --> 483839 - Lighttable shows incorrect active AF focus points from Canon EOS R7.
+003 --> 483995 - Failure to download required files for face detection, red-eye removal and auto-tagging of images.
+004 --> 484084 - Impossible to rename a picture when changing only the case of one letter of its name.
+005 --> 446201 - Freeze while browsing pictures.
+006 --> 483743 - Fail to save exif date data for photo whose path contains non ASCII character.
+007 --> 484311 - Allow to generate non English keywords with Auto-Tags engine.
+008 --> 484341 - Translate auto tags in non-english languages.
+009 --> 467968 - Advanced slideshow using opengl re-displays some jpegs, sometimes crashes.
+010 --> 484350 - Failed to load image.
+011 --> 484400 - digiKam doesn't find DB anymore after change of settings.
+012 --> 484398 - GPS Coordinates for JPEG files are not saved (needs two iterations).
+013 --> 484482 - Dragging an image on a tag does not assign this tag to the image.
+014 --> 484107 - After successful (?) installation on Win 10, digiKam app does not show any window.
+015 --> 484456 - C:\program is not recognized as an internal or external command.
+016 --> 484373 - Wrong time/timezone data.
+017 --> 484610 - Advanced search fails to find photos from Ricoh GR II when searching by 'Make'.
+018 --> 478075 - All database operations are far slower than with previous version.
+019 --> 480772 - digiKam: App freezes when entering system file picker or opening right mouse button menu.
+020 --> 446750 - Can't export to onedrive: unable to login then crash.
+021 --> 452892 - Unneeded message every startup.
+022 --> 478373 - digiKam Version 8.2 start slowly.
+023 --> 478396 - digiKam after Update 8.2.0 very slow.
+024 --> 454580 - Persistent message to download face recognition on startup.
+025 --> 479294 - Error exporting to Google Photos.
+026 --> 481787 - Google Photo plugin stops working.
+027 --> 478988 - digiKam freezes on startup W10.
+028 --> 467711 - Time latency introduced while applying changes in Sqlite database under Windows.
+029 --> 484708 - Images.modificationDate value in the db is incorrect.
+030 --> 484762 - digiKam doesn't recognize XMP video tags.
+031 --> 484698 - Program crash when entered face tag name.
+032 --> 484745 - Inconsistent date for Dynamic Media:Shot Date in case of .mov video.
+033 --> 484802 - The 'album date' is updated to the 'creation date' of a picture when that picture is renamed outside of digiKam.
+034 --> 484758 - Displayed dates on Metadata panels come from different dates found in a video file from Ricoh GR II (inconsistency ?).
+035 --> 484882 - Item -> Write Metadata to File changes camera creation date to UTC.
+036 --> 483866 - Frozen/unfunctional setup windows.
+037 --> 484719 - Adjust Time & Date misses to adjust some metadata fields in case of a video (it is ok in case of a photo).
+038 --> 484957 - Wrong caption date timestamp.
+039 --> 484959 - Inconsistent metadata behavior between photo and video after adding a caption.
+040 --> 484815 - After playing a video, pause command no longer has any effect on the others videos you preview until you preview a photo.
+041 --> 484818 - Switching quickly between several videos leads to a segmentation fault.
+042 --> 485009 - Exposure times greater or equal to 1 second are shown as a fraction in EXIF metadata view.
+043 --> 458584 - Reverse Geocode information is not being updated correctly from external file edits.
+044 --> 485157 - Filter for Color or Pick Labels can not be activated.
+045 --> 485282 - Customizing "Open with" 'command' no more available in Digikam git version.
+046 --> 485246 - Main photo view shows original and all versions of edited photos even when the corresponding settings are disabled.
+047 --> 484946 - FTBFS with Qt 6.7.
+048 --> 485131 - Compilation failed with Qt 6.7.0.
+049 --> 474265 - Crash when I start digikam:FATAL:credentials.cc (Trace point triggered).
+050 --> 478222 - AppImage 8.2.0 fails to start on Ubuntu 20.04: CXXABI_1.3.13, GLIBCXX_3.4.29 and GLIBCXX_3.4.30 not found.
+051 --> 478805 - GPG key file of digikamdeveloper@gmail.com comes with bad signature.
+052 --> 461616 - Keyboard shortcuts override text input boxes.
+053 --> 459480 - User login to flickr not working - cannot load page.
+054 --> 484237 - 8.3.0: Crash when generating fingerprints on Windows 11.
+055 --> 485443 - Cross-hair appears momentarily and disappears until programme reload then same again.
+056 --> 485332 - Some images were not correlated even though GPS coordinates were available for the time they were taken.
+057 --> 485593 - Map view cannot zoom in far enough to be useful.
+058 --> 485527 - Freeze when trying to import from USB.
+059 --> 261634 - Use Qt framework 6.70 and KDE framework 6.2.0 to compile AppImage bundle.
+060 --> 484234 - MP3 slider stopped working.
+061 --> 452567 - Crash with corrupted images after recovered my hard disk.
+062 --> 335039 - Photo layout exported from PrintCreator to PDF creates huge file.
+063 --> 485823 - Sort by name.
+064 --> 485820 - In Time Adjust "Timestamp Updated" is wrongly reported as "TimeStamp Used".
+065 --> 414959 - Send by email with Thunderbird does not work anymore.
+066 --> 485893 - TreeViewComboBoxLineEdit::mouseReleaseEvent Crash in Advanced Search.
+067 --> 485916 - Taxon suggestion based on computer-vision not working anymore in iNaturalist export.
+068 --> 486088 - Crash while viewing video.
+069 --> 481888 - Album on Network-Disks (NAS).
+070 --> 486132 - XMP file is not created if directory contains non-ascii UTF-8 chars.
+071 --> 485973 - Metadata (DateTimeOriginal) not read from MTS video files.
+072 --> 486418 - Only part of the selected pictures are imported.
+073 --> 484360 - digiKam 8.3 No Video Sound on MacOS.
+074 --> 486388 - Video playing without sound.
+075 --> 486677 - Editor Visual glitch.
+076 --> 486878 - Wrong date when downloading videos from Canon EOS R7.
+077 --> 384094 - LensFun deprecated API removed: internal digiKam Lensfun interface do not compile anymore.
+078 --> 487239 - Add new option to exclude images from import.
+079 --> 487272 - Crash while naming a new face tag.
+080 --> 487285 - Date/Time correction tool applies corrections twice, and in seemingly random order.
+081 --> 486755 - Images.album = NULL without reason (disappearing images in DK).
+082 --> 473157 - Improvement of unsharp mask.
+083 --> 481011 - The metadata tabs disappear from the right sidebar.
+084 --> 484371 - Disapearring sub tabs in Right Sidebar.
+085 --> 325844 - Add access to watermark tool in Image editor.
+086 --> 227946 - Adding frame in eccentric position.
+087 --> 342513 - Add support for fractional radius in blur and unsharp mask filters.
+088 --> 378392 - Implement custom LUT3D tables.
+089 --> 406484 - Possibility to use *.cube 3D LUT.
+090 --> 308141 - NR needs some updates and improvements.
+091 --> 259562 - Ability to add elliptical vignetting.
+092 --> 136770 - Hotpixel tool doesn't interpret black image correctly with stuck pixel.
+093 --> 487396 - Metadata does not affect the filename.
+094 --> 487440 - digiKam floods systemd journal with identical messages on exit.
+095 --> 487465 - In digiKam 8.4.0 trash cans are no longer displayed as albums.
+096 --> 487482 - It seems that in 8.4.0, the trash can is missing in the Album tree.
+097 --> 338779 - Add new tool to embed hidden watermarking (based on wavelets or Fourier transforms).
+098 --> 155312 - BQM Border tool: Allow to use independent horizontal and vertical border sizes.
+099 --> 458620 - Batch Queue Manager does not offer a "Color Negative Film" tool.
+100 --> 320363 - New resizing methods.
+101 --> 312184 - wish to more options of Watemark text.
+102 --> 159397 - Resize quality is really bad.
+103 --> 091745 - New resize algorithm based on G'MIC.
+104 --> 178677 - More batch resize tools.
+105 --> 200629 - Crashed after resizing image size.
+106 --> 209184 - Crash after image resizing.
+107 --> 131429 - Selection of target album is "batch resize" has strange behavior.
+108 --> 147685 - Errors in error and "what's this" messages -- No way to select text in an error box.
+109 --> 320362 - BQM Resize tool - improve tool settings.
+110 --> 320360 - Resize - add advanced options.
+111 --> 152909 - Batch operation "resize" fails saying convert cannot be started correctly.
+112 --> 093065 - Resizing images removes EXIF information.
+113 --> 487589 - Cannot see the recycle bin.
+114 --> 485330 - Crash in Showfoto.
+115 --> 098524 - digiKam crashes when right clicking image in image editor.
+116 --> 114507 - After modifying the digiKam main toolbar, all the tools menu have disappeared.
+117 --> 110393 - Context menu image rotate does not work as expected.
+118 --> 113808 - Tags view: can not change the tag icon with the contextual menu "Edit Tag Properties..." after setting a photo as tag thumbnail.
+119 --> 091217 - Right Mouse Button click on album does not give the album the selection focus.
+120 --> 113913 - Image Editor: disable "remove tags" menu item when there are no common tags.
+121 --> 114506 - Wrong menu label for "Set as Tag Thumbnail" Drag and Drop operation.
+122 --> 094539 - Add keyboard shortcuts (bindings) to menu functions in digikam picture viewer.
+123 --> 096369 - Album menu to import images.
+124 --> 103246 - Usability: Clean up thumbnail Right Mouse Button menu.
+125 --> 111798 - Disable "Remove tag" entry from the menu when none tag is assigned.
+126 --> 091840 - "Generate all thumbnails" menu option.
+127 --> 177231 - Rotate context menu in view mode.
+128 --> 144648 - Ctrl-M doesn't toggle appearance of menu bar.
+129 --> 145082 - F10 and Ctrl-F10 don't focus menu and context menu.
+130 --> 108078 - Failed to download file from Camera/Browse Directory Menu.
+131 --> 154971 - Closed menu-bar and toolbar can only be re-activated in config-file.
+132 --> 091541 - Remove duplicate entry from Tools menu.
+133 --> 210836 - Menu items have all words capitalized.
+134 --> 166580 - Interface configuration options for friendlier digiKam.
+135 --> 172776 - Usability: Combine Edit and Album menus, and other ideas.
+136 --> 090040 - Copy image location from right menu.
+137 --> 196627 - Right-click context menu for the Albums View.
+138 --> 283373 - digiKam shows splashscreen but won't start with no crash report generated.
+139 --> 479675 - Missing Thumbnails with External Drive.
+140 --> 478375 - Cannot update database with digikam mysql executables. Brew mysql executables work partially.
+141 --> 282099 - Easier installation (compare to Building digiKam for Dummies on Ubuntu and other linux based distro´s).
+142 --> 238587 - Hierarchal date based folder creation upon import of images.
+143 --> 487799 - Geolocalization icon always black in thumbnail view.
+144 --> 487370 - Face Recognition crashes - pre-release built on 20-05-2024 07:25.
+145 --> 487668 - Crash while naming face.
+146 --> 487822 - "Wipe all tags from Database only" crashes digiKam.
+147 --> 275609 - Collective operation-change type of picture.
+148 --> 275607 - Decoration for more pictures.
+149 --> 265328 - digiKam core does not compile against RawEngine.
+150 --> 256953 - Suddenly the screen suffer a blackout and the application went out without any warning.
+151 --> 253809 - Import from bluetooth obex.
+152 --> 265468 - Crash with Nokia 5800.
+153 --> 277237 - Nikon coolpix s9100 support.
+154 --> 250055 - Was trying to import 2 of many pictures from my Canon.
+155 --> 249043 - Export as symbolic link to file system.
+156 --> 487920 - Adjust DateTime is unnecessarily slow - it re-reads all the images all the time.
+157 --> 487925 - "Open in File Manager" just opens Windows Explorer and not the folder.
+158 --> 488384 - Video Slideshow fails to encode.
+159 --> 488385 - Video Slideshow fails to encode.
+160 --> 488424 - Slideshow progress does not display until an animated GIF file is displayed.
+161 --> 488411 - Format from copying coordinates is unhelpful.
+162 --> 487683 - Import should import to the currently active album.
+163 --> 488565 - Inconsistent DateTime display values and lack of time zone in Metadata Pane.
+164 --> 487370 - Face Recognition crashes - pre-release built on 20-05-2024 07:25.
+165 --> 487668 - Crash while naming face.
+166 --> 404761 - Settings and other dialogs should have a minimum default size of 800x600 (at least).
+167 --> 489192 - Display error in thumbnail caption field.
+168 --> 489501 - After deleting images, the following item is not at top in the view.
+169 --> 489680 - Cannot include directories starting with dot.
+170 --> 382629 - Filter and Search delivers wrong results for text search in aspect ratio.
+171 --> 489848 - Current digikam snap is v8.1, please update to v8.3.
+172 --> 398387 - Ability to step through video frame by frame.

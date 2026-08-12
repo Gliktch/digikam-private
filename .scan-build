@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# SPDX-FileCopyrightText: 2008-2026 by Gilles Caulier, <caulier dot gilles at gmail dot com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Clang-scan static analyzer configuration used by project/reports/clangscan.sh
+
+# Directories to exclude from Clang scan-build static analysis.
+IGNORE_DIRS="--exclude /opt/qt6/include/ "
+IGNORE_DIRS+="--exclude /usr/include/ "
+IGNORE_DIRS+="--exclude core/libs/dimg/filters/transform/lqr/ "
+IGNORE_DIRS+="--exclude core/libs/pgfutils/libpgf/ "
+IGNORE_DIRS+="--exclude core/libs/dimg/filters/greycstoration/cimg/ "
+IGNORE_DIRS+="--exclude core/libs/jpegutils/libjpeg/ "
+IGNORE_DIRS+="--exclude core/libs/rawengine/libraw/ "
+IGNORE_DIRS+="--exclude core/libs/dngwriter/extra/ "
+IGNORE_DIRS+="--exclude core/libs/dplugins/webservices/o2/ "
+IGNORE_DIRS+="--exclude core/dplugins/generic/tools/mediaserver/upnpsdk/ "
+IGNORE_DIRS+="--exclude core/utilities/geolocation/engine/ "
+IGNORE_DIRS+="--exclude core/libs/video/QtAVPlayer/ "

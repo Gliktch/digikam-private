@@ -1,0 +1,49 @@
+#
+# Script to extract git revision at compilation time.
+#
+# SPDX-FileCopyrightText: 2010-2026 by Gilles Caulier, <caulier dot gilles at gmail dot com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+
+set(CMAKE_BACKWARDS_COMPATIBILITY "2.4")
+
+# See if we have git installed
+
+find_program(GITEXEC git)
+
+# Read the version if installed, else set to "unknown"
+
+if(GITEXEC)
+
+    execute_process(COMMAND ${GITEXEC} "--git-dir=@CMAKE_CURRENT_SOURCE_DIR@/../.git" rev-parse HEAD OUTPUT_VARIABLE MYGITVERSION)
+
+    if(MYGITVERSION)
+
+        # Remove the newline that git returns
+
+        string(STRIP ${MYGITVERSION} MYGITVERSION)
+
+    endif()
+
+    execute_process(COMMAND ${GITEXEC} "--git-dir=@CMAKE_CURRENT_SOURCE_DIR@/../.git" rev-parse --abbrev-ref HEAD OUTPUT_VARIABLE MYGITBRANCH)
+
+    if(MYGITBRANCH)
+
+        # Remove the newline that git returns
+
+        string(STRIP ${MYGITBRANCH} MYGITBRANCH)
+
+    endif()
+
+else()
+
+    set(MYGITVERSION unknown)
+    set(MYGITBRANCH  unknown)
+
+endif()
+
+# Configure the revision header
+
+configure_file("@CMAKE_CURRENT_SOURCE_DIR@/cmake/templates/gitversion.h.cmake.in"
+               "@CMAKE_CURRENT_BINARY_DIR@/app/utils/digikam_gitversion.h")

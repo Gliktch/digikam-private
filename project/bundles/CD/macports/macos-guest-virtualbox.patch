@@ -1,0 +1,24 @@
+diff --git a/macos-guest-virtualbox.sh b/macos-guest-virtualbox.sh
+index d40a530..8d40b6c 100755
+--- a/macos-guest-virtualbox.sh
++++ b/macos-guest-virtualbox.sh
+@@ -17,9 +17,9 @@ function set_variables() {
+ # Customize the installation by setting these variables:
+ vm_name="macOS"                  # name of the VirtualBox virtual machine
+ macOS_release_name="Catalina"    # install "HighSierra" "Mojave" or "Catalina"
+-storage_size=80000               # VM disk image size in MB, minimum 22000
++storage_size=128000              # VM disk image size in MB, minimum 22000
+ storage_format="vdi"             # VM disk image file format, "vdi" or "vmdk"
+-cpu_count=2                      # VM CPU cores, minimum 2
++cpu_count=8                      # VM CPU cores, minimum 2
+ memory_size=4096                 # VM RAM in MB, minimum 2048
+ gpu_vram=128                     # VM video RAM in MB, minimum 34, maximum 128
+ resolution="1280x800"            # VM display resolution
+@@ -888,6 +888,7 @@ if [[ ! -e "${vm_name}.${storage_format}" ]]; then
+     VBoxManage closemedium "${vm_name}.${storage_format}" >/dev/null 2>&1
+     VBoxManage createmedium --size="${storage_size}" \
+                             --format "${storage_format}" \
++                            --variant Fixed \
+                             --filename "${vm_name}.${storage_format}" \
+                             --variant standard 2>/dev/tty
+ fi

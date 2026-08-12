@@ -1,0 +1,2 @@
+opencv-dnn   : face detection based on OpenCV neural network models.
+facedetector : top level wrapper to perform face detection.

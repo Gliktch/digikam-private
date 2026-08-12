@@ -1,0 +1,66 @@
+<RCC>
+    <qresource prefix="/">
+        <file>svg/worldmap.svg</file>
+        <file alias="marble/cursor/bc.png">bitmaps/cursor_bc.png</file>
+        <file alias="marble/cursor/bl.png">bitmaps/cursor_bl.png</file>
+        <file alias="marble/cursor/br.png">bitmaps/cursor_br.png</file>
+        <file alias="marble/cursor/cl.png">bitmaps/cursor_cl.png</file>
+        <file alias="marble/cursor/cr.png">bitmaps/cursor_cr.png</file>
+        <file alias="marble/cursor/tc.png">bitmaps/cursor_tc.png</file>
+        <file alias="marble/cursor/tl.png">bitmaps/cursor_tl.png</file>
+        <file alias="marble/cursor/tr.png">bitmaps/cursor_tr.png</file>
+
+        <file alias="marble/frames/shadowframe.png">bitmaps/shadowframe.png</file>
+    </qresource>
+
+    <qresource prefix="/marble/webpopup">
+        <file alias="deco_places.png">webpopup/marble_deco_places.png</file>
+        <file alias="placesscreen.css">webpopup/placesscreen.css</file>
+        <file alias="geoplace.html">webpopup/geoplace.html</file>
+        <file alias="city.html">webpopup/city.html</file>
+        <file alias="nation.html">webpopup/nation.html</file>
+        <file alias="skyplace.html">webpopup/skyplace.html</file>
+        <file alias="photooverlay.html">webpopup/photooverlay.html</file>
+        <file alias="osm.html">webpopup/osm.html</file>
+    </qresource>
+
+    <qresource prefix="/htmlfeatures">
+        <file alias="files/bootstrap.min.css">htmlfeatures/bootstrap.min.css</file>
+        <file alias="includes/bootstrap.inc">htmlfeatures/bootstrap.inc</file>
+    </qresource>
+
+    <qresource prefix="/osmc-symbols">
+        <file alias="dot.svg">svg/osmc-symbols/dot.svg</file>
+        <file alias="bowl.svg">svg/osmc-symbols/bowl.svg</file>
+        <file alias="circle.svg">svg/osmc-symbols/circle.svg</file>
+        <file alias="bar.svg">svg/osmc-symbols/bar.svg</file>
+        <file alias="stripe.svg">svg/osmc-symbols/stripe.svg</file>
+        <file alias="x.svg">svg/osmc-symbols/x.svg</file>
+        <file alias="backslash.svg">svg/osmc-symbols/backslash.svg</file>
+        <file alias="slash.svg">svg/osmc-symbols/slash.svg</file>
+        <file alias="triangle.svg">svg/osmc-symbols/triangle.svg</file>
+        <file alias="triangle_turned.svg">svg/osmc-symbols/triangle_turned.svg</file>
+        <file alias="triangle_line.svg">svg/osmc-symbols/triangle_line.svg</file>
+        <file alias="diamond.svg">svg/osmc-symbols/diamond.svg</file>
+        <file alias="rectangle.svg">svg/osmc-symbols/rectangle.svg</file>
+        <file alias="rectangle_line.svg">svg/osmc-symbols/rectangle_line.svg</file>
+        <file alias="pointer.svg">svg/osmc-symbols/pointer.svg</file>
+        <file alias="fork.svg">svg/osmc-symbols/fork.svg</file>
+        <file alias="arch.svg">svg/osmc-symbols/arch.svg</file>
+        <file alias="turned_T.svg">svg/osmc-symbols/turned_T.svg</file>
+        <file alias="L.svg">svg/osmc-symbols/L.svg</file>
+        <file alias="lower.svg">svg/osmc-symbols/lower.svg</file>
+        <file alias="corner.svg">svg/osmc-symbols/corner.svg</file>
+        <file alias="drop_line.svg">svg/osmc-symbols/drop_line.svg</file>
+        <file alias="wolfshook.svg">svg/osmc-symbols/wolfshook.svg</file>
+        <file alias="ammonit.svg">svg/osmc-symbols/3rdparty/ammonit.svg</file>
+        <file alias="bridleway.svg">svg/osmc-symbols/3rdparty/bridleway.svg</file>
+        <file alias="heart.svg">svg/osmc-symbols/3rdparty/heart.svg</file>
+        <file alias="hiker.svg">svg/osmc-symbols/3rdparty/hiker.svg</file>
+        <file alias="horse.svg">svg/osmc-symbols/3rdparty/horse.svg</file>
+        <file alias="mine.svg">svg/osmc-symbols/3rdparty/mine.svg</file>
+        <file alias="shell_modern.svg">svg/osmc-symbols/3rdparty/shell_modern.svg</file>
+        <file alias="shell.svg">svg/osmc-symbols/3rdparty/shell.svg</file>
+        <file alias="tower.svg">svg/osmc-symbols/3rdparty/tower.svg</file>
+    </qresource>
+</RCC>

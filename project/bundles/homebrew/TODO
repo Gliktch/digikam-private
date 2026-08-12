@@ -1,0 +1,8 @@
+Apple MacOS bundle TODO list:
+-----------------------------
+
+X Check why 2 digiKam icons are shown on task bar when application is started.
+X Check why digiKam has 2 different icons (one for the applet, one for the native executable).
+- Port to Apple Silicon.
+    ==> see comment https://trac.macports.org/ticket/61999#comment:1
+

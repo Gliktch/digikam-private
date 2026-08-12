@@ -1,0 +1,2 @@
++LIBLQR Snapshoot 2023-11-06
+liblqr:7b88c05cec2f0e60125e1cfcad18c79721a2b27c

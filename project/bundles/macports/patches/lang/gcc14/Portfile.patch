@@ -1,0 +1,11 @@
+--- Portfile.old	2025-05-04 06:21:22
++++ Portfile	2025-05-03 09:38:52
+@@ -192,6 +192,8 @@
+     # Patch generated from https://github.com/iains/gcc-14-branch
+     # git diff --no-prefix releases/gcc-14.2.0 gcc-14.2-darwin-r1
+     patchfiles-append      patch-darwin-gcc-${version}.diff
++
++    patchfiles-append      patch-libgcc14-alignof.patch
+ 
+     # GCC fixinc work-around for sys/ucred.h on OSX10.14.4 no longer seems to work ???
+     if { ${os.major} == 18 } {

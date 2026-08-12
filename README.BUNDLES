@@ -1,0 +1,6 @@
+All the bundles rules are located in relevant README file from sub-directories of project/bundles/:
+
+- appimage : bundle for Linux 64 bits.
+- macports : bundle 64 bits for MacOS (Intel).
+- vcpkg    : bundle for windows 64 bits compiled with MSVC.
+- flatpak  : bundle for Linux 64 bits.

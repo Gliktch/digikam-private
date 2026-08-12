@@ -1,0 +1,19 @@
+.onnx file generated based on
+https://github.com/pidahbus/deep-image-orientation-angle-detection
+License: MIT
+
+@ARTICLE{2020arXiv200706709M,
+       author = {{Maji}, Subhadip and {Bose}, Smarajit},
+        title = "{Deep Image Orientation Angle Detection}",
+      journal = {arXiv e-prints},
+     keywords = {Computer Science - Computer Vision and Pattern Recognition, Computer Science - Machine Learning, Electrical Engineering and Systems Science - Image and Video Processing},
+         year = 2020,
+        month = jun,
+          eid = {arXiv:2007.06709},
+        pages = {arXiv:2007.06709},
+archivePrefix = {arXiv},
+       eprint = {2007.06709},
+ primaryClass = {cs.CV},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2020arXiv200706709M},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}

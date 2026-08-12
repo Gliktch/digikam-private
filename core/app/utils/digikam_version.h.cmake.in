@@ -1,0 +1,55 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2004-09-09
+ * Description : digiKam release ID header.
+ *
+ * SPDX-FileCopyrightText: 2004-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * ============================================================ */
+
+#pragma once
+
+// Qt includes
+
+#include <QString>
+#include <QDateTime>
+
+// Local includes
+
+#include "digikam_export.h"
+
+namespace Digikam
+{
+
+static const char digikam_version_short[]  = "@DIGIKAM_VERSION_SHORT@";
+static const char digikam_version[]        = "@DIGIKAM_VERSION_STRING@";
+static const char digikam_version_suffix[] = "@DIGIKAM_SUFFIX_VERSION@";
+static const char digikam_build_type[]     = "@CMAKE_BUILD_TYPE@";
+
+/**
+ * Return the current digiKam version as string.
+ */
+DIGIKAM_EXPORT const QString digiKamVersion();
+
+/**
+ * Return al list of additional information about the current application build.
+ */
+DIGIKAM_EXPORT const QString additionalInformation();
+
+/**
+ * Return the UTC time-stamp of the current build.
+ */
+DIGIKAM_EXPORT const QDateTime digiKamBuildDate();
+
+/**
+ * Make an integer version number for comparison from a major, minor and
+ * a patch version number.
+ */
+DIGIKAM_EXPORT int digiKamMakeIntegerVersion(int major, int minor, int patch);
+
+} // namespace Digikam

@@ -1,0 +1,78 @@
+digiKam 7.8.0 - Release date: 2022-09-04
+
+*****************************************************************************************************
+NEW FEATURES:
+
+General : HIF files recognized as HEIF images.
+IconView: Add support of GrayScale and 16 bits PSD images.
+Bundles : AppImage ported to Qt5 5.15.5
+Bundles : all bundles ported to KF5 5.96
+General : Libraw updated to 2022-07-14 snapshot.
+          Camera format support:
+              Phase One/Leaf IIQ-S v2 support
+              Canon CR3 filmrolls/RawBurst
+              Canon CRM (movie) files
+              iled bit-packed (and 16-bit unpacked) DNGs
+              (non-standard) Deflate-compressed integer DNG files are allowed
+          Camera support:
+              Canon EOS R3, R7 and R10
+              Fujifilm X-H2S, X-T30 II
+              OM System OM-1
+              Leica M11
+              Sony A7-IV (ILCE-7M4)
+              DJI Mavic 3
+              Nikon Z9: standard compression formats only
+Plugins : GMicQt tool updated to last version 3.1.
+
+*****************************************************************************************************
+BUGFIXES:
+
+001 --> 455805 - At start of digikam: "Your locale has changed since this album was last opened."
+002 --> 455859 - digiKam 7.7.0 FTBFS with Qt 5.9 (as in Ubuntu 18.04 Bionic LTS).
+003 --> 419458 - digiKam 6.4.0 appimage fails to run on centos 7.7.
+004 --> 412778 - digiKam 6.3.0 appimage fails to run on centos 7.6.
+005 --> 455922 - Appimage fails to start in Fedora 36 - Missing libnsl.so.1.
+006 --> 456247 - Change MacOS to macOS.
+007 --> 456333 - File transfer terminated resulted 0 byte files to target, while files were deleted from source.
+008 --> 456365 - Importing filetype QOI.
+009 --> 397610 - Problem to render greyscale PSD thumbnails.
+010 --> 261088 - PSD 16 Bit images not displayed.
+011 --> 452032 - Dark mode support on macOS.
+012 --> 456347 - Delete does not work anymore.
+013 --> 456481 - Open with default program -button opens multiple editor windows.
+014 --> 456592 - No "remove all filters" command available.
+015 --> 456545 - The "handles" in the scroll bars are too inconspicuous.
+016 --> 456604 - Parse "file name timestamp" with template YYYY-MM-DD hh[hH]mm when adjusting time & date.
+017 --> 457022 - digiKam overrides the original raw-image (cr2) as jpg-file after or before a cut and save as new image. Then you have two jpg-files.
+018 --> 457061 - Crash opening any folder on macOS 10.14.
+019 --> 120055 - ALBUMTHUMBS : Allow to use any image managed by digiKam as Tags album thumbnail.
+020 --> 457086 - A request to add our own tag icons.
+021 --> 457153 - Allow for sub-folders to be searched when selecting Scan for faces in Albums.
+022 --> 456833 - No Drag and drop or Open with in showfoto Appimage.
+023 --> 457225 - Make use of existing people tags.
+024 --> 425352 - Cursor is huge and jagged.
+025 --> 333115 - Add tool to fix dust area from lens.
+026 --> 456987 - Open with... not working in AppImage.
+027 --> 457312 - Using customized filename with camera name deletes previous name parts.
+028 --> 457257 - Contextual menu option "rename" does not work.
+029 --> 408586 - digiKam search, thumbnails don't refresh correctly.
+030 --> 457422 - Cannot select items in table view.
+031 --> 457421 - digiKam treats .MOV files differently from .JPG files by creation timestamp in metadata to match local time.
+032 --> 457580 - Not possible to view HEIC files with Swedish characters in path.
+033 --> 457479 - digiKam does not help the user to enter dates quickly.
+034 --> 457662 - digiKam implodes when run by root because QtWebEngine exits.
+035 --> 457693 - digiKam crashes if trying to delete selection of multiple files.
+036 --> 454676 - Metadata missing from thumbnails after moving more than 30 to 40 images at a time between albums.
+037 --> 457682 - Cut and Paste operations with Tags on many elements gives an unexpected result.
+038 --> 457830 - Can't add Collections from local filesystem.
+039 --> 457896 - In People view, the viewport doesn't scroll to the selected face photo thumbnail when arrow keys or PgUp/PgDn are used.
+040 --> 457972 - digiKam Crash when select multiple files and add to cue to batch process.
+041 --> 458023 - Print Creator: Impossible to include Gimp binaries.
+042 --> 458029 - Duplicate tags keep reappearing at their old places in hierarchy.
+043 --> 384285 - Text unclear in documentation.
+044 --> 458108 - Thumbnail disappears when image is renamed, reappears only on selection or mouseover.
+045 --> 458145 - Geolocation editor works properly when opened from ShowFoto but not when opened from digiKam.
+046 --> 458228 - Hugin doesn't work in Wayland.
+047 --> 458260 - How can i switch to full Russian version of digiKam.
+048 --> 458314 - digiKam crashes while editing picture.
+049 --> 457871 - digiKam packages for a while not building.

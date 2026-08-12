@@ -1,0 +1,316 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2010-02-15
+ * Description : a tool to export items to Google web services
+ *
+ * SPDX-FileCopyrightText: 2010      by Jens Mueller <tschenser at gmx dot de>
+ * SPDX-FileCopyrightText: 2013-2020 by Caulier Gilles <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * ============================================================ */
+
+#include "gsreplacedlg.h"
+
+// Qt includes
+
+#include <QIcon>
+#include <QTimer>
+#include <QFrame>
+#include <QLabel>
+#include <QLayout>
+#include <QPainter>
+#include <QPushButton>
+#include <QMimeDatabase>
+#include <QDialogButtonBox>
+#include <QNetworkAccessManager>
+
+// KDE includes
+
+#include <klocalizedstring.h>
+
+// Local includes
+
+#include "dworkingpixmap.h"
+#include "wstoolutils.h"
+
+namespace DigikamGenericGoogleServicesPlugin
+{
+
+class Q_DECL_HIDDEN ReplaceDialog::Private
+{
+public:
+
+    Private() = default;
+
+    QPushButton*           bAdd             = nullptr;
+    QPushButton*           bAddAll          = nullptr;
+    QPushButton*           bReplace         = nullptr;
+    QPushButton*           bReplaceAll      = nullptr;
+    QUrl                   src;
+    QUrl                   dest;
+    DInfoInterface*        iface            = nullptr;
+    QLabel*                lbSrc            = nullptr;
+    QLabel*                lbDest           = nullptr;
+    QNetworkAccessManager* netMngr          = nullptr;
+    QPixmap                mimePix;
+    DWorkingPixmap*        progressPix      = nullptr;
+    ThumbnailLoadThread*   thumbLoadThread  = ThumbnailLoadThread::defaultThread();
+    int                    progressCount    = 0;
+    QTimer*                progressTimer    = nullptr;
+    int                    result           = -1;
+};
+
+ReplaceDialog::ReplaceDialog(QWidget* const parent,
+                             const QString& _caption,
+                             DInfoInterface* const iface,
+                             const QUrl& src,
+                             const QUrl& dest)
+    : QDialog(parent),
+      d      (new Private)
+{
+    setObjectName(QLatin1String("ReplaceDialog"));
+
+    d->src         = src;
+    d->dest        = dest;
+    d->iface       = iface;
+    d->progressPix = new DWorkingPixmap(this);
+
+    setWindowTitle(_caption);
+
+    QDialogButtonBox* const buttonBox = new QDialogButtonBox();
+    buttonBox->addButton(QDialogButtonBox::Cancel);
+
+    connect(buttonBox->button(QDialogButtonBox::Cancel), SIGNAL(clicked()),
+            this, SLOT(cancelPressed()));
+
+    d->bAdd = new QPushButton(buttonBox);
+    d->bAdd->setText(i18n("Add As New"));
+    d->bAdd->setToolTip(i18n("Item will be added alongside the linked version."));
+
+    connect(d->bAdd, SIGNAL(clicked()),
+            this, SLOT(addPressed()));
+
+    d->bAddAll = new QPushButton(buttonBox);
+    d->bAddAll->setText(i18n("Add All"));
+    d->bAddAll->setToolTip(i18n("Items will be added alongside the linked version. You will not be prompted again."));
+
+    connect(d->bAddAll, SIGNAL(clicked()),
+            this, SLOT(addAllPressed()));
+
+    d->bReplace = new QPushButton(buttonBox);
+    d->bReplace->setText(i18n("Replace"));
+    d->bReplace->setToolTip(i18n("Item will be replacing the linked version."));
+
+    connect(d->bReplace, SIGNAL(clicked()),
+            this, SLOT(replacePressed()));
+
+    d->bReplaceAll = new QPushButton(buttonBox);
+    d->bReplaceAll->setText(i18n("Replace All"));
+    d->bReplaceAll->setToolTip(i18n("Items will be replacing the linked version. You will not be prompted again."));
+
+    connect(d->bReplaceAll, SIGNAL(clicked()),
+            this, SLOT(replaceAllPressed()));
+
+    buttonBox->addButton(d->bAdd,        QDialogButtonBox::AcceptRole);
+    buttonBox->addButton(d->bAddAll,     QDialogButtonBox::AcceptRole);
+    buttonBox->addButton(d->bReplace,    QDialogButtonBox::AcceptRole);
+    buttonBox->addButton(d->bReplaceAll, QDialogButtonBox::AcceptRole);
+
+    connect(buttonBox, SIGNAL(accepted()),
+            this, SLOT(accept()));
+
+    connect(buttonBox, SIGNAL(rejected()),
+            this, SLOT(reject()));
+
+    QVBoxLayout* const pLayout    = new QVBoxLayout(this);
+    pLayout->addStrut(360);                          // makes dlg at least that wide
+
+    QGridLayout* const gridLayout = new QGridLayout();
+    pLayout->addLayout(gridLayout);
+
+    QLabel* const lb1             = new QLabel(this);
+    lb1->setText(i18n("A linked item already exists."));
+    lb1->setAlignment(Qt::AlignHCenter);
+    gridLayout->addWidget(lb1, 0, 0, 1, 3);
+
+    QMimeDatabase db;
+    QString icon = db.mimeTypeForUrl(d->dest).iconName();
+    d->mimePix = QIcon::fromTheme(icon).pixmap(48);
+
+    d->lbDest  = new QLabel(this);
+    d->lbDest->setPixmap(d->mimePix);
+    d->lbDest->setAlignment(Qt::AlignCenter);
+    gridLayout->addWidget(d->lbDest, 1, 0, 1, 1);
+
+    d->lbSrc   = new QLabel(this);
+    icon = db.mimeTypeForUrl(d->src).iconName();
+    d->lbSrc->setPixmap(QIcon::fromTheme(icon).pixmap(48));
+    d->lbSrc->setAlignment(Qt::AlignCenter);
+    gridLayout->addWidget(d->lbSrc, 1, 2, 1, 1);
+
+    QLabel* const lb2 = new QLabel(this);
+    lb2->setText(i18n("Destination"));
+    lb2->setAlignment(Qt::AlignHCenter);
+    gridLayout->addWidget(lb2, 2, 0, 1, 1);
+
+    QLabel* const lb3 = new QLabel(this);
+    lb3->setText(i18nc("@label: source file", "Source"));
+    lb3->setAlignment(Qt::AlignHCenter);
+    gridLayout->addWidget(lb3, 2, 2, 1, 1);
+
+    QHBoxLayout* const layout2 = new QHBoxLayout();
+    pLayout->addLayout(layout2);
+
+    QFrame* const hline = new QFrame(this);
+    hline->setLineWidth(1);
+    hline->setMidLineWidth(0);
+    hline->setFrameShape(QFrame::HLine);
+    hline->setFrameShadow(QFrame::Sunken);
+    hline->setMinimumSize(0, 2);
+    hline->updateGeometry();
+    pLayout->addWidget(hline);
+
+    QHBoxLayout* const layout = new QHBoxLayout();
+    pLayout->addLayout(layout);
+
+    layout->addStretch(1);
+    layout->addWidget(buttonBox);
+
+    d->progressTimer = new QTimer(this);
+
+    connect(d->progressTimer, SIGNAL(timeout()),
+            this, SLOT(slotProgressTimerDone()));
+
+    d->progressTimer->start(300);
+
+    // get source thumbnail
+
+    if (d->src.isValid())
+    {
+        connect(d->thumbLoadThread, SIGNAL(signalThumbnailLoaded(LoadingDescription,QPixmap)),
+            this, SLOT(slotThumbnail(LoadingDescription,QPixmap)));
+
+        d->thumbLoadThread->find(ThumbnailIdentifier(d->src.toLocalFile()));
+    }
+
+    // get dest thumbnail
+
+    if (d->dest.isValid())
+    {
+        d->netMngr = new QNetworkAccessManager(this);
+
+        connect(d->netMngr, SIGNAL(finished(QNetworkReply*)),
+                this, SLOT(slotFinished(QNetworkReply*)));
+
+        QNetworkRequest netRequest(d->dest);
+        netRequest.setHeader(QNetworkRequest::ContentTypeHeader,
+                             QLatin1String("application/x-www-form-urlencoded"));
+
+        d->netMngr->get(netRequest);
+    }
+
+    resize(sizeHint());
+}
+
+void ReplaceDialog::slotFinished(QNetworkReply* reply)
+{
+    d->progressTimer->stop();
+
+    if (reply->error() != QNetworkReply::NoError)
+    {
+        reply->deleteLater();
+        return;
+    }
+
+    QByteArray buffer = reply->readAll();
+
+    if (!buffer.isEmpty())
+    {
+        QPixmap pxm;
+        pxm.loadFromData(buffer);
+        d->lbDest->setPixmap(pxm.scaled(200, 200, Qt::KeepAspectRatio, Qt::FastTransformation));
+    }
+
+    reply->deleteLater();
+}
+
+void ReplaceDialog::slotThumbnail(const LoadingDescription& desc, const QPixmap& pix)
+{
+    if (QUrl::fromLocalFile(desc.filePath) == d->src)
+    {
+        d->lbSrc->setPixmap(pix.scaled(200, 200, Qt::KeepAspectRatio, Qt::FastTransformation));
+    }
+}
+
+ReplaceDialog::~ReplaceDialog()
+{
+    delete d;
+}
+
+void ReplaceDialog::cancelPressed()
+{
+    close();
+    d->result = PWR_CANCEL;
+}
+
+void ReplaceDialog::addPressed()
+{
+    close();
+    d->result = PWR_ADD;
+}
+
+void ReplaceDialog::addAllPressed()
+{
+    close();
+    d->result = PWR_ADD_ALL;
+}
+
+void ReplaceDialog::replacePressed()
+{
+    close();
+    d->result = PWR_REPLACE;
+}
+
+void ReplaceDialog::replaceAllPressed()
+{
+    close();
+    d->result = PWR_REPLACE_ALL;
+}
+
+QPixmap ReplaceDialog::setProgressAnimation(const QPixmap& thumb, const QPixmap& pix)
+{
+    QPixmap overlay = thumb;
+    QPixmap mask(overlay.size());
+    mask.fill(QColor(128, 128, 128, 192));
+    QPainter p(&overlay);
+    p.drawPixmap(0, 0, mask);
+    p.drawPixmap((overlay.width()/2) - (pix.width()/2), (overlay.height()/2) - (pix.height()/2), pix);
+
+    return overlay;
+}
+
+void ReplaceDialog::slotProgressTimerDone()
+{
+    d->lbDest->setPixmap(setProgressAnimation(d->mimePix, d->progressPix->frameAt(d->progressCount)));
+    d->progressCount++;
+
+    if (d->progressCount == 8)
+    {
+        d->progressCount = 0;
+    }
+
+    d->progressTimer->start(300);
+}
+
+int ReplaceDialog::getResult()
+{
+    return d->result;
+}
+
+} // namespace DigikamGenericGoogleServicesPlugin
+
+#include "moc_gsreplacedlg.cpp"

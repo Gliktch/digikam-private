@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ * ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2022-01-06
+ * Description : macOS properties list for digiKam
+ *
+ * SPDX-FileCopyrightText: 2022-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * ============================================================
+ -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>${BUNDLE_APP_NAME_STRING}</string>
+	<key>CFBundleGetInfoString</key>
+	<string>${BUNDLE_APP_DESCRIPTION_STRING}</string>
+	<key>CFBundleIconFile</key>
+	<string>${BUNDLE_APP_NAME_STRING}_SRCS.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.digiKam</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleLongVersionString</key>
+	<string>${BUNDLE_LONG_VERSION_STRING}</string>
+	<key>CFBundleName</key>
+	<string>${BUNDLE_APP_NAME_STRING}</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>${BUNDLE_SHORT_VERSION_STRING}</string>
+	<key>CFBundleSignature</key>
+	<string>DGKM</string>
+	<key>CFBundleVersion</key>
+	<string>${BUNDLE_VERSION_STRING}</string>
+	<key>CSResourcesFileMapped</key>
+	<true/>
+	<key>LSRequiresCarbon</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>10.15.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.photography</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>${BUNDLE_LEGAL_COPYRIGHT_STRING}</string>
+	<key>LSExecutableArchitectures</key>
+	<array>
+		<string>x86_64</string>
+	</array>
+	<key>LSEnvironment</key>
+	<dict>
+		<key>RasterOff</key>
+		<string>yes</string>
+	</dict>
+</dict>
+</plist>

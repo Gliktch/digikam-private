@@ -1,0 +1,2 @@
+Added image resize feature with export tool
+Import is broken since imagelist do not use a native file dialog

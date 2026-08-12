@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2020-2026 Gilles Caulier <caulier dot gilles at gmail dot com>
+# SPDX-FileCopyrightText: 2024      Ben Cooksley <bcooksley at kde dot org>
+# SPDX-License-Identifier: CC0-1.0
+#
+# See targets available at https://invent.kde.org/sysadmin/ci-utilities/-/tree/master/gitlab-templates
+# CI use Craft envirronnement to build source code. Configuration is located in ./kde-ci.yml
+
+include:
+  - project: sysadmin/ci-utilities
+    file:
+
+      # --- CI Validators ---
+
+      # Check the licenses in files.
+      # - /gitlab-templates/reuse-lint.yml
+
+      # Validate synthax in JSON files.
+      - /gitlab-templates/json-validation.yml
+
+      # Validate synthax in XML files.
+      - /gitlab-templates/xml-lint.yml
+
+      # run cppcheck in CI
+      - /gitlab-templates/cppcheck.yml
+
+      # --- Continuous Integration Qt6 ---
+
+      # Build Qt6 version under Linux and run unit-tests.
+      - /gitlab-templates/linux-qt6.yml
+
+      # Build Qt6 version under Windows and run unit-tests.
+      # - /gitlab-templates/windows-qt6.yml
+
+      # Build Qt6 version under FreeBSD and run unit-tests.
+      #- /gitlab-templates/freebsd-qt6.yml
+
+      # --- Continuous Deployement Qt6 ---
+
+      # Create the signed Linux AppImage bundle.
+      # - /gitlab-templates/craft-appimage-qt6.yml
+
+      # Create the signed Windows installer.
+      # - /gitlab-templates/craft-windows-x86-64-qt6.yml

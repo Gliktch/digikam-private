@@ -1,0 +1,59 @@
+Editor and BQM Tools Pending Tasks
+----------------------------------
+
+                        Multithreaded   Multicore    Zommable Preview        Port to BQM     Remark
+
+
+color
+  /adjustcurves             done          TODO             done                  done
+  /adjustlevels             done          TODO             done                  TODO
+  /autocorrection           done          TODO             done                  done
+  /bcg                      done          TODO             done                  done
+  /bwsepia                  done          TODO             done                  done
+  /cb                       done          TODO             done                  done
+  /channelmixer             done          TODO             done                  done
+  /hsltool                  done          TODO             done                  done
+  /profileconversion        done          TODO             done                  done
+  /whitebalance             done          TODO             done                  done
+  /Invert                    no           TODO              no                   done
+  /Convert 8/16 bits         no           TODO              no                   done
+  /Convert 16/8 bits         no           TODO              no                   done
+  /Film                     done          TODO             done                  TODO
+
+decorate
+  /border                   done          TODO              no                   done
+  /inserttext               TODO          TODO              no                   TODO       Factoring with BQM Watermark tool
+  /texture                  done          TODO             done                  done
+
+filters
+  /colorfx                  done          TODO             done                  done
+  /charcoal                 done          done             done                  TODO
+  /distortionfx             done          done             done                  TODO
+  /emboss                   done          done             done                  TODO
+  /oilpaint                 done          done             done                  TODO
+  /blurfx                   done          done             done                  TODO
+  /raindrop                 done          done              no                   TODO
+  /filmgrain                done          done             done                  done
+
+enhance
+  /noisereduction           done          done             done                  done
+  /sharpen                  done          done             done                  done
+  /restoration              done           no              done                  done       Internal CImg multicore support crash
+  /blur                     done          done             done                  done
+  /localcontrast            done          done             done                  done
+  /redeye                   done          done             done                  done
+  /healingclone             done          TODO             done                   no        Editor only tool.
+  /autocorrection           done          TODO             done                  done
+  /vignetting               done          TODO              no                   done
+  /hotpixels                done          TODO             done                  done
+  /distortion               done          TODO             TODO                  TODO
+  
+transform
+  /autocrop                  no           TODO              no                   TODO
+  /ratiocrop                done          TODO              no                    no        Editor only tool
+  /resize                   done          TODO             TODO                  done
+  /freerotation             done          TODO              no                   done
+  /perspective               no           TODO              no                    no        Editor only tool
+  /shear                    done          TODO              no                   TODO
+  /contentawareresizing     done          TODO             TODO                  TODO
+

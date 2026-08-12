@@ -1,0 +1,121 @@
+#!/bin/bash
+
+# SPDX-FileCopyrightText: 2008-2026 by Gilles Caulier, <caulier dot gilles at gmail dot com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Cppcheck static analyzer configuration used by project/reports/cppcheck.sh
+
+# --- Directories to exclude from Cppcheck static analysis.
+
+IGNORE_DIRS="-i ../../core/libs/dimg/filters/transform/lqr/ "
+IGNORE_DIRS+="-i ../../core/libs/pgfutils/libpgf/ "
+IGNORE_DIRS+="-i ../../core/libs/dimg/filters/greycstoration/ "
+IGNORE_DIRS+="-i ../../core/libs/jpegutils/libjpeg/ "
+IGNORE_DIRS+="-i ../../core/libs/rawengine/libraw/ "
+IGNORE_DIRS+="-i ../../core/libs/dngwriter/extra/ "
+IGNORE_DIRS+="-i ../../core/libs/dplugins/webservices/o2/ "
+IGNORE_DIRS+="-i ../../core/dplugins/generic/tools/mediaserver/upnpsdk/ "
+IGNORE_DIRS+="-i ../../core/dplugins/generic/webservices/unified/ "
+IGNORE_DIRS+="-i ../../core/dplugins/generic/webservices/rajce/ "
+IGNORE_DIRS+="-i ../../core/dplugins/generic/webservices/ipfs/ "
+IGNORE_DIRS+="-i ../../core/dplugins/generic/webservices/facebook/ "
+IGNORE_DIRS+="-i ../../core/libs/video/QtAVPlayer/ "
+IGNORE_DIRS+="-i ../../opt/qt6/include/ "
+IGNORE_DIRS+="-i ../../usr/include/ "
+IGNORE_DIRS+="-i ../../project/ "
+IGNORE_DIRS+="-i ../../build/ "
+IGNORE_DIRS+="-i ../../build.qt6/ "
+IGNORE_DIRS+="-i ../../build.scan/ "
+IGNORE_DIRS+="-i ../../build.api/ "
+IGNORE_DIRS+="-i ../../build.win32/ "
+IGNORE_DIRS+="-i ../../build.win64/ "
+IGNORE_DIRS+="-i ../../build.clazy/ "
+IGNORE_DIRS+="-i ../../po/ "
+IGNORE_DIRS+="-i ../../test-data/ "
+IGNORE_DIRS+="-i ../../LICENSES/ "
+
+# --- Defines to use with static analysis.
+
+CPPCHECK_DEFINES="\
+-DQ_OS_LINUX \
+-DQ_OS_UNIX \
+-DQ_PROCESSOR_X86_64 \
+-DHAVE_GEOLOCATION \
+-DHAVE_MEDIAPLAYER \
+-DHAVE_QWEBENGINE \
+-DHAVE_QTMULTIMEDIA \
+-DHAVE_OPENGL \
+-DHAVE_MYSQLSUPPORT \
+-DHAVE_INTERNALMYSQL \
+-DHAVE_GPHOTO2 \
+-DHAVE_GPHOTO25 \
+-DHAVE_PANORAMA \
+-DHAVE_HTMLGALLERY
+-DHAVE_X11 \
+-DHAVE_X265 \
+-DHAVE_DBUS \
+-DHAVE_LENSFUN \
+-DHAVE_HEIF \
+-DHAVE_JXL \
+-DHAVE_EIGEN3 \
+-DHAVE_JASPER \
+-DHAVE_IMAGE_MAGICK \
+-DHAVE_SONNET \
+-DHAVE_KIO \
+-DHAVE_KSANE \
+-DHAVE_KICONTHEMES \
+-DHAVE_KNOTIFICATIONS \
+-DHAVE_KNOTIFYCONFIG \
+-DHAVE_KCALENDAR \
+-DHAVE_APPSTYLE_SUPPORT \
+-D_XMP_SUPPORT_ \
+-DEXIV2_TEST_VERSION \
+-DOPENCV_TEST_VERSION \
+-DAV_VERSION_INT \
+"
+
+CPPCHECK_OPTIONS="\
+--std=c++20 \
+--library=std.cfg \
+--library=qt.cfg \
+--library=opencv2.cfg \
+--library=boost.cfg \
+--library=kde.cfg \
+--platform=unix64 \
+"
+
+CPPCHECK_SUPPRESSIONS="\
+--inline-suppr \
+--suppress=*:*cimg*.h \
+--suppress=*:*libraw*.h \
+--suppress=*:*libpgf/*.h \
+--suppress=*:*upnpsdk/*.h \
+--suppress=*:*o0*.h \
+--suppress=*:*o1*.h \
+--suppress=*:*o2*.h \
+--suppress=*:*lqr*.h \
+--suppress=*:*Npt*.h \
+--suppress=*:*Plt*.h \
+--suppress=*:*libjpeg*.h \
+--suppress=*:*dng_sdk/*.h \
+--suppress=*:*xmp_sdk/*.h \
+--suppress=*:*QtAVPlayer/*.h \
+--suppress=missingIncludeSystem \
+--suppress=missingInclude \
+--suppress=variableScope \
+--suppress=purgedConfiguration \
+--suppress=toomanyconfigs \
+--suppress=unreadVariable \
+--suppress=unusedStructMember \
+--suppress=unusedPrivateFunction \
+--suppress=unknownMacro \
+--suppress=unmatchedSuppression \
+--suppress=class_X_Y \
+--suppress=ConfigurationNotChecked \
+--suppress=useStlAlgorithm \
+--suppress=returnByReference \
+--suppress=checkersReport \
+--suppress=unusedFunction \
+--suppress=functionStatic \
+"

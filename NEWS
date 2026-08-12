@@ -1,0 +1,435 @@
+digiKam 9.2.0 - Release date: 2026-xx-xx
+
+*****************************************************************************************************
+NEW FEATURES:
+
+Bundles component versions:
+
+(*): Updated compared to previous digiKam release.
+
+| Bundles       | Qt         | KDE        | OpenCV   | FFmpeg    | Heif       | ExifTool  | Exiv2      | LibRaw       | QtAvPlayer   | Build Environment   |
+|---------------|------------|------------|----------|-----------|------------|-----------|------------|--------------|--------------|---------------------|
+| Windows Qt5   | 5.15.17    | 5.116      | 4.11     | 7.1.1     | 1.20.2     | 13.59 (*) | 0.28.8     | 20260805 (*) | 20260405     | Windows 10 + VCPKG  |
+| Windows Qt6   | 6.11.0     | 6.26.0     | 4.12     | 8.1.1     | 1.21.2     | 13.59 (*) | 0.28.8     | 20260805 (*) |    -         | Windows 11 + VCPKG  |
+| AppImage Qt5  | 5.15.18    | 5.116      | 4.13     | 8.0.1     | 1.21.2     | 13.59 (*) | 0.28.8     | 20260805 (*) | 20260405     | XUbuntu 20.06       |
+| AppImage Qt6  | 6.11.0     | 6.26.0     | 4.13     | 8.1.1     | 1.21.2     | 13.59 (*) | 0.28.8     | 20260805 (*) |    -         | XUbuntu 22.04       |
+| macOS Qt5     | 5.15.18    | 5.116      | 4.13     | 8.0.1     | 1.20.2     | 13.59 (*) | 0.28.8     | 20260805 (*) | 20260405     | Monterey + Macports |
+| macOS Qt6     | 6.11.0     | 6.26.0     | 4.13     | 8.1.0     | 1.21.2     | 13.59 (*) | 0.28.8     | 20260805 (*) |    -         | Tathoe + Macports   |
+
+Icon-View  : Improve filename matching for timelapse/burst grouping items.
+Raw Support: Add support of Sony ARW6 CRAW HQ, Sony ILCE-7M5, and Canon R50 V.
+
+*****************************************************************************************************
+
+BUGFIXES:
+
+001 --> 521193 - Survey tool shortcuts do not toggle labels with keyboard shortcuts.
+002 --> 518911 - digiKam terminates abnormally with signal 6/ABRT.
+003 --> 521262 - Newly installed 9.1.0 crashes under Windows.
+004 --> 521397 - Low-resolution/pixelated thumbnail generated for JXL images after internal editing (e.g., Local Contrast).
+005 --> 521428 - Bug: "Find new items" progress bar and percentage do not update during scan (stuck at 0% until 100%).
+006 --> 521485 - The Dates and Timeline views no longer work after update.
+007 --> 521756 - 03-build-digikam.sh script bug: cleanup logic inadvertently deletes all VCPKG dependencies.
+008 --> 436975 - Advanced search - right sidebar metadata tab is disabled.
+009 --> 522001 - MP4: [Composite] GPSLatitude / GPSLongitude / ... metadata - ignored and deleted (on save).
+010 --> 522052 - In the TableView the seconds from creation Date/Time isn't shown correctly eg it stay always at 00.
+011 --> 521955 - Failed to map xmp metadata Xmp.iptcExt.Event to digiKam Tag.
+012 --> 522204 - Core Mysql database schema update to V 17 failed using AppImage 9.1.0.
+013 --> 522716 - OPenCV 5 exception while processing face recognition.
+014 --> 522423 - Pictures in Dates tab not showing, also takes very long to load (0-100%).
+015 --> 522695 - Face management workflow "Scan new images" incorrectly scans the entire photo collection.
+016 --> 522792 - The 9.1.0 compile version will not deploy on Ubuntu 26. I had to extract the AppImage.
+017 --> 522770 - Face tag not read from .xmp for jxl files.
+018 --> 522944 - Detect new files without refreshing thumbnails.
+019 --> 522954 - Copy as path.
+020 --> 522968 - Missing folders.
+021 --> 523055 - Test GPU AI Compatibility fails instantly with QString::arg Argument missing: OpenCLDNN error (Windows, NVIDIA RTX 3080 Ti).
+022 --> 523250 - Created filename on import is wrong (date/time).
+023 --> 522889 - Pick Label "None" filter and Advanced Search return drastically different counts for the same criterion.
+024 --> 522748 - Crash upon clicking on Maps - fatal allocator error: sized deallocation mismatch (small).
+025 --> 523371 - ImageTagProperties Table Does Not Get Cleared in "Reset and clear all faces and training".
+026 --> 523414 - Build failure with latest commit (templateselector.cpp).
+027 --> 514721 - digiKam tends to crash with no error message on the first attempt at a duplication search on a folder with a larger number of images, but not on post-restart attempts.
+028 --> 518566 - Crash on Marble map interaction after Geolocation Editor open for some time.
+029 --> 485654 - Product Hangs when Trying to apply Geolocations.
+030 --> 519108 - Moving multiple tags into a hierarchy causes crash.
+031 --> 523455 - Delete duplicates button stays greyed out in duplicates tool.
+032 --> 523476 - GPS Correlator removes GPS data when no correlation found.
+033 --> 469202 - Crash when deleting.
+034 --> 478104 - A new version delete all my configuration and tags.
+035 --> 491886 - digiKam erase my photos.
+036 --> 523211 - Crash on start on Windows 10 (Exception code: 0xc0000005 Fault offset: 0x0000000000000000) with today's Beta release.
+037 --> 523810 - Add a setting for font used during SlideShow.
+038 --> 523759 - Create directory symbolic links / junctions from within digiKam (restricted to existing managed collections).
+039 --> 523852 - Feature Request: Option to shift File Modification Timestamp by +/- 1 second when writing metadata
+040 --> 523957 - It is not possible to drag photos within the same album to arrange them according to your own scheme.
+041 --> 524000 - digiKam: crashes when finding duplicate or building fingerprints.
+042 --> 
+043 --> 
+044 --> 
+045 --> 
+046 --> 
+047 --> 
+048 --> 
+049 --> 
+050 --> 
+051 --> 
+052 --> 
+053 --> 
+054 --> 
+055 --> 
+056 --> 
+057 --> 
+058 --> 
+059 --> 
+060 --> 
+061 --> 
+062 --> 
+063 --> 
+064 --> 
+065 --> 
+066 --> 
+067 --> 
+068 --> 
+069 --> 
+070 --> 
+071 --> 
+072 --> 
+073 --> 
+074 --> 
+075 --> 
+076 --> 
+077 --> 
+078 --> 
+079 --> 
+080 --> 
+081 --> 
+082 --> 
+083 --> 
+084 --> 
+085 --> 
+086 --> 
+087 --> 
+088 --> 
+089 --> 
+090 --> 
+091 --> 
+092 --> 
+093 --> 
+094 --> 
+095 --> 
+096 --> 
+097 --> 
+098 --> 
+099 --> 
+100 --> 
+101 --> 
+102 --> 
+103 --> 
+104 --> 
+104 --> 
+105 --> 
+106 --> 
+107 --> 
+108 --> 
+109 --> 
+110 --> 
+111 --> 
+112 --> 
+113 --> 
+114 --> 
+115 --> 
+116 --> 
+117 --> 
+118 --> 
+119 --> 
+120 --> 
+121 --> 
+122 --> 
+123 --> 
+124 --> 
+125 --> 
+126 --> 
+127 --> 
+128 --> 
+129 --> 
+130 --> 
+131 --> 
+132 --> 
+133 --> 
+134 --> 
+135 --> 
+136 --> 
+137 --> 
+138 --> 
+139 --> 
+140 --> 
+141 --> 
+142 --> 
+143 --> 
+144 --> 
+145 --> 
+146 --> 
+147 --> 
+148 --> 
+149 --> 
+150 --> 
+151 --> 
+152 --> 
+153 --> 
+154 --> 
+155 --> 
+156 --> 
+157 --> 
+158 --> 
+159 --> 
+160 --> 
+161 --> 
+162 --> 
+163 --> 
+164 --> 
+165 --> 
+166 --> 
+167 --> 
+168 --> 
+169 --> 
+170 --> 
+171 --> 
+172 --> 
+173 --> 
+174 --> 
+175 --> 
+176 --> 
+177 --> 
+178 --> 
+179 --> 
+180 --> 
+181 --> 
+182 --> 
+183 --> 
+184 --> 
+185 --> 
+186 --> 
+187 --> 
+188 --> 
+189 --> 
+190 --> 
+191 --> 
+192 --> 
+193 --> 
+194 --> 
+195 --> 
+196 --> 
+197 --> 
+198 --> 
+199 --> 
+200 --> 
+201 --> 
+202 --> 
+203 --> 
+204 --> 
+205 --> 
+206 --> 
+207 --> 
+208 --> 
+209 --> 
+210 --> 
+211 --> 
+212 --> 
+213 --> 
+214 --> 
+215 --> 
+216 --> 
+217 --> 
+218 --> 
+219 --> 
+220 --> 
+221 --> 
+222 --> 
+223 --> 
+224 --> 
+225 --> 
+226 --> 
+227 --> 
+228 --> 
+229 --> 
+230 --> 
+231 --> 
+232 --> 
+233 --> 
+234 --> 
+235 --> 
+236 --> 
+237 --> 
+238 --> 
+239 --> 
+240 --> 
+241 --> 
+242 --> 
+243 --> 
+244 --> 
+245 --> 
+246 --> 
+247 --> 
+248 --> 
+249 --> 
+250 --> 
+251 --> 
+252 --> 
+253 --> 
+254 --> 
+255 --> 
+256 --> 
+257 --> 
+258 --> 
+259 --> 
+260 --> 
+261 --> 
+262 --> 
+263 --> 
+264 --> 
+265 --> 
+266 --> 
+267 --> 
+268 --> 
+269 --> 
+270 --> 
+271 --> 
+272 --> 
+273 --> 
+274 --> 
+275 --> 
+276 --> 
+277 --> 
+278 --> 
+279 --> 
+280 --> 
+281 --> 
+282 --> 
+283 --> 
+284 --> 
+285 --> 
+286 --> 
+287 --> 
+288 --> 
+289 --> 
+290 --> 
+291 --> 
+292 --> 
+293 --> 
+294 --> 
+295 --> 
+296 --> 
+297 --> 
+298 --> 
+299 --> 
+300 --> 
+301 --> 
+302 --> 
+303 --> 
+304 --> 
+305 --> 
+306 --> 
+307 --> 
+308 --> 
+309 --> 
+310 --> 
+311 --> 
+312 --> 
+313 --> 
+314 --> 
+315 --> 
+316 --> 
+317 --> 
+318 --> 
+319 --> 
+320 --> 
+321 --> 
+322 --> 
+323 --> 
+324 --> 
+325 --> 
+326 --> 
+327 --> 
+328 --> 
+329 --> 
+330 --> 
+331 --> 
+332 --> 
+333 --> 
+334 --> 
+335 --> 
+336 --> 
+337 --> 
+338 --> 
+339 --> 
+340 --> 
+341 --> 
+342 --> 
+343 --> 
+344 --> 
+345 --> 
+346 --> 
+347 --> 
+348 --> 
+349 --> 
+350 --> 
+351 --> 
+352 --> 
+353 --> 
+354 --> 
+355 --> 
+356 --> 
+357 --> 
+358 --> 
+359 --> 
+360 --> 
+361 --> 
+362 --> 
+363 --> 
+364 --> 
+365 --> 
+366 --> 
+367 --> 
+368 --> 
+369 --> 
+370 --> 
+371 --> 
+372 --> 
+373 --> 
+374 --> 
+375 --> 
+376 --> 
+377 --> 
+378 --> 
+379 --> 
+380 --> 
+381 --> 
+382 --> 
+383 --> 
+384 --> 
+385 --> 
+386 --> 
+387 --> 
+388 --> 
+389 --> 
+390 --> 
+391 --> 
+392 --> 
+393 --> 
+394 --> 
+395 --> 
+396 --> 
+397 --> 
+398 --> 
+399 --> 
+400 --> 
+401 --> 
+402 --> 
+403 --> 
+404 --> 
+405 --> 
+406 --> 
+407 --> 
+408 --> 
+409 --> 

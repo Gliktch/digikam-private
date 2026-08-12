@@ -1,0 +1,14 @@
+.onnx files generated based on
+https://github.com/ultralytics/ultralytics
+License: AGPL-3.0
+
+@software{
+Jocher_Ultralytics_YOLO_2023,
+author = {Jocher, Glenn and Qiu, Jing and Chaurasia, Ayush},
+license = {AGPL-3.0},
+month = jan,
+title = {{Ultralytics YOLO}},
+url = {https://github.com/ultralytics/ultralytics},
+version = {8.0.0},
+year = {2023}
+}

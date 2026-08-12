@@ -1,0 +1,136 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: digiKam
+Upstream-Contact: digiKam team <digikamdeveloper@gmail.com>
+Source: https://invent.kde.org/graphics/digikam/
+
+Files: .*
+Copyright: none
+License: GPL-2.0
+
+Files: core/*rc
+Copyright: none
+License: GPL-2.0
+
+Files: AUTHORS
+Copyright: none
+License: GPL-2.0
+
+Files: ChangeLog
+Copyright: none
+License: GPL-2.0
+
+Files: Mainpage.dox
+Copyright: none
+License: GPL-2.0
+
+Files: PACKAGING
+Copyright: none
+License: GPL-2.0
+
+Files: *.md
+Copyright: none
+License: GPL-2.0
+
+Files: *NEWS*
+Copyright: none
+License: GPL-2.0
+
+Files: *README*
+Copyright: none
+License: GPL-2.0
+
+Files: *TODO*
+Copyright: none
+License: GPL-2.0
+
+Files: project/*json*
+Copyright: none
+License: GPL-2.0
+
+Files: project/*xsl
+Copyright: none
+License: GPL-2.0
+
+Files: project/*xml
+Copyright: none
+License: GPL-2.0
+
+Files: project/*patch
+Copyright: none
+License: GPL-2.0
+
+Files: project/*supp
+Copyright: none
+License: GPL-2.0
+
+Files: project/*css
+Copyright: none
+License: GPL-2.0
+
+Files: project/documents/*
+Copyright: none
+License: GPL-2.0
+
+Files: core/data/*html
+Copyright: none
+License: GPL-2.0
+
+Files: core/data/*jpg
+Copyright: none
+License: CC0-1.0
+
+Files: core/data/*png
+Copyright: none
+License: CC0-1.0
+
+Files: core/data/*svg*
+Copyright: none
+License: CC0-1.0
+
+Files: core/data/*desktop*
+Copyright: none
+License: CC0-1.0
+
+Files: core/data/*colors
+Copyright: none
+License: GPL-2.0
+
+Files: core/data/*dkamp
+Copyright: none
+License: GPL-2.0
+
+Files: core/data/*xml
+Copyright: none
+License: GPL-2.0
+
+Files: core/data/*icc
+Copyright: none
+License: GPL-2.0
+
+Files: core/data/*icm
+Copyright: none
+License: GPL-2.0
+
+Files: core/data/*.1
+Copyright: none
+License: GPL-2.0
+
+Files: core/data/*docbook
+Copyright: none
+License: GPL-2.0
+
+Files: core/utilities/geolocation/marble/data/flags/*
+Copyright: none
+License: CC0-1.0
+
+Files: core/utilities/geolocation/marble/data/bitmaps/osmcarto/*/*
+Copyright: Andy Allan <andy@gravitystorm.co.uk> and contributors, based on original cartography by Steve Chilton and others.
+License: CC0-1.0
+
+Files: core/utilities/geolocation/marble/data/svg/osmc-symbols/3rdparty/*
+Copyright: See COPYRIGHT file
+License: CC0-1.0
+
+Files: core/utilities/geolocation/marble/data/svg/osmc-symbols/*
+Copyright: OpenStreetMap contributors <data@osmfoundation.org>
+License: CC0-1.0

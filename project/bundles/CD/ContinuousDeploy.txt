@@ -1,0 +1,122 @@
+Architecture and configuration to setup a continuous deployment computer.
+--------------------------------------------------------------------------
+
+1/ Host computer and local network
+
+- Intel Xeon 24 cores
+- 32 Gb of RAM (48Gb highly recommended)
+- 2 SSD 1Tb (one to host base system, one to host VMs)
+- Host system Linux Mageia 7.1
+- VirtualBox version 6.x:
+
+  * Host must define a private local network configured with default settings:
+           network 192.168.56.1/25
+           DHCP server 192.168.56.100/24 @[101-254]
+
+  * Each VM must have 2 network ifaces: one to use Internet using NAT
+                                        one to use private local network
+
+  * Private local network will allow to be connected to VMs locally with ssh.
+
+  * Extension Pack installed (https://www.virtualbox.org/wiki/Downloads).
+
+  * 3 VMs:
+           one running MacOS Catalina to compile PKG installer.
+               Name: VX.
+               8 cores.
+               4Gb RAM (8Gb highly recommended to compile QtWebEngine).
+               128Mb video.
+               Disk: 120Gb. (40 Gb free are required at least to update later XCode)
+               eth0: auto IP/DNS with DHCP                                                  (VM:NAT)
+               eth1: manual IP/DNS: 192.168.56.101/24/192.168.56.1/192.168.56.100           (VM:private local Net)
+
+           one running XBuntu 18.04 to compile Windows installer.
+               Name: VW.
+               8 cores.
+               4Gb RAM (8Gb highly recommended to compile QtWebkit).
+               128Mb video.
+               Disk: 120Gb (/).
+               /home : 20Gb on a separated partition.
+               /tmp  : 20Gb on a separated partition.
+               /var  : 20Gb on a separated partition.
+               swap  : 20Gb on a separated partition.
+               eth0: auto IP/DNS with DHCP Metric:0                                         (VM:NAT)
+               eth1: manual IP/DNS: 192.168.56.102/24/192.168.56.1/192.168.56.100 Metric:10 (VM:private local Net)
+               Desktop: Plasma or XFCE
+
+           one running XBuntu 18.04 to compile AppImage bundle
+               Name: VA.
+               8 cores.
+               4Gb RAM (8Gb highly recommended to compile QtWebEngine).
+               128Mb video.
+               Disk: 120Gb (/).
+               /home : 20Gb on a separated partition.
+               /tmp  : 20Gb on a separated partition.
+               /var  : 20Gb on a separated partition.
+               swap  : 20Gb on a separated partition.
+               eth0: auto IP/DNS with DHCP Metric:0                                         (VM:NAT)
+               eth1: manual IP/DNS: 192.168.56.103/24/192.168.56.1/192.168.56.100 Metric:10 (VM:private local Net)
+               Desktop: XFCE
+
+2/ Virtual Machines
+
+- MacOS Catalina: system is installed using this GitHub repository: https://github.com/myspaghetti/macos-virtualbox (git revision b47fbd977e9d6103fb7113651839c22937d58af1),
+    and using Macports procedure.
+  * @IP: 192.168.56.101
+  * Apply the patch to macos-guest-virtualbox.patch and run the script to create the VM.
+  * Don't touch mouse and keyboard will installing as form recognition is used to automate all operations (aka partitions creating and formatting).
+  * MacOS Catalina will be installed and first run assistant must appear.
+  * Create a main user account with admin rights, disable Siri, TimeScreen, Analytics, Accessibility, TimeMachine, and don't setup an AppleID.
+  * Using Mac Deploy Stick - MDS tool to download macOS ISO for update system (https://twocanoes.com/products/mac/mac-deploy-stick/), download the last DMG public release of BigSur
+  * MacOS BigSur will be installed and first run assistant will appear where nothing special must be changed compared to Catalina.
+  * From MacOS System Preferences Panel/Software Update disable auto up-to-date.
+  * From macOS System Preferences Panel/Users & Groups change user account shell from zsh to bash and reboot the virtual machine.
+  * From macOS System Preferences Panel/Energy Saver turn off all sleeping options.
+  * From macOS System Preferences Panel/Desktop & Screen Saver Set no image background and turn off screen saver.
+  * From macOS System Preferences Panel/Sound Effects disable all.
+  * From macOS System Preferences Panel/Sharing enable remote login.
+  * From macOS System Preferences Panel/Mouse disable natural scroll direction.
+  * From macOS System Preferences Panel/Spotlight disable all categories.
+  * From macOS System Preferences Panel/Siri disable all.
+  * From macOS System Preferences Panel/Security & Privacy turn off screen lock.
+  * From macOS System Preferences Panel/Notifications disable all.
+  * From macOS System Preferences Panel/Display disable mirroring option in menu bar.
+  * From macOS System Preferences Panel/Keyboard disable input option in menu bar.
+  * From macOS System Preferences Panel/Dock & Menu Bar disable all control options in menu bar.
+  * Register a valid account in AppleStore and download XCode (usually an account taken to developer.apple.com is enough).
+  * Open XCode and wait to update components with sudo right.
+  * From a Terminal, install XCode Command Line Tools with "sudo xcode-select --install".
+  * From a Terminal, valid XCode license with "sudo xcodebuild -license".
+  * Install Packages for macOS (http://s.sudre.free.fr/Software/Packages/about.html).
+  * From macOS System Preferences Panel/Security & Privacy files listed below with Rights to Full Disk Access:
+    + Terminal
+    + Packages.app
+    + /usr/local/bin/packagesbuild
+    + /Library/PrivilegedHelperTools/??.whitebox.packages/packages_builder
+    + /Library/PrivilegedHelperTools/??.whitebox.packages/packages_dispatcher
+  * Install .bashrc_profile, .gitconfig, and macports_update.sh to the home directory.
+  * Install your public and private ssh keys for your KDE account to your home directory.
+  * Change /etc/sudoers properties to run sudo without password: "%admin ALL = (ALL) ALL" => "%admin ALL = (ALL) NOPASSWD: ALL"
+  * Clone digiKam git repository in your home repository (git clone git@invent.kde.org:graphics/digikam.git).
+  * From local digiKam git repository, run project/bundles/macports/makeall.sh.
+  * To update Macports PKG all the days at 13h00, run "macports_update.sh" script in background with screen CLI tool.
+
+- XUBuntu 18.04: system is installed using MXE procedure.
+  * @IP: 192.168.56.102
+  * To update Windows installer all the days at 15h00, run "mxe_update.sh" script in background with screen CLI tool.
+
+- XUBuntu 18.04: system is installed using AppImage procedure.
+  * @IP: 192.168.56.103
+  * To update Linux bundle all the days at 11h00, run "appimage_update.sh" script in background with screen CLI tool.
+
+- To start VM without GUI from command line:
+
+  * VBoxManage startvm --type headless VW
+  * VBoxManage startvm --type headless VA
+  * VBoxManage startvm --type headless VX
+
+- To stop VM without GUI from command line:
+
+  * VBoxManage controlvm VW acpipowerbutton
+  * VBoxManage controlvm VA acpipowerbutton
+  * VBoxManage controlvm VX acpipowerbutton

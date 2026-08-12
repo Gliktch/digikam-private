@@ -1,0 +1,21 @@
+Unit-tests, command line tools, and GUI tools listed by modules.
+
+* File Naming Conventions:
+
+- Unit-Tests pattern:                   *_utest.cpp/.h
+- Command line tools pattern:           *_cli.cpp/.h
+- Graphic user interface tools pattern: *_gui.cpp/.h
+
+The front of file name must describe the goal of the tests/tools.
+
+* All test implementations must uses DIGIKAM_TESTS_LOG QtDebug space defined in digikam_debug.h.
+  To show debug traces on the console, turn on the env. variable QT_LOGGING_RULES with "digikam*=true".
+
+* No need to support translations in this area.
+
+* With command line tools, try to use QCoreApplication instead QApplication when possible.
+
+* All data test files must be hosted on this git LFS based repository:
+https://invent.kde.org/graphics/digikam-test-data
+
+See class from dtestdatadir.h to manage data test files at run-time, from developer computer and on CI VM.

@@ -1,0 +1,75 @@
+digiKam 7.10.0 - Release date: 2023-03-12
+
+*****************************************************************************************************
+NEW FEATURES:
+
+Update Libraw to last stable 0.21.1 (https://www.libraw.org/news/libraw-0-21-release):
+    Camera format support:
+        Phase One/Leaf IIQ-S v2 support
+        Canon CR3 filmrolls/RawBurst
+        Canon CRM (movie) files
+        Tiled bit-packed (and 16-bit unpacked) DNGs
+        (non-standard) Deflate-compressed integer DNG files are allowed 
+    Camera device support:
+        Canon EOS R3, R7 and R10
+        Fujifilm X-H2S, X-T30 II
+        OM System OM-1
+        Leica M11
+        Sony A7-IV (ILCE-7M4)
+        DJI Mavic 3
+
+Bundles ; Update KF5 framework to last 5.102 under macOS, Windiws, and Linux (AppImage).
+Bundles : Update libjasper to last 4.0.0
+
+*****************************************************************************************************
+BUGFIXES:
+
+001 --> 462598 - All groups disappeared after upgrade of Ubuntu and digiKam.
+002 --> 322642 - MAINTENANCE : tools an optimizations to maintain database schema.
+003 --> 462686 - Compile Error in videodecoder_p.cpp.
+004 --> 462685 - Darktable does not show in "open with" context menu.
+005 --> 462744 - Will digiKam run on Apple M1 or M2 chips?
+006 --> 462825 - Rename tool combobox history not saving in version 7.9.0.
+007 --> 462913 - Import Cancel button doesn't cancel during "Import > Add images...".
+008 --> 463026 - Unable to reset custom collection collection icon.
+009 --> 463120 - Crashes on startup.
+010 --> 463350 - Red eyes correction on windows 10 not functioning.
+011 --> 463726 - Cannot find folders with photos.
+012 --> 461205 - HEIF images are not rotated properly.
+013 --> 464003 - digiKam fills "ASCII" as photo caption from no apparent sources.
+014 --> 447370 - GPS Processing Method tag is incorrectly read as Caption tag.
+015 --> 464220 - Showfoto not exporting properly coded export videos.
+016 --> 464389 - Bad link to documentation.
+017 --> 464390 - po/ca@valencia/digikam.po excluded from tarballs.
+018 --> 464468 - Menu Help Online Handbook goes to KDE Documentation, digikam unknown.
+019 --> 464492 - Menu item Help - Online handbook is broken.
+020 --> 464512 - Suggestion about to apply tags to whole Album contents.
+021 --> 210779 - Update libjasper to AppImage to use new API >= 3.0 for a better stability.
+022 --> 464777 - Start menu items disappear when using digikam for awhile.
+023 --> 464966 - Pressing Escape in Trash clears the view.
+024 --> 464941 - Settings / Configure DigiKam > add Ignored File extension.
+025 --> 464646 - Any faces detection command cause Core Dump error.
+026 --> 464745 - Coredump on face detection or face assignation.
+027 --> 465034 - digiKam crashes when trying to recognize faces.
+028 --> 465046 - Refresh folder does nothing or causes crash.
+029 --> 465044 - Deleting folders crashes the app.
+030 --> 465183 - Link to documentation / Online-Help broken.
+031 --> 465310 - Tag option "toggle auto" not considered for face tags.
+032 --> 465312 - Item Properties Unknown.
+033 --> 465045 - Importing folder does not refresh overview.
+034 --> 465461 - Tags set by DxO not visible in digiKam.
+035 --> 465598 - Waste of space in iconview.
+036 --> 465684 - Error message when import from Google Photos.
+037 --> 465680 - Fails to start due to missing library in openSUSE.
+038 --> 465728 - Sliders have the wrong orientation.
+039 --> 466060 - Please give i18n context at "Import Window" in core/utilities/setup/camera/setupcamera.cpp.
+040 --> 465922 - digiKam is crashing.
+041 --> 466456 - Ability to show filepath to image.
+042 --> 466459 - Cannot search on HEVC codec.
+043 --> 466799 - Showfoto/Setup/Misc/Sort images by Name/Reverse ordering: sorts ascending rather than descending.
+044 --> 466943 - Image Quality Sorter - AI Option Does NOT Exist.
+045 --> 466991 - Remove Duplicates Not Active.
+046 --> 467013 - Enable copying file path to the clipboard in Windows.
+047 --> 443682 - Add "copy file path" option to right-click menu.
+048 --> 463941 - After upgrading to 7.9.0 from 7.8.0 digikam does not connect to database mariadb server.
+049 --> 462736 - Connection to external Mysql-Server fails.

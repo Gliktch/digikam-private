@@ -1,0 +1,390 @@
+[{
+  "SourceFile": "C:/Temp/01.jpg",
+  "ExifTool:ExifTool:ExifTool:::ExifToolVersion": {
+    "desc": "ExifTool Version Number",
+    "val": 12.24
+  },
+  "ExifTool:ExifTool:ExifTool:::Warning": {
+    "desc": "Warning",
+    "val": "Suspicious IFD0 offset for XPAuthor"
+  },
+  "File:System:Other:::FileName": {
+    "desc": "File Name",
+    "val": "01.jpg"
+  },
+  "File:System:Other:::Directory": {
+    "desc": "Directory",
+    "val": "C:/Temp"
+  },
+  "File:System:Other:::FileSize": {
+    "desc": "File Size",
+    "val": 879394
+  },
+  "File:System:Other:::FilePermissions": {
+    "desc": "File Permissions",
+    "val": 100666
+  },
+  "File:System:Time:::FileModifyDate": {
+    "desc": "File Modification Date/Time",
+    "val": "2009:07:14 07:32:31+02:00"
+  },
+  "File:System:Time:::FileAccessDate": {
+    "desc": "File Access Date/Time",
+    "val": "2009:07:14 07:32:31+02:00"
+  },
+  "File:System:Time:::FileCreateDate": {
+    "desc": "File Creation Date/Time",
+    "val": "2021:04:23 08:25:56+02:00"
+  },
+  "File:File:Other:::FileType": {
+    "desc": "File Type",
+    "val": "JPEG"
+  },
+  "File:File:Other:::FileTypeExtension": {
+    "desc": "File Type Extension",
+    "val": "JPG"
+  },
+  "File:File:Other:::MIMEType": {
+    "desc": "MIME Type",
+    "val": "image/jpeg"
+  },
+  "JFIF:JFIF:Image:::JFIFVersion": {
+    "desc": "JFIF Version",
+    "val": "1 2"
+  },
+  "JFIF:JFIF:Image:Copy1::ResolutionUnit": {
+    "desc": "Resolution Unit",
+    "val": 1
+  },
+  "JFIF:JFIF:Image:Copy1::XResolution": {
+    "desc": "X Resolution",
+    "val": 96
+  },
+  "JFIF:JFIF:Image:Copy1::YResolution": {
+    "desc": "Y Resolution",
+    "val": 96
+  },
+  "APP14:Adobe:Image:::DCTEncodeVersion": {
+    "desc": "DCT Encode Version",
+    "val": 100
+  },
+  "APP14:Adobe:Image:::APP14Flags0": {
+    "desc": "APP14 Flags 0",
+    "val": 0
+  },
+  "APP14:Adobe:Image:::APP14Flags1": {
+    "desc": "APP14 Flags 1",
+    "val": 0
+  },
+  "APP14:Adobe:Image:::ColorTransform": {
+    "desc": "Color Transform",
+    "val": 1
+  },
+  "File:File:Image:::ExifByteOrder": {
+    "desc": "Exif Byte Order",
+    "val": "MM"
+  },
+  "File:File:Image:::CurrentIPTCDigest": {
+    "desc": "Current IPTC Digest",
+    "val": "57fe7b6684b1f58dc135c80c1e2f167a"
+  },
+  "File:File:Image:::ImageWidth": {
+    "desc": "Image Width",
+    "val": 1024
+  },
+  "File:File:Image:::ImageHeight": {
+    "desc": "Image Height",
+    "val": 768
+  },
+  "File:File:Image:::EncodingProcess": {
+    "desc": "Encoding Process",
+    "val": 0
+  },
+  "File:File:Image:::BitsPerSample": {
+    "desc": "Bits Per Sample",
+    "val": 8
+  },
+  "File:File:Image:::ColorComponents": {
+    "desc": "Color Components",
+    "val": 3
+  },
+  "File:File:Image:::YCbCrSubSampling": {
+    "desc": "Y Cb Cr Sub Sampling",
+    "val": "1 1"
+  },
+  "EXIF:IFD0:Time::string:ModifyDate": {
+    "desc": "Modify Date",
+    "val": "2009:03:12 13:46:42"
+  },
+  "EXIF:IFD0:Author::string:Artist": {
+    "desc": "Artist",
+    "val": "Corbis"
+  },
+  "EXIF:IFD0:Image:Copy1:int16u:Rating": {
+    "desc": "Rating",
+    "val": 4
+  },
+  "EXIF:IFD0:Image:Copy1:int16u:RatingPercent": {
+    "desc": "Rating Percent",
+    "val": 63
+  },
+  "ExifTool:ExifTool:ExifTool:Copy1::Warning": {
+    "desc": "Warning",
+    "val": "Suspicious IFD0 offset for Padding"
+  },
+  "EXIF:ExifIFD:Time::string:DateTimeOriginal": {
+    "desc": "Date/Time Original",
+    "val": "2008:03:14 13:59:26"
+  },
+  "EXIF:ExifIFD:Time::string:CreateDate": {
+    "desc": "Create Date",
+    "val": "2008:03:14 13:59:26"
+  },
+  "EXIF:ExifIFD:Time::string:SubSecTimeOriginal": {
+    "desc": "Sub Sec Time Original",
+    "val": 54
+  },
+  "EXIF:ExifIFD:Time::string:SubSecTimeDigitized": {
+    "desc": "Sub Sec Time Digitized",
+    "val": 54
+  },
+  "ExifTool:ExifTool:ExifTool:Copy2::Warning": {
+    "desc": "Warning",
+    "val": "Suspicious ExifIFD offset for Padding"
+  },
+  "EXIF:IFD1:Image::int16u:Compression": {
+    "desc": "Compression",
+    "val": 6
+  },
+  "EXIF:IFD1:Image::rational64u:XResolution": {
+    "desc": "X Resolution",
+    "val": 72
+  },
+  "EXIF:IFD1:Image::rational64u:YResolution": {
+    "desc": "Y Resolution",
+    "val": 72
+  },
+  "EXIF:IFD1:Image::int32u:ThumbnailOffset": {
+    "desc": "Thumbnail Offset",
+    "val": 359
+  },
+  "EXIF:IFD1:Image::int32u:ThumbnailLength": {
+    "desc": "Thumbnail Length",
+    "val": 4636
+  },
+  "Ducky:Ducky:Image:::Quality": {
+    "desc": "Quality",
+    "val": 100
+  },
+  "XMP:XMP-x:Document:::XMPToolkit": {
+    "desc": "XMP Toolkit",
+    "val": "Adobe XMP Core 4.2-c020 1.124078, Tue Sep 11 2007 23:21:40        "
+  },
+  "ExifTool:ExifTool:ExifTool:Copy3::Warning": {
+    "desc": "Warning",
+    "val": "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto_1_"
+  },
+  "XMP:XMP-xmpRights:Author:::Marked": {
+    "desc": "Marked",
+    "val": true
+  },
+  "XMP:XMP-xmpRights:Author:::WebStatement": {
+    "desc": "Web Statement",
+    "val": "http://pro.corbis.com/search/searchresults.asp?txt=42-17167222&openImage=42-17167222"
+  },
+  "XMP:XMP-exif:Image:::ExifVersion": {
+    "desc": "Exif Version",
+    "val": "0221"
+  },
+  "XMP:XMP-exif:Image:::ExifImageWidth": {
+    "desc": "Exif Image Width",
+    "val": 1024
+  },
+  "XMP:XMP-exif:Image:::ExifImageHeight": {
+    "desc": "Exif Image Height",
+    "val": 768
+  },
+  "XMP:XMP-exif:Image:::ColorSpace": {
+    "desc": "Color Space",
+    "val": 65535
+  },
+  "XMP:XMP-exif:Time:::DateTimeDigitized": {
+    "desc": "Date/Time Digitized",
+    "val": "2008:03:14 11:31:48.98-07:00"
+  },
+  "XMP:XMP-tiff:Image:::Orientation": {
+    "desc": "Orientation",
+    "val": 1
+  },
+  "XMP:XMP-tiff:Image:::PhotometricInterpretation": {
+    "desc": "Photometric Interpretation",
+    "val": 2
+  },
+  "XMP:XMP-tiff:Image:::SamplesPerPixel": {
+    "desc": "Samples Per Pixel",
+    "val": 3
+  },
+  "XMP:XMP-tiff:Image:::ResolutionUnit": {
+    "desc": "Resolution Unit",
+    "val": 2
+  },
+  "XMP:XMP-tiff:Image:Copy1::ImageWidth": {
+    "desc": "Image Width",
+    "val": 1024
+  },
+  "XMP:XMP-tiff:Image:Copy1::ImageHeight": {
+    "desc": "Image Height",
+    "val": 768
+  },
+  "XMP:XMP-tiff:Image:Copy1::BitsPerSample": {
+    "desc": "Bits Per Sample",
+    "val": [8,8,8]
+  },
+  "XMP:XMP-tiff:Image:Copy2::XResolution": {
+    "desc": "X Resolution",
+    "val": 96
+  },
+  "XMP:XMP-tiff:Image:Copy2::YResolution": {
+    "desc": "Y Resolution",
+    "val": 96
+  },
+  "XMP:XMP-crs:Image:::AlreadyApplied": {
+    "desc": "Already Applied",
+    "val": true
+  },
+  "XMP:XMP-photoshop:Image:::LegacyIPTCDigest": {
+    "desc": "Legacy IPTC Digest",
+    "val": "57FE7B6684B1F58DC135C80C1E2F167A"
+  },
+  "XMP:XMP-photoshop:Image:::ColorMode": {
+    "desc": "Color Mode",
+    "val": 3
+  },
+  "XMP:XMP-photoshop:Image:::ICCProfileName": {
+    "desc": "ICC Profile Name",
+    "val": ""
+  },
+  "XMP:XMP-xmp:Time:::MetadataDate": {
+    "desc": "Metadata Date",
+    "val": "2009:02:02 11:44:10-08:00"
+  },
+  "XMP:XMP-xmp:Image:::Rating": {
+    "desc": "Rating",
+    "val": 4
+  },
+  "XMP:XMP-xmp:Time:Copy1::CreateDate": {
+    "desc": "Create Date",
+    "val": "2008:03:14 20:59:26.535Z"
+  },
+  "XMP:XMP-xmp:Time:Copy1::ModifyDate": {
+    "desc": "Modify Date",
+    "val": "2008:03:14 11:31:48.98-07:00"
+  },
+  "XMP:XMP-microsoft:Image:::RatingPercent": {
+    "desc": "Rating Percent",
+    "val": 63
+  },
+  "XMP:XMP-dc:Author:::Rights": {
+    "desc": "Rights",
+    "val": "┬® Corbis.  All Rights Reserved."
+  },
+  "XMP:XMP-dc:Author:::Creator": {
+    "desc": "Creator",
+    "val": "Corbis"
+  },
+  "IPTC:IPTC:Other:::ApplicationRecordVersion": {
+    "desc": "Application Record Version",
+    "val": 2
+  },
+  "IPTC:IPTC:Author:::By-line": {
+    "desc": "By-line",
+    "val": "Corbis"
+  },
+  "IPTC:IPTC:Author:::CopyrightNotice": {
+    "desc": "Copyright Notice",
+    "val": "┬® Corbis.  All Rights Reserved."
+  },
+  "Photoshop:Photoshop:Author:::CopyrightFlag": {
+    "desc": "Copyright Flag",
+    "val": 1
+  },
+  "Photoshop:Photoshop:Author:::URL": {
+    "desc": "URL",
+    "val": "http://pro.corbis.com/search/searchresults.asp?txt=42-17167222&openImage=42-17167222"
+  },
+  "Photoshop:Photoshop:Image:::IPTCDigest": {
+    "desc": "IPTC Digest",
+    "val": "57fe7b6684b1f58dc135c80c1e2f167a"
+  },
+  "Composite:Composite:Image:::ImageSize": {
+    "desc": "Image Size",
+    "val": "1024 768"
+  },
+  "Composite:Composite:Image:::Megapixels": {
+    "desc": "Megapixels",
+    "val": 0.786432
+  },
+  "Composite:Composite:Time:::SubSecCreateDate": {
+    "desc": "Create Date",
+    "val": "2008:03:14 13:59:26.54"
+  },
+  "Composite:Composite:Time:::SubSecDateTimeOriginal": {
+    "desc": "Date/Time Original",
+    "val": "2008:03:14 13:59:26.54"
+  },
+  "EXIF:IFD1:Preview:::ThumbnailImage": {
+    "desc": "Thumbnail Image",
+    "val": "base64:/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ
+2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAB4A
+KADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII
+0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipq
+rKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECB
+AQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ
+2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBA
+AIRAxEAPwBL4KIIo8kLuA98YNSRKlttB43HpnjOKp3RKT2xcny92Tz3HSnXLmaNWX5iHBA9cc14dtkfVculi/Kkcy8jkdD6H2rMvLlrSMQxj5yPv4q3DKGQF
+W7ZFV72MXEZXHPUYNEZXdpCirOxHpI80gMcqD/n9am1RSIT1yKi0zdEGDqUx6jrVi7lSeFkU/OB0x1q27TKd+cybOfy3Kk9SK293nWzIMbscfWufgwsu85wo
+/XtV20uSsvl9Qx4q6kb6oqUbmjalpkSRsgY/Oo759iA9un40G9jV/KQHpyewFK+JoSOvf8AqKx2epCTvcisLGJmErndJ94Dsvp+NW7ra1tMmQFEbc49utMsz
++43jjdUV3IBayZONymi7lMlq8jNskkjkLRTMAfbr9RVm4ljKN5y71HBwMGi0tZJYlEQCj++R/Kp7jSwLRwXYvtJVRxk44zWzmubVltxiV4NNWe3a4ldth+5u
+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"
+  }
+}]

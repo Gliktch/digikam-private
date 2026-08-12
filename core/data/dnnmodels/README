@@ -1,0 +1,67 @@
+Download and create information for the DNN models used with OpenCV has been
+moved from code to dnnmodels.conf.  The file uses standard .ini formatting.
+
+Explanation of the file format:
+[ModelName]
+DisplayName=Display Name of the model to be used in the UI
+ToolTip=ToolTip for the model to be used in the UI
+Usage=valid options are face_detection, face_recognition, aesthetics, object_detection, and weights.  Can contain multiple values comma or pipe separated
+Application=Application needing this file.  Options are digikam and showfoto.  Can contain multiple values comma or pipe separated
+MinVersion=minimum digikam version needed to use the model
+FileName=filename of the model.  Used for downloading the model and loading the model from disk
+DownloadPath=path on the KDE download server
+SHA256=SHA256 hash for download verification
+FileSize=file size in bytes
+DefaultThreshold=scale 0-100.  Default threshold to use when not set in the UI
+MinUsableThreshold=scale 0-100.  Settings below this value return too many false positives
+MaxUsableThreshold=scale 0-100.  Settings above this value exclude too many false negatives
+LoaderType=DNN model type.  Valid options are net (for onnx, pb, tf), config, YuNet, and SFace
+Preprocessor=image preprocessor to use.  Blank if not used. Values are Blob and Flat
+Classifier=classifier to use on model result set
+ClassList=Class list text file.  This file is given to the classifier to map class IDs to text labels 
+ConfigName=name of the weights file if needed.  Blank if no weights file needed.  Must match another [ModelName] section
+MeanValueToSubtract=Scalar value for tuning the model. 0,0,0 if not used
+ImageSize=recommended image size to pass to the model for processing.  0 if not used
+
+
+YOLOv3 example:
+
+[YOLOv3]
+DisplayName=YOLOv3
+Usage=face_detection
+Application=digikam|showfoto
+MinVersion=8.5.0
+FileName=yolov3-face.cfg
+DownloadPath=facesengine/dnnface/
+SHA256=f6563bd6923fd6500d2c2d6025f32ebdba916a85e5c9798351d916909f62aaf5
+FileSize=8334
+DefaultThreshold=70
+MinUsableThreshold=20
+MaxUsableThreshold=80
+LoaderType=net
+Preprocessor=Blob
+Classifier=
+ClassList=
+ConfigName=YOLOv3_Weights
+MeanValueToSubtract=0,0,0
+ImageSize=412
+
+[YOLOv3_Weights]
+DisplayName=YOLOv3 Weights
+Usage=face_detection
+Application=digikam
+MinVersion=8.5.0
+FileName=yolov3-wider_16000.weights
+DownloadPath=facesengine/dnnface/
+SHA256=a88f3b3882e3cce1e553a81d42beef6202cb9afc3db88e7944f9ffbcc369e7df
+FileSize=246305388
+DefaultThreshold=0
+MinUsableThreshold=0
+MaxUsableThreshold=0
+LoaderType=Config
+Preprocessor=
+Classifier=
+ClassList=
+ConfigName=
+MeanValueToSubtract=0,0,0
+ImageSize=0

@@ -1,0 +1,42 @@
+diff --git a/plugins/general/i18ncheckarg b/plugins/general/i18ncheckarg
+index 62fe681..3fdf122 100755
+--- a/plugins/general/i18ncheckarg
++++ b/plugins/general/i18ncheckarg
+@@ -769,14 +769,14 @@ sub kuit_check_traverse {
+     }
+     elsif (html_node($tag)) {
+         # Check if this HTML tag is approved for mixing with KUIT.
+-        if (not html_node_approved($tag)) {
+-            push @warns, "${OTH}HTML tag '$tag' is not advised with ".
+-                         "KUIT markup" if $pri_lo;
+-        }
+-            # ${OTH} means report only on reaching KUIT threshold
+-
+-        # Ignore HTML tag by promoting its name to parent tag.
+-        $tag = $ptag;
++#        if (not html_node_approved($tag)) {
++#            push @warns, "${OTH}HTML tag '$tag' is not advised with ".
++#                         "KUIT markup" if $pri_lo;
++#        }
++#            # ${OTH} means report only on reaching KUIT threshold
++#
++#        # Ignore HTML tag by promoting its name to parent tag.
++#        $tag = $ptag;
+     }
+     else {
+         push @errs, "'$tag' is neither KUIT nor HTML tag" if $pri_no;
+@@ -942,10 +942,10 @@ sub check_in_kuit {
+         $g_nmsgkuit++;
+     }
+     elsif ($pri_lo) {
+-        $gg_nkuit++;
+-        report $fname, $lineno, "warning",
+-               "${OTH}missing KUIT context marker";
+-        # ${OTH} means report only on reaching KUIT threshold
++#        $gg_nkuit++;
++#        report $fname, $lineno, "warning",
++#               "${OTH}missing KUIT context marker";
++#        # ${OTH} means report only on reaching KUIT threshold
+     }
+ 
+     # Check KUIT markup.

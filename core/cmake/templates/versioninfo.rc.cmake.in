@@ -1,0 +1,53 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2021-12-26
+ * Description : Windows Version-Information resource.
+ *
+ * SPDX-FileCopyrightText: 2021-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * ============================================================ */
+
+#if defined(__MINGW64__) || defined(__MINGW32__)
+#include <afxres.h>
+#include <winresrc.h>
+#else
+#include <winres.h>
+#endif
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(65001)
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION ${DIGIKAM_MAJOR_VERSION},${DIGIKAM_MINOR_VERSION},${DIGIKAM_PATCH_VERSION},0
+PRODUCTVERSION ${DIGIKAM_MAJOR_VERSION},${DIGIKAM_MINOR_VERSION},${DIGIKAM_PATCH_VERSION}
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0x0L
+FILEOS VOS__WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName",        "digiKam.org"
+            VALUE "FileDescription",    "${BUNDLE_APP_DESCRIPTION_STRING}"
+            VALUE "Comments",           "${BUNDLE_COMMENTS_STRING}"
+            VALUE "FileVersion",        "${BUNDLE_SHORT_VERSION_STRING}"
+            VALUE "InternalName",       "${BUNDLE_APP_NAME_STRING}"
+            VALUE "LegalCopyright",     "${BUNDLE_LEGAL_COPYRIGHT_STRING}"
+            VALUE "OriginalFilename",   "${BUNDLE_APP_NAME_STRING}.exe"
+            VALUE "ProductName",        "${BUNDLE_APP_NAME_STRING}"
+            VALUE "ProductVersion",     "${BUNDLE_LONG_VERSION_STRING}"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1252
+    END
+END

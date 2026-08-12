@@ -1,0 +1,240 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2023-05-15
+ * Description : geolocation engine based on Marble.
+ *               (c) 2007-2022 Marble Team
+ *               https://invent.kde.org/education/marble/-/raw/master/data/credits_authors.html
+ *
+ * SPDX-FileCopyrightText: 2023-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ * ============================================================ */
+
+#pragma once
+
+// Local includes
+
+#include "attlib.h"
+#include "digikam_export.h"
+
+namespace Marble
+{
+
+class DIGIKAM_EXPORT SolarSystem                                            // Calculate Positions of Solar System Bodies
+{
+public:
+
+    SolarSystem();
+    ~SolarSystem();
+
+public:
+
+    void setTimezone(double d);                                             // set timezone for I/O
+    void setDeltaTAI_UTC(double d);                                         // set IERS Parameter TAI - UTC
+    void setAutoTAI_UTC();                                                  // IERS Parameter TAI - UTC to auto
+    void setCurrentMJD(int year, int month, int day,
+                       int hour, int min, double sec);                      // set current time
+    void setCurrentMJD();                                                   // sets current MJD to R/T
+    double getMJD(int year, int month, int day,
+                            int hour, int min, double sec);                 // get MJD from date
+    void getDatefromMJD(double mjd, int& year, int& month, int& day,
+                        int& hour, int& min, double& sec);                  // convert MJD into date and time
+    void setEpoch(double yr);                                               // set epoch of coordinates
+    void setNutation(bool nut);                                             // specify whether nutation is to be included.
+    void setCentralBody(const char* const pname);                           // select which planet is central body
+    void includeUser(bool uact);                                            // activate user defined object
+
+    void getSun(double& ra, double& decl);                                  // RA and Dec for the Sun
+    void getMoon(double& ra, double& decl);                                 // RA and Dec for the Moon
+    void getMercury(double& ra, double& decl);                              // RA and Dec for Mercury
+    void getVenus(double& ra, double& decl);                                // RA and Dec for Venus
+    void getEarth(double& ra, double& decl);                                // RA and Dec for Earth (with regard to the Sun)
+    void getMars(double& ra, double& decl);                                 // RA and Dec for Mars
+    void getJupiter(double& ra, double& decl);                              // RA and Dec for Jupiter
+    void getSaturn(double& ra, double& decl);                               // RA and Dec for Saturn
+    void getUranus(double& ra, double& decl);                               // RA and Dec for Uranus
+    void getNeptune(double& ra, double& decl);                              // RA and Dec for Neptune
+    void getIo(double& ra, double& decl);                                   // RA and Dec for Io
+    void getEuropa(double& ra, double& decl);                               // RA and Dec for Europa
+    void getGanymede(double& ra, double& decl);                             // RA and Dec for Ganymede
+    void getCallisto(double& ra, double& decl);                             // RA and Dec for Callisto
+    void getRhea(double& ra, double& decl);                                 // RA and Dec for Rhea
+    void getTitan(double& ra, double& decl);                                // RA and Dec for Titan
+    void getMimas(double& ra, double& decl);                                // RA and Dec for Mimas
+    void getEnceladus(double& ra, double& decl);                            // RA and Dec for Enceladus
+    void getDione(double& ra, double& decl);                                // RA and Dec for Dione
+    void getUser(double& ra, double& decl);                                 // RA and Dec for user defined object
+
+    void getPhysSun(double& pdiam, double& pmag);                           // Physical elements Sun
+    void getPhysMercury(double& pdiam, double& pmag, double& pphase);       // Physical elements Mercury
+    void getPhysVenus(double& pdiam, double& pmag, double& pphase);         // Physical elements Venus
+    void getPhysEarth(double& pdiam, double& pmag, double& pphase);         // Physical elements Earth
+    void getPhysMars(double& pdiam, double& pmag, double& pphase);          // Physical elements Mars
+    void getPhysJupiter(double& pdiam, double& pmag, double& pphase);       // Physical elements Jupiter
+    void getPhysSaturn(double& pdiam, double& pmag, double& pphase);        // Physical elements Saturn
+    void getPhysUranus(double& pdiam, double& pmag, double& pphase);        // Physical elements Uranus
+    void getPhysNeptune(double& pdiam, double& pmag, double& pphase);       // Physical elements Neptune
+    double getDiamMoon();                                                   // Apparent diameter for the Moon
+    void getLunarLibration(double& lblon, double& lblat, double& termt);    // librations of the Moon and terminator position
+    void getLunarPhase(double& phase, double& ildisk, double& amag);        // phase and mag of Moon
+
+    void getPhysIo(double& pdiam, double& pmag, double& pphase);            // Physical elements Io
+    void getPhysEuropa(double& pdiam, double& pmag, double& pphase);        // Physical elements Europa
+    void getPhysGanymede(double& pdiam, double& pmag, double& pphase);      // Physical elements Ganymede
+    void getPhysCallisto(double& pdiam, double& pmag, double& pphase);      // Physical elements Callisto
+    void getPhysRhea(double& pdiam, double& pmag, double& pphase);          // Physical elements Rhea
+    void getPhysTitan(double& pdiam, double& pmag, double& pphase);         // Physical elements Titan
+    void getPhysMimas(double& pdiam, double& pmag, double& pphase);         // Physical elements Mimas
+    void getPhysEnceladus(double& pdiam, double& pmag, double& pphase);     // Physical elements Enceladus
+    void getPhysDione(double& pdiam, double& pmag, double& pphase);         // Physical elements Dione
+    void getPhysUser(double& pdiam, double& pmag, double& pphase);          // Physical elements user defined object
+
+    Vec3 getPlanetocentric(double ra, double decl);                         // planetocentric position
+    void getPlanetographic(double ra, double decl, double& lng, double& lat);
+    void getSkyRotAngles(double& raz1, double& rax, double& raz2);
+
+    void putOrbitElements(double t0, double pdist, double ecc, double ran, double aper, double inc, double eclep);
+    void putEllipticElements(double t0, double a, double m0, double ecc, double ran, double aper, double inc, double eclep);
+    void getOrbitPosition(double& ra, double& decl);
+    double getDistance();                                                   // distance in AU of Kepler object
+    double getCometMag(double g, double k);                                 // apparent magnitude of comet
+    double getAsteroidMag(double h, double g);                              // apparent magnitude of asteroid
+    void putOrbitUser(double t0, double pdist, double ecc, double ran, double aper, double inc, double eclep);
+    void putEllipticUser(double t0, double a, double m0, double ecc, double ran, double aper, double inc, double eclep);
+    void putConstUser(double j2, double r0, double flat, double axl0, double axl1, double axb0, double axb1, double w, double wd, double gm);  // store physical user constants
+
+    double DmsDegF(double h);                                               // conversion from Format DDD.MMSS into d.fff
+    double DegFDms(double h);                                               // conversion from Format d.fff into DDD.MMSS
+
+private:
+
+    void ssinit();                                                          // initialize SolarSystem
+    double atan23(double y, double x);                                      // atan without singularity for x,y=0
+    void DefTime();                                                         // Get System Time and Date
+    void getRaDec(const Vec3& r1, double& ra, double& decl);                // convert r1 into RA and DEC
+    void updateSolar();                                                     // update all positions of planets according to current MJD.
+
+    void MoonDetails();
+    void MoonLibr(double jd, Vec3 rm, Vec3 sn, double& lblon, double& lblat, double& termt);
+    Vec3 SnPos(double& ep2, double& els);
+    Vec3 MnPos(double& ep2, double& els);
+    Vec3 PosUser(double dt);                                                // position of User defined object
+    Mat3 getSelenographic();
+    void getConstSun();                                                     // Sun constants
+    void getConstMoon();                                                    // Moon planetary constants
+    void getConstMercury();                                                 // Mercury planetary constants
+    void getConstVenus();                                                   // Venus planetary constants
+    void getConstEarth();                                                   // Earth planetary constants
+    void getConstMars();                                                    // Mars planetary constants
+    void getConstJupiter();                                                 // Jupiter planetary constants
+    void getConstSaturn();                                                  // Saturn planetary constants
+    void getConstUranus();                                                  // Uranus planetary constants
+    void getConstNeptune();                                                 // Neptune planetary constants
+    void getConstIo();                                                      // Io planetary constants
+    void getConstEuropa();                                                  // Europa planetary constants
+    void getConstGanymede();                                                // Ganymede planetary constants
+    void getConstCallisto();                                                // Callisto planetary constants
+    void getConstRhea();                                                    // Rhea planetary constants
+    void getConstTitan();                                                   // Titan planetary constants
+    void getConstMimas();                                                   // Mimas planetary constants
+    void getConstEnceladus();                                               // Enceladus planetary constants
+    void getConstDione();                                                   // Dione planetary constants
+    void getConstUser();                                                    // User planetary constants
+
+    void getPlanMat();                                                      // get Matrix to convert from J2000.0 into planetary coordinates
+
+private:
+
+    // data fields
+
+    bool ss_update_called   = false;    // true if updateSolar() has already been called
+    bool ss_moon_called     = false;    // true if special Moon calculation called
+    bool ss_planmat_called  = false;    // true if matrix for planetary coordinates called
+    bool ss_kepler_stored   = false;    // true if Kepler elements for comet or asteroid stored
+    bool ss_kepler_called   = false;    // true if comet or asteroid position calculated
+    bool ss_user_stored     = false;    // true if orbit elements for user defined object stored
+    bool ss_user_active     = false;    // true if user defined object activated
+
+    int ss_day              = 0;        // date
+    int ss_month            = 0;
+    int ss_year             = 0;
+    int ss_hour             = 0;
+    int ss_minute           = 0;
+    int ss_second           = 0;
+    double ss_time          = 0.0;      // currently used MJD
+    double ss_tzone         = 0.0;      // timezone in hours
+    double ss_del_tdut      = 0.0;      // TDT - UT in sec
+    int ss_del_auto         = 0;        // 1 = automatic del_tdut,  0 = manual
+    bool ss_RT              = false;    // true if calculations in Real Time, false if time manually set to MJD.
+    bool ss_nutation        = false;    // true if position corrected for nutation
+    double ss_epoch         = 0.0;      // epoch of coordinates in MJD
+    int ss_central_body     = 0;        // body defining the coordinate origin (0=sun,1=moon,2=mercury etc.; -1=user)
+
+    Vec3 ss_rm, ss_rs;                                                                  // position of Moon and Sun in ecliptic of date (A.U.)
+    Vec3 ss_pmer, ss_pven, ss_pearth, ss_pmars, ss_pjup, ss_psat, ss_pura, ss_pnept;    // positions of planets
+    Vec3 ss_pio, ss_peuropa, ss_pganymede, ss_pcallisto;                                // positions of Jupiter moons
+    Vec3 ss_prhea, ss_ptitan, ss_pmimas, ss_penceladus, ss_pdione;                      // positions of Saturn moons
+    Vec3 ss_user;                                                                       // position of user defined object
+
+    double ss_moon_mag      = 0.0;      // apparent magnitude of the Moon
+    double ss_moon_lblon    = 0.0;      // longitude of lunar libration
+    double ss_moon_lblat    = 0.0;      // latitude of lunar libration
+    double ss_moon_term     = 0.0;      // position of lunar terminator
+    double ss_moon_ildisk   = 0.0;      // fraction of Moon's illuminated disk
+    double ss_moon_phase    = 0.0;      // phase of Moon
+
+    double ss_GM            = 0.0;      // gravitational constant (m^3/s^2)
+    double ss_J2            = 0.0;      // J2 gravitational term
+    double ss_R0            = 0.0;      // equatorial radius (km)
+    double ss_flat          = 0.0;      // flattening factor
+    double ss_axl0          = 0.0;      // l-direction of rotation axis
+    double ss_axl1          = 0.0;      // delta of axl0
+    double ss_axb0          = 0.0;      // b-direction of rotation axis
+    double ss_axb1          = 0.0;      // delta of axb0
+    double ss_W             = 0.0;      // location of prime meridian
+    double ss_Wd            = 0.0;      // daily variation of W.
+
+    // data for user defined object:
+
+    double ss_user_GM       = 0.0;      // gravitational constant (m^3/s^2)
+    double ss_user_J2       = 0.0;      // J2 gravitational term
+    double ss_user_R0       = 0.0;      // equatorial radius (km)
+    double ss_user_flat     = 0.0;      // flattening factor
+    double ss_user_axl0     = 0.0;      // l-direction of rotation axis
+    double ss_user_axl1     = 0.0;      // delta of axl0
+    double ss_user_axb0     = 0.0;      // b-direction of rotation axis
+    double ss_user_axb1     = 0.0;      // delta of axb0
+    double ss_user_W        = 0.0;      // location of prime meridian
+    double ss_user_Wd       = 0.0;      // daily variation of W.
+    double ss_user_t0       = 0.0;      // time of perihelion passage or epoch of elliptical elements (MJD
+    double ss_user_m0       = 0.0;      // Mean Anomaly in degrees
+    double ss_user_a        = 0.0;      // semi-major axis in AU
+    double ss_user_ecc      = 0.0;      // eccentricity
+    double ss_user_ran      = 0.0;      // right ascension of ascending node in degrees
+    double ss_user_aper     = 0.0;      // argument of perihelion
+    double ss_user_inc      = 0.0;      // inclination in degrees
+    double ss_user_eclep    = 0.0;      // epoch of ecliptic and equator for these elements
+
+    Mat3 ss_planmat;                    // matrix to convert from J2000.0 into planetary coordinates
+
+    double ss_lat           = 0.0;      // planetary latitude (decimal degrees)
+    double ss_lng           = 0.0;      // planetary longitude (decimal degrees)
+    double ss_height        = 0.0;      // height above reference ellipsoid (km)
+
+    double ss_t0            = 0.0;      // time of perihelion passage or epoch of elliptical elements (MJD)
+    double ss_m0            = 0.0;      // Mean Anomaly in degrees
+    double ss_a             = 0.0;      // semi-major axis in AU
+    double ss_ecc           = 0.0;      // eccentricity
+    double ss_ran           = 0.0;      // right ascension of ascending node in degrees
+    double ss_aper          = 0.0;      // argument of perihelion
+    double ss_inc           = 0.0;      // inclination in degrees
+    double ss_eclep         = 0.0;      // epoch of ecliptic and equator for these elements
+
+    Vec3 ss_comet;                      // position vector of comet or asteroid in AU
+};
+
+} // namespace Marble

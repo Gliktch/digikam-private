@@ -1,0 +1,440 @@
+/* ============================================================
+ *
+ * This file is a part of digiKam project
+ * https://www.digikam.org
+ *
+ * Date        : 2006-04-04
+ * Description : a tool to generate HTML image galleries
+ *
+ * SPDX-FileCopyrightText: 2006-2010 by Aurelien Gateau <aurelien dot gateau at free dot fr>
+ * SPDX-FileCopyrightText: 2012-2026 by Gilles Caulier <caulier dot gilles at gmail dot com>
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * ============================================================ */
+
+#include "galleryelementfunctor.h"
+
+// Qt includes
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QImageReader>
+#include <QLocale>
+#include <QPointer>
+#include <QScopedPointer>
+
+// KDE includes
+
+#include <klocalizedstring.h>
+
+// Local includes
+
+#include "digikam_debug.h"
+#include "digikam_globals.h"
+#include "galleryinfo.h"
+#include "gallerygenerator.h"
+#include "galleryelement.h"
+#include "metaengine_rotation.h"
+#include "dfileoperations.h"
+#include "dimg.h"
+
+using namespace Digikam;
+
+namespace DigikamGenericHtmlGalleryPlugin
+{
+
+GalleryElementFunctor::GalleryElementFunctor(GalleryGenerator* const generator,
+                                             GalleryInfo* const info,
+                                             const QString& destDir)
+    : m_generator(generator),
+      m_info     (info),
+      m_destDir  (destDir)
+{
+}
+
+void GalleryElementFunctor::operator()(GalleryElement& element)
+{
+    // Load image
+
+    QImage  originalImage;
+    QString path        = element.m_path;
+    QString imageFormat = QFileInfo(path).suffix();
+    QScopedPointer<DMetadata> meta(new DMetadata);
+
+    {
+        DImg img;
+
+        if (!img.load(path))
+        {
+            emitWarning(i18n("Could not read image '%1'", QDir::toNativeSeparators(path)));
+
+            return;
+        }
+
+        originalImage = img.copyQImage();
+        meta->setData(img.getMetadata());
+
+        if (originalImage.isNull())
+        {
+            emitWarning(i18n("Error loading image '%1'", QDir::toNativeSeparators(path)));
+
+            return;
+        }
+    }
+
+    // Process images
+
+    QImage fullImage = originalImage;
+
+    if (!m_info->useOriginalImageAsFullImage())
+    {
+        if (m_info->fullResize())
+        {
+            int size  = m_info->fullSize();
+            fullImage = fullImage.scaled(size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        }
+
+        if (element.m_orientation != DMetadata::ORIENTATION_UNSPECIFIED )
+        {
+            QTransform matrix = MetaEngineRotation::toTransform(element.m_orientation);
+            fullImage         = fullImage.transformed(matrix);
+        }
+    }
+
+    QImage thumbnail     = generateThumbnail(fullImage, m_info->thumbnailSize(), m_info->thumbnailSquare());
+
+    // Save images
+
+    QString baseFileName = element.m_title.section(QLatin1Char('.'), 0, -2);
+    baseFileName         = GalleryGenerator::webifyFileName(baseFileName);
+    baseFileName         = m_uniqueNameHelper.makeNameUnique(baseFileName);
+
+    // Save full
+
+    QString fullFileName;
+
+    if (m_info->useOriginalImageAsFullImage())
+    {
+        fullFileName     = baseFileName + QLatin1Char('.') + imageFormat.toLower();
+        QString destPath = m_destDir + QLatin1Char('/') + fullFileName;
+
+        if (!DFileOperations::removeAndCopyFile(path, destPath))
+        {
+            emitWarning(i18n("Could not copy image to file '%1'", QDir::toNativeSeparators(destPath)));
+
+            return;
+        }
+    }
+    else
+    {
+        fullFileName     = baseFileName + QLatin1Char('.') + m_info->fullFormatString().toLower();
+        QString destPath = m_destDir + QLatin1Char('/') + fullFileName;
+
+        if (!fullImage.save(destPath, m_info->fullFormatString().toLatin1().data(), m_info->fullQuality()))
+        {
+            emitWarning(i18n("Could not save image '%1' to '%2'",
+                             QDir::toNativeSeparators(path),
+                             QDir::toNativeSeparators(destPath)));
+            return;
+        }
+    }
+
+    element.m_fullFileName = fullFileName;
+    element.m_fullSize     = fullImage.size();
+
+    // Save original
+
+    if (m_info->copyOriginalImage())
+    {
+        QString originalFileName = QLatin1String("original_") + fullFileName;
+        QString destPath         = m_destDir + QLatin1Char('/') + originalFileName;
+
+        if (!DFileOperations::removeAndCopyFile(path, destPath))
+        {
+            emitWarning(i18n("Could not copy image to file '%1'", QDir::toNativeSeparators(destPath)));
+
+            return;
+        }
+
+        element.m_originalFileName = originalFileName;
+        element.m_originalSize     = originalImage.size();
+    }
+
+    // Save thumbnail
+
+    QString thumbnailFileName = QLatin1String("thumb_") + baseFileName + QLatin1Char('.') +
+                                m_info->thumbnailFormatString().toLower();
+    QString destPath          = m_destDir + QLatin1Char('/') + thumbnailFileName;
+
+    if (!thumbnail.save(destPath, m_info->thumbnailFormatString().toLatin1().data(), m_info->thumbnailQuality()))
+    {
+        Q_EMIT m_generator->logWarningRequested(i18n("Could not save thumbnail for image '%1' to '%2'",
+                                                     QDir::toNativeSeparators(path),
+                                                     QDir::toNativeSeparators(destPath)));
+        return;
+    }
+
+    element.m_thumbnailFileName = thumbnailFileName;
+    element.m_thumbnailSize     = thumbnail.size();
+    element.m_valid             = true;
+
+    // Read Exif Metadata
+
+    QString unavailable(i18n("unavailable"));
+
+    if (meta->hasExif() || meta->hasXmp())
+    {
+        // Try to use image metadata to get image info
+
+        element.m_exifImageMake = meta->getExifTagString("Exif.Image.Make");
+
+        if (element.m_exifImageMake.isEmpty())
+        {
+            element.m_exifImageMake = meta->getXmpTagString("Xmp.tiff.Make");
+        }
+
+        element.m_exifItemModel = meta->getExifTagString("Exif.Image.Model");
+
+        if (element.m_exifItemModel.isEmpty())
+        {
+            element.m_exifItemModel = meta->getXmpTagString("Xmp.tiff.Model");
+        }
+
+        element.m_exifImageOrientation = meta->getExifTagString("Exif.Image.Orientation");
+
+        if (element.m_exifImageOrientation.isEmpty())
+        {
+            element.m_exifImageOrientation = meta->getXmpTagString("Xmp.tiff.Orientation");
+        }
+
+        element.m_exifImageXResolution = meta->getExifTagString("Exif.Image.XResolution");
+
+        if (element.m_exifImageXResolution.isEmpty())
+        {
+            element.m_exifImageXResolution = meta->getXmpTagString("Xmp.tiff.XResolution");
+        }
+
+        element.m_exifImageYResolution = meta->getExifTagString("Exif.Image.YResolution");
+
+        if (element.m_exifImageYResolution.isEmpty())
+        {
+            element.m_exifImageYResolution = meta->getXmpTagString("Xmp.tiff.YResolution");
+        }
+
+        element.m_exifImageResolutionUnit = meta->getExifTagString("Exif.Image.ResolutionUnit");
+
+        if (element.m_exifImageResolutionUnit.isEmpty())
+        {
+            element.m_exifImageResolutionUnit = meta->getXmpTagString("Xmp.tiff.ResolutionUnit");
+        }
+
+        if (meta->getItemDateTime().isValid())
+        {
+            element.m_exifImageDateTime = asUserDateTime(meta->getItemDateTime());
+        }
+
+        element.m_exifImageYCbCrPositioning = meta->getExifTagString("Exif.Image.YCbCrPositioning");
+
+        if (element.m_exifImageYCbCrPositioning.isEmpty())
+        {
+            element.m_exifImageYCbCrPositioning = meta->getXmpTagString("Xmp.tiff.YCbCrPositioning");
+        }
+
+        element.m_exifPhotoFNumber = meta->getExifTagString("Exif.Photo.FNumber");
+
+        if (element.m_exifPhotoFNumber.isEmpty())
+        {
+            element.m_exifPhotoFNumber = meta->getXmpTagString("Xmp.exif.FNumber");
+        }
+
+        element.m_exifPhotoApertureValue = meta->getExifTagString("Exif.Photo.ApertureValue");
+
+        if (element.m_exifPhotoApertureValue.isEmpty())
+        {
+            element.m_exifPhotoApertureValue = meta->getXmpTagString("Xmp.exif.ApertureValue");
+        }
+
+        element.m_exifPhotoFocalLength = meta->getExifTagString("Exif.Photo.FocalLength");
+
+        if (element.m_exifPhotoFocalLength.isEmpty())
+        {
+            element.m_exifPhotoFocalLength = meta->getXmpTagString("Xmp.exif.FocalLength");
+        }
+
+        element.m_exifPhotoExposureTime = meta->getExifTagString("Exif.Photo.ExposureTime");
+
+        if (element.m_exifPhotoExposureTime.isEmpty())
+        {
+            element.m_exifPhotoExposureTime = meta->getXmpTagString("Xmp.exif.ExposureTime");
+        }
+
+        element.m_exifPhotoShutterSpeedValue = meta->getExifTagString("Exif.Photo.ShutterSpeedValue");
+
+        if (element.m_exifPhotoShutterSpeedValue.isEmpty())
+        {
+            element.m_exifPhotoShutterSpeedValue = meta->getXmpTagString("Xmp.exif.ShutterSpeedValue");
+        }
+
+        element.m_exifPhotoISOSpeedRatings = meta->getExifTagString("Exif.Photo.ISOSpeedRatings");
+
+        if (element.m_exifPhotoISOSpeedRatings.isEmpty())
+        {
+            element.m_exifPhotoISOSpeedRatings = meta->getXmpTagString("Xmp.exif.ISOSpeedRatings");
+        }
+
+        element.m_exifPhotoExposureProgram = meta->getExifTagString("Exif.Photo.ExposureIndex");
+
+        if (element.m_exifPhotoExposureProgram.isEmpty())
+        {
+            element.m_exifPhotoExposureProgram = meta->getXmpTagString("Xmp.exif.ExposureIndex");
+        }
+
+        // Get GPS values
+
+        double gpsvalue;
+
+        if (meta->getGPSAltitude(&gpsvalue))
+        {
+            element.m_exifGPSAltitude = QString::number(gpsvalue, 'f', 3);
+        }
+
+        if (meta->getGPSLatitudeNumber(&gpsvalue))
+        {
+            element.m_exifGPSLatitude = QString::number(gpsvalue, 'f', 6);
+        }
+
+        if (meta->getGPSLongitudeNumber(&gpsvalue))
+        {
+            element.m_exifGPSLongitude = QString::number(gpsvalue, 'f', 6);
+        }
+    }
+
+    if (element.m_exifImageMake.isEmpty())
+    {
+        element.m_exifImageMake = unavailable;
+    }
+
+    if (element.m_exifItemModel.isEmpty())
+    {
+        element.m_exifItemModel = unavailable;
+    }
+
+    if (element.m_exifImageOrientation.isEmpty())
+    {
+        element.m_exifImageOrientation = unavailable;
+    }
+
+    if (element.m_exifImageXResolution.isEmpty())
+    {
+        element.m_exifImageXResolution = unavailable;
+    }
+
+    if (element.m_exifImageYResolution.isEmpty())
+    {
+        element.m_exifImageYResolution = unavailable;
+    }
+
+    if (element.m_exifImageResolutionUnit.isEmpty())
+    {
+        element.m_exifImageResolutionUnit = unavailable;
+    }
+
+    if (element.m_exifImageDateTime.isEmpty())
+    {
+        element.m_exifImageDateTime = unavailable;
+    }
+
+    if (element.m_exifImageYCbCrPositioning.isEmpty())
+    {
+        element.m_exifImageYCbCrPositioning = unavailable;
+    }
+
+    if (element.m_exifPhotoApertureValue.isEmpty())
+    {
+        element.m_exifPhotoApertureValue = unavailable;
+    }
+
+    if (element.m_exifPhotoFocalLength.isEmpty())
+    {
+        element.m_exifPhotoFocalLength = unavailable;
+    }
+
+    if (element.m_exifPhotoFNumber.isEmpty())
+    {
+        element.m_exifPhotoFNumber = unavailable;
+    }
+
+    if (element.m_exifPhotoExposureTime.isEmpty())
+    {
+        element.m_exifPhotoExposureTime = unavailable;
+    }
+
+    if (element.m_exifPhotoShutterSpeedValue.isEmpty())
+    {
+        element.m_exifPhotoShutterSpeedValue = unavailable;
+    }
+
+    if (element.m_exifPhotoISOSpeedRatings.isEmpty())
+    {
+        element.m_exifPhotoISOSpeedRatings = unavailable;
+    }
+
+    if (element.m_exifPhotoExposureProgram.isEmpty())
+    {
+        element.m_exifPhotoExposureProgram = unavailable;
+    }
+
+    if (element.m_exifGPSAltitude.isEmpty())
+    {
+        element.m_exifGPSAltitude = unavailable;
+    }
+
+    if (element.m_exifGPSLatitude.isEmpty())
+    {
+        element.m_exifGPSLatitude = unavailable;
+    }
+
+    if (element.m_exifGPSLongitude.isEmpty())
+    {
+        element.m_exifGPSLongitude = unavailable;
+    }
+}
+
+void GalleryElementFunctor::emitWarning(const QString& message)
+{
+    Q_EMIT m_generator->logWarningRequested(message);
+}
+
+/**
+ * Generate a thumbnail from @p fullImage of @p size x @p size pixels
+ * If @p square == true, crop the result to a square
+ */
+QImage GalleryElementFunctor::generateThumbnail(const QImage& fullImage, int size, bool square) const
+{
+    QImage image = fullImage.scaled(size, size, square ? Qt::KeepAspectRatioByExpanding
+                                                       : Qt::KeepAspectRatio,
+                                    Qt::SmoothTransformation);
+
+    if (square && ((image.width() != size) || (image.height() != size)))
+    {
+        int sx = 0;
+        int sy = 0;
+
+        if (image.width() > size)
+        {
+            sx = (image.width() - size) / 2;
+        }
+        else
+        {
+            sy = (image.height() - size) / 2;
+        }
+
+        image = image.copy(sx, sy, size, size);
+    }
+
+    return image;
+}
+
+} // namespace DigikamGenericHtmlGalleryPlugin

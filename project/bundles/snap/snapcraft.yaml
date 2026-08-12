@@ -1,0 +1,559 @@
+
+# SPDX-FileCopyrightText: 2023-2026 Scarlett Moore <sgmoore@kde.org>
+# SPDX-FileCopyrightText: 2024 Sergio Schvezov <sergio.schvezov@ubuntu.com>
+#
+# SPDX-License-Identifier: CC0-1.0
+---
+name: digikam
+base: core24
+adopt-info: digikam
+grade: stable
+confinement: strict
+
+apps:
+  digikam:
+    command: usr/bin/digikam
+    common-id: org.kde.digikam.desktop
+    desktop: usr/share/applications/org.kde.digikam.desktop
+    extensions:
+      - kde-neon-6
+    plugs:
+      - audio-playback
+      - camera
+      - home
+      - mount-observe
+      - network
+      - network-bind
+      - network-manager-observe
+      - removable-media
+      - udisks2
+      - cups
+      - hardware-observe
+      - browser-support
+    environment:
+      DK_PLUGIN_PATH: "$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/plugins/digikam;$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/marble/plugins;$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/plugins;$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/plugins/digikam/marble$SNAP/kf6/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/plugins"
+      DICPATH: "$SNAP/usr/share/hunspell"
+      LD_LIBRARY_PATH: "$SNAP/usr/lib:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$SNAP/ffmpeg-platform/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$SNAP/kf6/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$LD_LIBRARY_PATH"
+      PATH: $SNAP/ffmpeg-platform/usr/bin:$SNAP/usr/bin:$PATH
+      ALSA_CONFIG_PATH: "$SNAP/kf6/etc/asound.conf"
+      QT_MEDIA_BACKEND: "ffmpeg"
+      QT_PLUGIN_PATH: "$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/marble/plugins:$SNAP/usr/lib/x86_64-linux-gnu/plugins:/snap/kf6-core24/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/plugins"
+      QTWEBENGINE_DISABLE_SANDBOX: 1
+layout:
+  /usr/bin/perl:
+    symlink: $SNAP/usr/bin/perl
+  /usr/share/perl:
+    symlink: $SNAP/usr/share/perl
+  /usr/share/perl5:
+    symlink: $SNAP/usr/share/perl5
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/perl:
+    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/perl
+  /usr/share/marble:
+    symlink: $SNAP/usr/share/marble
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/marble:
+    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/marble
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/plugins/digikam:
+    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/plugins/digikam
+plugs:
+  hunspell-dictionaries:
+    content: hunspell-dictionaries
+    interface: content
+    target: "$SNAP/usr/share/hunspell"
+    default-provider: hunspell-dictionaries
+  ffmpeg-2404:
+    interface: content
+    target: ffmpeg-platform # the folder where this content snap will be mounted
+    default-provider: ffmpeg-2404
+
+slots:
+  session-dbus-interface:
+    interface: dbus
+    name: org.kde.digikam
+    bus: session
+
+parts:
+  wayland:
+    source: https://gitlab.freedesktop.org/wayland/wayland.git
+    source-branch: 1.23
+    plugin: meson
+    meson-parameters:
+      - --prefix=/usr
+    build-snaps:
+      - kde-qt6-core24-sdk/latest/beta
+      - kf6-core24-sdk/latest/beta
+    build-packages:
+      - meson
+      - pkgconf
+      - xsltproc
+      - xmlto
+      - libexpat1-dev
+      - libffi-dev
+      - libxml2-dev
+      - doxygen
+      - graphviz
+    build-environment:
+      - PKG_CONFIG_PATH: "$CRAFT_STAGE/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig:/snap/kde-qt6-core24-sdk/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig:/snap/kf6-core24-sdk/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig"
+  wayland-protocols:
+    after:
+      - wayland
+    source: https://gitlab.freedesktop.org/wayland/wayland-protocols.git
+    source-tag: 1.47
+    plugin: meson
+    meson-parameters:
+      - --prefix=/usr
+    build-snaps:
+      - kde-qt6-core24-sdk/latest/beta
+      - kf6-core24-sdk/latest/beta
+    build-packages:
+      - meson
+      - pkgconf
+    build-environment:
+      - PKG_CONFIG_PATH: "$CRAFT_STAGE/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig:/snap/kde-qt6-core24-sdk/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig:/snap/kf6-core24-sdk/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig"
+      - LD_LIBRARY_PATH: "$CRAFT_STAGE/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:/snap/ffmpeg-2404-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:/snap/kde-qt6-core24-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/libproxy:$LD_LIBRARY_PATH"
+  libplasma:
+    after: [wayland-protocols]
+    source: https://invent.kde.org/plasma/libplasma.git
+    source-branch: Plasma/6.6
+    plugin: cmake
+    build-packages:
+      - libpulse0
+      - rsync
+    stage-packages:
+      - libpulse0
+    build-snaps:
+      - kde-qt6-core24-sdk/latest/beta
+      - kf6-core24-sdk/latest/beta
+    cmake-generator: Ninja
+    cmake-parameters:
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DQT_MAJOR_VERSION=6
+      - -DENABLE_QT5=OFF
+      - -DENABLE_QT6=ON
+      - -DBUILD_TESTING=OFF
+    override-build: |
+      craftctl default
+      rsync -a --ignore-existing $CRAFT_PART_INSTALL/ /
+    prime:
+      - -usr/bin/rsync
+  marble:
+    source: https://invent.kde.org/education/marble.git
+    source-branch: release/26.04
+    plugin: cmake
+    build-packages:
+      - libpulse0
+      - rsync
+    stage-packages:
+      - libpulse0
+    build-snaps:
+      - kde-qt6-core24-sdk/latest/beta
+      - kf6-core24-sdk/latest/beta
+      - hunspell-dictionaries
+      - ffmpeg-2404-sdk
+    cmake-generator: Ninja
+    cmake-parameters:
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DQT_MAJOR_VERSION=6
+      - -DENABLE_QT5=OFF
+      - -DENABLE_QT6=ON
+      - -DBUILD_TESTING=OFF
+      - -DCMAKE_FIND_ROOT_PATH="/snap/ffmpeg-2404-sdk/current;/snap/kde-qt6-core24-sdk/current;/snap/kf6-core24-sdk/current"
+    override-pull: |
+        craftctl default
+        patch -p0 < ${SNAPCRAFT_PROJECT_DIR}/project/bundles/snap/snap/local/disable_broken_osm_plugin.patch
+    override-build: |
+      craftctl default
+      rsync -a --ignore-existing $CRAFT_PART_INSTALL/ /
+    build-environment: &build-environment
+      - PKG_CONFIG_PATH: "$CRAFT_STAGE/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig:/snap/ffmpeg-2404-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pkgconfig"
+      - LD_LIBRARY_PATH: "/snap/mesa-2404/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$CRAFT_STAGE/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:/snap/ffmpeg-2404-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:/snap/kde-qt6-core24-sdk/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/libproxy:$LD_LIBRARY_PATH"
+      - DICPATH: "$CRAFT_STAGE/usr/share/hunspell"
+    prime:
+      - -usr/bin/rsync
+  opencv:
+    source: https://github.com/opencv/opencv.git
+    source-tag: 4.12.0
+    plugin: cmake
+    build-snaps:
+      - kde-qt6-core24-sdk/latest/beta
+      - kf6-core24-sdk/latest/beta
+      - hunspell-dictionaries
+      - ffmpeg-2404-sdk
+    build-packages:
+      - zlib1g-dev
+      - libtiff-dev
+      - libopenjp2-7-dev
+      - libjpeg8-dev
+      - libpng-dev
+      - libopenexr-dev
+      - libwebp-dev
+      - libbtbb-dev
+      - libva-dev
+      - rsync
+    stage-packages:
+      - zlib1g
+      - libtiff6
+      - libopenjp2-7
+      - libjpeg8
+      - libpng16-16t64
+      - libopenexr-3-1-30
+      - libwebp7
+      - libbtbb1
+    cmake-generator: Ninja
+    cmake-parameters:
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DQT_MAJOR_VERSION=6
+      - -DENABLE_QT5=OFF
+      - -DENABLE_QT6=ON
+      - -DBUILD_TESTING=OFF
+      - -DCMAKE_FIND_ROOT_PATH="/snap/ffmpeg-2404-sdk/current;/snap/kde-qt6-core24-sdk/current;/snap/kf6-core24-sdk/current"
+      - -DBUILD_EXAMPLES=OFF \
+      - -DBUILD_TESTS=OFF \
+      - -DBUILD_DOCS=OFF \
+      - -DBUILD_PERF_TESTS=OFF \
+      - -DBUILD_NEW_PYTHON_SUPPORT=OFF \
+      - -DBUILD_ZLIB=OFF \
+      - -DOPENCV_BUILD_3RDPARTY_LIBS=OFF \
+      - -DINSTALL_C_EXAMPLES=OFF \
+      - -DINSTALL_PYTHON_EXAMPLES=OFF \
+      - -DBUILD_opencv_core=ON \
+      - -DBUILD_opencv_imgproc=ON \
+      - -DBUILD_opencv_imgcodecs=ON \
+      - -DBUILD_opencv_objdetect=ON \
+      - -DBUILD_opencv_calib3d=ON \
+      - -DBUILD_opencv_features2d=ON \
+      - -DBUILD_opencv_flann=ON \
+      - -DBUILD_opencv_dnn=ON \
+      - -DBUILD_opencv_photo=ON \
+      - -DBUILD_opencv_ml=ON \
+      - -DBUILD_opencv_shape=ON \
+      - -DBUILD_opencv_highgui=ON \
+      - -DBUILD_opencv_superres=ON \
+      - -DBUILD_opencv_stitching=ON \
+      - -DBUILD_opencv_videostab=OFF \
+      - -DBUILD_opencv_videoio=OFF \
+      - -DBUILD_opencv_video=OFF \
+      - -DBUILD_opencv_apps=OFF \
+      - -DBUILD_opencv_gapi=OFF \
+      - -DBUILD_opencv_java=OFF \
+      - -DBUILD_opencv_java_bindings_generator=OFF \
+      - -DBUILD_opencv_js=OFF \
+      - -DBUILD_opencv_python2=OFF \
+      - -DBUILD_opencv_python3=OFF \
+      - -DBUILD_opencv_python_bindings_generator=OFF \
+      - -DWITH_PNG=ON \
+      - -DWITH_JPEG=ON \
+      - -DWITH_TIFF=ON \
+      - -DWITH_PROTOBUF=ON \
+      - -DWITH_1394=OFF \
+      - -DWITH_VTK=OFF \
+      - -DWITH_DIRECTX=OFF \
+      - -DWITH_DSHOW=OFF \
+      - -DWITH_EIGEN=OFF \
+      - -DWITH_FFMPEG=OFF \
+      - -DWITH_GSTREAMER=OFF \
+      - -DWITH_GTK=OFF \
+      - -DWITH_IPP=OFF \
+      - -DWITH_JASPER=OFF \
+      - -DWITH_MATLAB=OFF \
+      - -DWITH_OPENEXR=OFF \
+      - -DWITH_OPENJPEG=OFF \
+      - -DWITH_OPENNI=OFF \
+      - -DWITH_OPENMP=OFF \
+      - -DWITH_PVAPI=OFF \
+      - -DWITH_WIN32UI=OFF \
+      - -DWITH_QT=OFF \
+      - -DWITH_QUICKTIME=OFF \
+      - -DWITH_QT_OPENGL=OFF \
+      - -DWITH_TBB=OFF \
+      - -DWITH_UNICAP=OFF \
+      - -DWITH_V4L=OFF \
+      - -DWITH_VFW=OFF \
+      - -DWITH_VIDEOINPUT=OFF \
+      - -DWITH_XINE=OFF \
+      - -DWITH_VA_INTEL=OFF \
+      - -DWITH_GPHOTO2=OFF \
+      - -DWITH_WEBP=OFF \
+      - -DWITH_IMGCODEC_HDR=OFF \
+      - -DWITH_IMGCODEC_SUNRASTER=OFF \
+      - -DWITH_IMGCODEC_PXM=OFF \
+      - -DWITH_CUDA=OFF \
+      - -DWITH_CUFFT=OFF \
+      - -DWITH_CUBLAS=OFF \
+      - -DWITH_NVCUVID=OFF \
+      - -DWITH_OPENCL=OFF \
+      - -DWITH_OPENCL_SVM=OFF \
+      - -DWITH_OPENCLAMDFFT=OFF \
+      - -DWITH_OPENCLAMDBLAS=OFF \
+      - -DCV_ENABLE_INTRINSICS=OFF \
+      - -DCV_DISABLE_OPTIMIZATION=ON \
+      - -DCV_TRACE=OFF
+    override-build: |
+      craftctl default
+      rsync -a --ignore-existing $CRAFT_PART_INSTALL/ /
+    build-environment: *build-environment
+    prime:
+      - -usr/bin/rsync
+  libsane:
+    source: https://gitlab.com/sane-project/backends.git
+    source-type: git
+    source-tag: '1.2.1'
+    source-depth: 1
+    plugin: autotools
+    autotools-configure-parameters:
+      - --prefix=/usr
+      - --sysconfdir=/etc
+      - --with-avahi
+    build-packages:
+      # Everything of the build dependencies of the sane-backends
+      # Debian package ...
+      - libavahi-client-dev
+      - libcups2-dev
+      - libcurl4-gnutls-dev
+      - libgphoto2-dev
+      - libieee1284-3-dev
+      - libjpeg-dev
+      - libltdl3-dev
+      - libpoppler-glib-dev
+      - libsnmp-dev
+      - libtiff-dev
+      - libusb-1.0-0-dev
+      - libxml2-dev
+      - python3-minimal
+      - autoconf-archive
+      - rsync
+      - autotools-dev
+      - git
+      - gperf
+      - help2man
+      - texinfo
+    stage-packages:
+      - libexif12
+      - libgphoto2-6
+      - libgphoto2-port12
+      - libsnmp40
+    organize:
+      snap/skanpage/current/usr: usr
+    override-build: |
+      craftctl default
+      rsync -a --ignore-existing $CRAFT_PART_INSTALL/ /
+  libsane-airscan:
+    after: [libsane]
+    source: https://github.com/alexpevzner/sane-airscan
+    source-type: git
+    source-tag: 0.99.27
+    source-depth: 1
+    plugin: make
+    make-parameters:
+      - prefix=/usr
+      - sysconfdir=/etc
+      - libdir=/usr/lib
+    build-packages:
+      # Everything of the build dependencies of the sane-airscan
+      # Debian package ...
+      - libavahi-client-dev
+      - libavahi-common-dev
+      - libjpeg-turbo8-dev
+      - libpng-dev
+      - libxml2-dev
+      - libgnutls28-dev
+      - autotools-dev
+  ksanecore:
+    after:
+      - libsane
+      - libsane-airscan
+    plugin: cmake
+    source: https://invent.kde.org/libraries/ksanecore.git
+    source-branch: release/25.12
+    build-snaps:
+      - kde-qt6-core24-sdk/latest/beta
+      - kf6-core24-sdk/latest/beta
+      - hunspell-dictionaries
+      - ffmpeg-2404-sdk
+    cmake-parameters:
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DQT_MAJOR_VERSION=6
+      - -DBUILD_WITH_QT6=ON
+      - -DBUILD_TESTING=OFF
+    build-environment: *build-environment
+  libksane:
+    after:
+      - ksanecore
+    plugin: cmake
+    source: https://invent.kde.org/graphics/libksane.git
+    source-branch: release/25.12
+    build-snaps:
+      - kde-qt6-core24-sdk/latest/beta
+      - kf6-core24-sdk/latest/beta
+      - hunspell-dictionaries
+      - ffmpeg-2404-sdk
+    cmake-parameters:
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DQT_MAJOR_VERSION=6
+      - -DBUILD_WITH_QT6=ON
+      - -DBUILD_TESTING=OFF
+    build-environment: *build-environment
+  digikam:
+    after:
+      - marble
+      - opencv
+      - libksane
+      - libplasma
+    parse-info:
+      - usr/share/metainfo/org.kde.digikam.appdata.xml
+    source: http://download.kde.org/stable/digikam/8.8.0/digiKam-8.8.0.tar.xz
+    plugin: cmake
+    cmake-generator: Ninja
+    cmake-parameters:
+      - -DBUILD_WITH_QT6=ON
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_TESTING=OFF
+      - -DDIGIKAMSC_CHECKOUT_PO=OFF
+      - -DDIGIKAMSC_CHECKOUT_DOC=OFF
+      - -DDIGIKAMSC_COMPILE_PO=OFF
+      - -DDIGIKAMSC_COMPILE_DOC=ON
+      - -DDIGIKAMSC_COMPILE_DIGIKAM=ON
+      - -DENABLE_AKONADICONTACTSUPPORT=OFF
+      - -DENABLE_MYSQLSUPPORT=ON
+      - -DENABLE_INTERNALMYSQL=ON
+      - -DENABLE_MEDIAPLAYER=ON
+      - -DENABLE_LCMS2=ON
+      - -DDIGIKAMSC_USE_PRIVATE_KDEGRAPHICS=OFF
+      - -DENABLE_DBUS=ON
+      - -DENABLE_APPSTYLES=ON
+      - -DENABLE_QWEBENGINE=ON
+      - -DENABLE_FACESENGINE_DNN=ON
+      - -DCMAKE_CXX_FLAGS="-DMAGICKCORE_HAVE_ISNAN=0"
+      - -DCMAKE_FIND_ROOT_PATH="$CRAFT_STAGE;/snap/ffmpeg-2404-sdk/current;/snap/kde-qt6-core24-sdk/current;/snap/kf6-core24-sdk/current"
+    build-environment: *build-environment
+    build-packages:
+      - bison
+      - cmake
+      - doxygen
+      - flex
+      - glslang-dev
+      - graphviz
+      - libass-dev
+      - libboost-graph-dev
+      - libeigen3-dev
+      - libexiv2-dev
+      - libexpat1-dev
+      - libglu1-mesa-dev
+      - libgomp1
+      - libgphoto2-dev
+      - libheif-dev
+      - libjpeg-dev
+      - libjxl-dev
+      - liblcms2-dev
+      - liblensfun-dev
+      - liblqr-1-0-dev
+      - libmagick++-dev
+      - libopenal-dev
+      - libpng-dev
+      - libpulse-dev
+      - libswscale-dev
+      - libtiff-dev
+      - libuchardet-dev
+      - libibus-1.0-dev
+      - libva-dev
+      - libx265-dev
+      - libxml2-dev
+      - libxslt1-dev
+      - libxv-dev
+      - pkg-config
+      - portaudio19-dev
+      - libglib2.0-dev
+      - libgps-dev
+      - libpulse0
+      - libmariadb-dev
+      - libxkbcommon-dev
+      - libwlocate-dev
+      - libshp-dev
+    build-snaps:
+      - kde-qt6-core24-sdk/latest/beta
+      - kf6-core24-sdk/latest/beta
+      - hunspell-dictionaries
+      - ffmpeg-2404-sdk
+    stage-packages:
+      - libexiv2-27
+      - libexpat1
+      - libgomp1
+      - libgphoto2-6t64
+      - libgphoto2-port12t64
+      - libgps30t64
+      - libheif1
+      - libjpeg8
+      - libjxl0.7
+      - liblcms2-2
+      - liblensfun1
+      - libmagick++-6.q16-9t64
+      - libmagickcore-6.q16-7t64
+      - libopengl0
+      - libpng16-16t64
+      - libswscale7
+      - libtiff6
+      - libx11-6
+      - libx265-199
+      - libxml2
+      - libxslt1.1
+      - zlib1g
+      - libpulse0
+      - mariadb-client
+      - mariadb-server
+      - cups-client
+      - libxkbcommon0
+      - bash
+      - libwlocate0
+      - libshp4
+    override-pull: |
+        craftctl default
+        patch -p0 < ${SNAPCRAFT_PROJECT_DIR}/project/bundles/snap/snap/local/digikam_magick_isnan.patch
+    stage:
+      - -usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/libwayland-client.so.0
+    prime:
+      - -usr/lib/*/cmake/*
+      - -usr/include/*
+      - -usr/share/ECM/*
+      - -usr/share/man/*
+      - -usr/bin/X11
+      - -usr/lib/gcc/$CRAFT_ARCH_TRIPLET_BUILD_FOR/6.0.0
+      - -usr/lib/aspell/*
+      - -usr/share/lintian
+  exiftool:
+    plugin: nil
+    stage-packages:
+      - libimage-exiftool-perl
+      - perl
+      - perl-base
+      - perl-modules-5.38
+      - libperl5.38t64
+  gpu-2404:
+    after: [digikam]
+    source: https://github.com/canonical/gpu-snap.git
+    plugin: dump
+    override-prime: |
+      craftctl default
+      ${CRAFT_PART_SRC}/bin/gpu-2404-cleanup mesa-2404
+    prime:
+      - bin/gpu-2404-wrapper
+  cleanup:
+    after:
+      - digikam
+      - marble
+    plugin: nil
+    build-snaps:
+      - core24
+      - kf6-core24
+      - ffmpeg-2404
+    override-prime: |
+      set -eux
+      for snap in "core24" "kf6-core24" "ffmpeg-2404"; do
+          cd "/snap/$snap/current" && find . -type f,l -exec rm -rf "${CRAFT_PRIME}/{}" \;
+      done
+
