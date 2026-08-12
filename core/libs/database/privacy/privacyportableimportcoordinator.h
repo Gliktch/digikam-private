@@ -106,6 +106,13 @@ public:
         PrivacyPortableStoreInspector& inspector,
         const CancellationCheck& isCancelled = {});
 
+    /** Publishes one already-authenticated candidate (used by the dialog's
+     * Continue Import step). */
+    PrivacyPortableImportGroupResult commit(
+        const PrivacyPortableImportCandidate& candidate,
+        const QHash<QString, int>& albumRootIdsByPath,
+        const QString& defaultCategoryName);
+
 private:
 
     bool buildPublication(

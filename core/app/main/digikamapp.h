@@ -190,6 +190,7 @@ private Q_SLOTS:
     void slotSetup()                                                    override;
     void slotPrivacyCategories();
     void slotImportProfile();
+    void slotImportPrivateMedia();
     void slotRestorePreviousProfile();
     void slotSetupChanged();
     void slotEditKeys()                                                 override;

@@ -225,6 +225,18 @@ void DigikamApp::setupActions()
             this, &DigikamApp::slotImportProfile);
     ac->addAction(QLatin1String("privacy_import_profile"), importProfileAction);
 
+    QAction* const importPrivateMediaAction = new QAction(
+        QIcon::fromTheme(QLatin1String("folder-download")),
+        i18nc("@action: setup", "Import Private Media..."), this);
+    importPrivateMediaAction->setWhatsThis(
+        i18nc("@info: setup",
+              "Discover and import private media copied from another computer "
+              "using its category passwords."));
+    connect(importPrivateMediaAction, &QAction::triggered,
+            this, &DigikamApp::slotImportPrivateMedia);
+    ac->addAction(QLatin1String("privacy_import_media"),
+                  importPrivateMediaAction);
+
     QAction* const restoreProfileAction = new QAction(
         QIcon::fromTheme(QLatin1String("edit-undo")),
         i18nc("@action: setup", "Restore Previous Profile..."), this);

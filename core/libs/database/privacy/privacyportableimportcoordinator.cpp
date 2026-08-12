@@ -486,4 +486,34 @@ PrivacyPortableImportCoordinator::PrivacyPortableImportCoordinator(
 {
 }
 
+PrivacyPortableImportGroupResult PrivacyPortableImportCoordinator::commit(
+    const PrivacyPortableImportCandidate& candidate,
+    const QHash<QString, int>& albumRootIdsByPath,
+    const QString& defaultCategoryName)
+{
+    PrivacyPortableImportGroupResult result;
+    result.recoverySetUuid = candidate.recoverySetUuid;
+    result.backend = candidate.backend;
+
+    PrivacyPortableImportPublication publication;
+    QString detail;
+
+    if (!buildPublication(candidate, albumRootIdsByPath,
+                          defaultCategoryName, &publication, &detail) ||
+        !m_commitTarget.publish(publication))
+    {
+        result.status =
+            PrivacyPortableImportAuthenticationStatus::InconsistentManifests;
+        result.detail = detail.isEmpty()
+                      ? QStringLiteral("the category could not be published")
+                      : detail;
+        return result;
+    }
+
+    result.status =
+        PrivacyPortableImportAuthenticationStatus::Authenticated;
+    result.committed = true;
+    return result;
+}
+
 } // namespace Digikam

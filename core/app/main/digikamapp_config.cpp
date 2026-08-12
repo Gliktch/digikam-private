@@ -14,9 +14,15 @@
 
 #include "digikamapp_p.h"
 
+// Qt includes
+
+#include <QFileDialog>
+#include <QStandardPaths>
+
 // Local includes
 
 #include "privacycategorysettingsdialog.h"
+#include "privacyprivatemediafounddialog.h"
 #include "privacyprofileimportdialog.h"
 
 namespace Digikam
@@ -52,6 +58,20 @@ void DigikamApp::slotImportProfile()
     {
         QTimer::singleShot(0, qApp, &QCoreApplication::quit);
     }
+}
+
+void DigikamApp::slotImportPrivateMedia()
+{
+    const QString scanRoot = QFileDialog::getExistingDirectory(
+        this, i18nc("@title:window", "Select a Folder with Private Media"),
+        QStandardPaths::writableLocation(QStandardPaths::HomeLocation));
+
+    if (scanRoot.isEmpty())
+    {
+        return;
+    }
+
+    PrivacyPrivateMediaFoundDialog::offer(scanRoot, this);
 }
 
 void DigikamApp::slotRestorePreviousProfile()
